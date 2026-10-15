@@ -654,6 +654,13 @@ async fn losing_the_jump_host_ends_the_session() {
             profile_id: jump_id,
         }),
     );
+    // Without reconnecting, losing the jump host is final.
+    f.core
+        .save_settings(iris_core::IrisSettings {
+            reconnect_attempts: 0,
+            ..iris_core::IrisSettings::default()
+        })
+        .unwrap();
     let session = f.core.connect(target_id, None, None).await.unwrap();
     let mut rx = f.core.subscribe_events();
 
@@ -667,8 +674,7 @@ async fn losing_the_jump_host_ends_the_session() {
             &event,
             CoreEvent::SessionStateChanged {
                 session_id,
-                state: iris_core::SessionState::Disconnected,
-                reason: Some(_),
+                state: iris_core::SessionState::Disconnected { reason: Some(_) },
                 ..
             } if *session_id == session
         ),

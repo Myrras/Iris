@@ -1,5 +1,5 @@
-//! Session commands: connect a saved profile, disconnect, and answer the
-//! host key prompt a connect may raise.
+//! Session commands: connect a saved profile, reconnect a dropped session,
+//! disconnect, and answer the host key prompt a connect may raise.
 
 use tauri::State;
 
@@ -30,7 +30,29 @@ pub async fn connect(
     Ok(state.core.connect_with(profile_id, credentials).await?)
 }
 
-/// Close a session (a no-op when it is already gone).
+/// Reconnect a session whose connection is gone, keeping its id ("Retry";
+/// "Retry now" while an automatic reconnect waits). Secrets as for
+/// `connect`. Resolves once it is connected again (its paused transfers
+/// continue); rejects like `connect`, or `notConnected` for a session that
+/// was disconnected by the user.
+#[tauri::command]
+pub async fn reconnect(
+    state: State<'_, AppState>,
+    session_id: SessionId,
+    password: Option<Secret>,
+    passphrase: Option<Secret>,
+    remember: Option<bool>,
+) -> Result<(), IpcError> {
+    let credentials = Credentials {
+        password,
+        passphrase,
+        remember: remember.unwrap_or(false),
+    };
+    Ok(state.core.reconnect(session_id, credentials).await?)
+}
+
+/// Close a session for good (a no-op when it is already gone). Its
+/// unfinished transfers are cancelled.
 #[tauri::command]
 pub async fn disconnect(state: State<'_, AppState>, session_id: SessionId) -> Result<(), IpcError> {
     Ok(state.core.disconnect(session_id).await?)

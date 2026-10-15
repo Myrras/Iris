@@ -21,6 +21,16 @@
 //! ssh-agent and `~/.ssh/config` logins and jump hosts. Uploads and
 //! downloads run through the [`transfer`] engine (a queue of per-file jobs
 //! with conflict handling and resume).
+//!
+//! ## Sessions outlive their connections
+//! A connection that drops unexpectedly (keepalives notice a dead link) is
+//! re-established in the background with backoff — 1, 2, 4, 8, 16 s, up to
+//! the `reconnectAttempts` setting — under the **same [`SessionId`]**, so
+//! the UI and the transfer jobs never remap anything; paused transfers
+//! continue once it is back. Reconnecting never prompts: a login that would
+//! need a secret or a host key decision, or one the server refuses, stops it
+//! and the session shows `disconnected` with the reason until the user
+//! retries ([`Core::reconnect`]) or closes it ([`Core::disconnect`]).
 
 #![forbid(unsafe_code)]
 
@@ -42,6 +52,7 @@ pub mod transfer;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tokio::sync::broadcast;
 
@@ -65,8 +76,9 @@ pub use transfer::{
 };
 
 use connection::route::{HopAuth, Resolver};
-use session_manager::SessionManager;
+use session_manager::{LiveSession, ReconnectRun, Removed, SessionManager};
 use ssh::hostkey::HostKeyPrompts;
+use ssh::session::OnClosed;
 use ssh::{ConnectRequest, HopRequest, SshSession};
 use ssh_config::SshConfigFile;
 
@@ -84,10 +96,16 @@ pub struct Credentials {
 
 /// The application's single entry point.
 ///
-/// Cheap to share: hold it behind an `Arc` in the shell and clone the handle
-/// into any detached task. Interior mutability keeps the public API `&self`,
-/// so callers never need a mutable borrow.
+/// Cheap to share: a `Core` is a handle (clone it into any detached task;
+/// the shell keeps one behind an `Arc`). Interior mutability keeps the
+/// public API `&self`, so callers never need a mutable borrow. The core's
+/// own background work (reconnecting a dropped session) holds a clone too.
+#[derive(Clone)]
 pub struct Core {
+    inner: Arc<CoreInner>,
+}
+
+struct CoreInner {
     events: EventBus,
     settings: IrisSettingsStore,
     profiles: ProfileStore,
@@ -110,6 +128,9 @@ pub struct Core {
     /// The local disk; its [`Trash`] is swappable ([`Core::set_trash`]).
     local: Mutex<LocalFs>,
     transfers: TransferManager,
+    /// One step of the reconnect backoff ([`reconnect_delay_secs`] of them
+    /// before each attempt); a second, shortened by tests.
+    reconnect_unit: Mutex<Duration>,
 }
 
 impl Default for Core {
@@ -123,17 +144,20 @@ impl Default for Core {
             parallelism(&settings.get()),
         );
         Self {
-            events,
-            settings,
-            profiles: ProfileStore::default(),
-            sessions,
-            transfers,
-            host_key_prompts: Arc::default(),
-            known_hosts: Mutex::default(),
-            ssh_config: Mutex::default(),
-            agent: Mutex::default(),
-            secrets: Mutex::new(Arc::new(MemorySecretStore::new())),
-            local: Mutex::new(LocalFs::new()),
+            inner: Arc::new(CoreInner {
+                events,
+                settings,
+                profiles: ProfileStore::default(),
+                sessions,
+                transfers,
+                host_key_prompts: Arc::default(),
+                known_hosts: Mutex::default(),
+                ssh_config: Mutex::default(),
+                agent: Mutex::default(),
+                secrets: Mutex::new(Arc::new(MemorySecretStore::new())),
+                local: Mutex::new(LocalFs::new()),
+                reconnect_unit: Mutex::new(Duration::from_secs(1)),
+            }),
         }
     }
 }
@@ -152,10 +176,10 @@ macro_rules! on_fs {
                 $call.await
             }
             FsTarget::Remote { session_id } => {
-                let live = $core.sessions.get(session_id)?;
+                let live = $core.inner.sessions.get(session_id)?;
                 let $fs = live.ssh.fs();
                 let result = $call.await;
-                $core.forget_if_lost(session_id, live.profile_id, result)
+                $core.forget_if_lost(session_id, live.generation, result)
             }
         }
     };
@@ -169,28 +193,29 @@ impl Core {
     /// Subscribe to the core's lifecycle events. Each receiver sees every
     /// event published after it subscribed.
     pub fn subscribe_events(&self) -> broadcast::Receiver<CoreEvent> {
-        self.events.subscribe()
+        self.inner.events.subscribe()
     }
 
     /// Back the settings with `path` (normally `{app_data_dir}/settings.json`)
     /// and load it. Until this is called the settings are in-memory only.
     pub fn set_settings_path(&self, path: PathBuf) {
-        self.settings.set_path(path);
-        self.transfers
-            .set_parallelism(parallelism(&self.settings.get()));
+        self.inner.settings.set_path(path);
+        self.inner
+            .transfers
+            .set_parallelism(parallelism(&self.inner.settings.get()));
     }
 
     /// The current settings.
     pub fn settings(&self) -> IrisSettings {
-        self.settings.get()
+        self.inner.settings.get()
     }
 
     /// Validate and persist `settings`, then announce
     /// [`CoreEvent::SettingsChanged`]. Returns what was stored (normalized).
     pub fn save_settings(&self, settings: IrisSettings) -> CoreResult<IrisSettings> {
-        let saved = self.settings.save(settings)?;
-        self.transfers.set_parallelism(parallelism(&saved));
-        self.events.publish(CoreEvent::SettingsChanged);
+        let saved = self.inner.settings.save(settings)?;
+        self.inner.transfers.set_parallelism(parallelism(&saved));
+        self.inner.events.publish(CoreEvent::SettingsChanged);
         Ok(saved)
     }
 
@@ -200,19 +225,19 @@ impl Core {
     /// `{app_data_dir}/profiles.json`) and load it. Until this is called the
     /// profiles are in-memory only.
     pub fn set_profiles_path(&self, path: PathBuf) {
-        self.profiles.set_path(path);
+        self.inner.profiles.set_path(path);
     }
 
     /// All saved connections, in the order they were created.
     pub fn list_profiles(&self) -> Vec<ConnectionProfile> {
-        self.profiles.list()
+        self.inner.profiles.list()
     }
 
     /// Validate and store (insert or replace by id) a connection, then
     /// announce [`CoreEvent::ProfilesChanged`]. Returns what was stored.
     pub fn save_profile(&self, profile: ConnectionProfile) -> CoreResult<ConnectionProfile> {
-        let saved = self.profiles.save(profile)?;
-        self.events.publish(CoreEvent::ProfilesChanged);
+        let saved = self.inner.profiles.save(profile)?;
+        self.inner.events.publish(CoreEvent::ProfilesChanged);
         Ok(saved)
     }
 
@@ -221,7 +246,7 @@ impl Core {
     /// from it stay open; a connection that used it as its jump host reports
     /// that on its next connect.
     pub fn delete_profile(&self, id: ProfileId) -> CoreResult<()> {
-        self.profiles.delete(id)?;
+        self.inner.profiles.delete(id)?;
         let store = self.secret_store();
         for kind in SecretKind::ALL {
             // The profile is gone either way; a keychain that refuses now
@@ -230,7 +255,7 @@ impl Core {
                 tracing::warn!(kind = e.kind(), "could not delete a saved secret");
             }
         }
-        self.events.publish(CoreEvent::ProfilesChanged);
+        self.inner.events.publish(CoreEvent::ProfilesChanged);
         Ok(())
     }
 
@@ -239,11 +264,11 @@ impl Core {
     /// Keep remembered secrets in `store` (the shell installs
     /// [`KeychainStore`]; the default is in memory).
     pub fn set_secret_store(&self, store: Arc<dyn SecretStore>) {
-        *self.secrets.lock().expect(CONFIG_LOCK) = store;
+        *self.inner.secrets.lock().expect(CONFIG_LOCK) = store;
     }
 
     fn secret_store(&self) -> Arc<dyn SecretStore> {
-        Arc::clone(&self.secrets.lock().expect(CONFIG_LOCK))
+        Arc::clone(&self.inner.secrets.lock().expect(CONFIG_LOCK))
     }
 
     /// Remember `value` as the `kind` secret of a saved connection
@@ -254,7 +279,7 @@ impl Core {
         kind: SecretKind,
         value: Secret,
     ) -> CoreResult<()> {
-        self.profiles.get(profile_id)?;
+        self.inner.profiles.get(profile_id)?;
         if value.is_empty() {
             return Err(CoreError::InvalidInput(
                 "the secret must not be empty".into(),
@@ -285,11 +310,11 @@ impl Core {
     /// The OpenSSH client config to read (`~/.ssh/config` in the shell,
     /// [`ssh_config::default_ssh_config_path`]; tests use temp files).
     pub fn set_ssh_config_path(&self, path: PathBuf) {
-        *self.ssh_config.lock().expect(CONFIG_LOCK) = Some(path);
+        *self.inner.ssh_config.lock().expect(CONFIG_LOCK) = Some(path);
     }
 
     fn load_ssh_config(&self) -> CoreResult<SshConfigFile> {
-        let path = self.ssh_config.lock().expect(CONFIG_LOCK).clone();
+        let path = self.inner.ssh_config.lock().expect(CONFIG_LOCK).clone();
         match path {
             Some(path) => SshConfigFile::load(&path),
             None => Ok(SshConfigFile::default()),
@@ -305,7 +330,7 @@ impl Core {
     /// Where agent logins find the SSH agent (the shell sets
     /// [`AgentLocation::System`]).
     pub fn set_agent(&self, location: AgentLocation) {
-        *self.agent.lock().expect(CONFIG_LOCK) = Some(location);
+        *self.inner.agent.lock().expect(CONFIG_LOCK) = Some(location);
     }
 
     // -- Sessions -------------------------------------------------------------
@@ -314,11 +339,16 @@ impl Core {
     /// into. The shell sets `~/.ssh/known_hosts`
     /// ([`ssh::hostkey::default_known_hosts_path`]); tests set a temp file.
     pub fn set_known_hosts_path(&self, path: PathBuf) {
-        *self.known_hosts.lock().expect("known_hosts lock poisoned") = Some(path);
+        *self
+            .inner
+            .known_hosts
+            .lock()
+            .expect("known_hosts lock poisoned") = Some(path);
     }
 
     fn known_hosts_path(&self) -> CoreResult<PathBuf> {
-        self.known_hosts
+        self.inner
+            .known_hosts
             .lock()
             .expect("known_hosts lock poisoned")
             .clone()
@@ -357,22 +387,103 @@ impl Core {
     /// With `credentials.remember` the given secrets are stored after a
     /// successful login. Nothing else keeps them.
     ///
-    /// Announces [`SessionState::Connecting`] first, then `Connected` or a
-    /// `Disconnected` carrying the error text.
+    /// Every call opens a new session, also for a profile that already has
+    /// one. Announces [`SessionState::Connecting`] first, then `Connected`
+    /// or a `Disconnected` carrying the error text. Once connected, a
+    /// connection that drops is re-established on its own (see
+    /// [`Core::reconnect`]).
     pub async fn connect_with(
         &self,
         profile_id: ProfileId,
         credentials: Credentials,
     ) -> CoreResult<SessionId> {
-        let profile = self.profiles.get(profile_id)?;
+        let session_id = SessionId::new();
+        let pending = self.prepare(session_id, profile_id, credentials, true)?;
+        self.publish_state(session_id, profile_id, SessionState::Connecting);
+        match self.establish(pending).await {
+            Ok(live) => {
+                let generation = live.generation;
+                let closed = live.ssh.is_closed();
+                self.inner.sessions.insert(session_id, live);
+                self.publish_state(session_id, profile_id, SessionState::Connected);
+                if closed {
+                    self.connection_lost(session_id, generation, LOST.into());
+                }
+                Ok(session_id)
+            }
+            Err(e) => {
+                tracing::info!(kind = e.kind(), "connect failed");
+                self.publish_state(
+                    session_id,
+                    profile_id,
+                    SessionState::Disconnected {
+                        reason: Some(e.to_string()),
+                    },
+                );
+                Err(e)
+            }
+        }
+    }
+
+    /// Re-establish a session whose connection is gone, keeping its id: the
+    /// "Retry" after Iris gave up reconnecting, or "Retry now" while it
+    /// waits for the next attempt (which it then stops waiting for).
+    ///
+    /// Logs in like [`Core::connect_with`], so it may prompt for an unknown
+    /// host key and take `credentials` for a login that needs them. Paused
+    /// transfers of the session continue once it is back. Announces
+    /// `Connecting`, then `Connected` or `Disconnected` with the reason (no
+    /// automatic attempts follow a failed manual one). A session that is
+    /// connected is left alone; one that is unknown or was disconnected by
+    /// the user is `NotConnected`.
+    pub async fn reconnect(
+        &self,
+        session_id: SessionId,
+        credentials: Credentials,
+    ) -> CoreResult<()> {
+        let Some(run) = self.inner.sessions.begin_reconnect(session_id) else {
+            return self.inner.sessions.get(session_id).map(|_| ());
+        };
+        let profile_id = run.profile_id;
+        self.publish_state(session_id, profile_id, SessionState::Connecting);
+        let attempt = async {
+            let pending = self.prepare(session_id, profile_id, credentials, true)?;
+            self.establish(pending).await
+        };
+        match attempt.await {
+            Ok(live) => {
+                self.install(session_id, run.run, live).await;
+                Ok(())
+            }
+            Err(e) => {
+                tracing::info!(kind = e.kind(), "reconnect failed");
+                self.give_up(session_id, profile_id, run.run, e.to_string());
+                Err(e)
+            }
+        }
+    }
+
+    /// Set one step of the reconnect backoff (default one second; attempt
+    /// *n* waits [`reconnect_delay_secs`]`(n)` steps). Tests shorten it.
+    pub fn set_reconnect_backoff_unit(&self, unit: Duration) {
+        *self.inner.reconnect_unit.lock().expect(CONFIG_LOCK) = unit;
+    }
+
+    /// Everything a connect needs, resolved before anything is announced:
+    /// an unknown profile or a broken route fails here, quietly.
+    fn prepare(
+        &self,
+        session_id: SessionId,
+        profile_id: ProfileId,
+        credentials: Credentials,
+        interactive: bool,
+    ) -> CoreResult<Pending> {
+        let profile = self.inner.profiles.get(profile_id)?;
         let known_hosts = self.known_hosts_path()?;
-        let lookup = |id: ProfileId| self.profiles.get(id);
+        let lookup = |id: ProfileId| self.inner.profiles.get(id);
         let load_config = || self.load_ssh_config();
         let route = Resolver::new(&lookup, &load_config).route(&profile)?;
-        let agent = self.agent.lock().expect(CONFIG_LOCK).clone();
-
-        let session_id = SessionId::new();
-        self.publish_state(session_id, profile_id, SessionState::Connecting, None);
+        let agent = self.inner.agent.lock().expect(CONFIG_LOCK).clone();
         tracing::info!(
             host = %profile.host,
             port = profile.port,
@@ -407,43 +518,197 @@ impl Core {
             })
             .collect();
 
+        let generation = self.inner.sessions.next_id();
         let request = ConnectRequest {
             session_id,
             hops,
             agent,
             known_hosts,
-            prompts: Arc::clone(&self.host_key_prompts),
-            events: self.events.clone(),
-            on_closed: self
-                .sessions
-                .on_closed(session_id, profile_id, self.events.clone()),
+            prompts: interactive.then(|| Arc::clone(&self.inner.host_key_prompts)),
+            events: self.inner.events.clone(),
+            on_closed: self.on_closed(session_id, generation),
         };
-        match SshSession::connect(request).await {
-            Ok(ssh) => {
-                for (kind, secret) in to_remember {
-                    let Some(secret) = secret.filter(|s| !s.is_empty()) else {
-                        continue;
-                    };
-                    // The session is up; a keychain that refuses only means
-                    // the user is asked again next time.
-                    if let Err(e) = self.secret_store().set(profile_id, kind, &secret) {
-                        tracing::warn!(kind = e.kind(), "could not remember a secret");
-                    }
+        Ok(Pending {
+            request,
+            profile_id,
+            generation,
+            to_remember,
+        })
+    }
+
+    /// Connect, then remember the secrets asked to be remembered.
+    async fn establish(&self, pending: Pending) -> CoreResult<LiveSession> {
+        let Pending {
+            request,
+            profile_id,
+            generation,
+            to_remember,
+        } = pending;
+        let ssh = SshSession::connect(request).await?;
+        for (kind, secret) in to_remember {
+            let Some(secret) = secret.filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            // The session is up; a keychain that refuses only means the
+            // user is asked again next time.
+            if let Err(e) = self.secret_store().set(profile_id, kind, &secret) {
+                tracing::warn!(kind = e.kind(), "could not remember a secret");
+            }
+        }
+        Ok(LiveSession {
+            profile_id,
+            ssh,
+            generation,
+        })
+    }
+
+    /// What connection `generation` of a session does when it ends. It
+    /// holds the core weakly: a connection must not keep the core alive.
+    fn on_closed(&self, session_id: SessionId, generation: u64) -> OnClosed {
+        let core = Arc::downgrade(&self.inner);
+        Box::new(move |reason| {
+            if let Some(inner) = core.upgrade() {
+                Core { inner }.connection_lost(session_id, generation, reason);
+            }
+        })
+    }
+
+    /// Connection `generation` of a session ended without being asked to
+    /// (the server closed it, the link died, a call found it gone). Unless
+    /// that is old news, the session goes down and — with
+    /// `reconnectAttempts` above zero — an automatic reconnect starts.
+    fn connection_lost(&self, session_id: SessionId, generation: u64, reason: String) {
+        let Some(lost) = self.inner.sessions.mark_lost(session_id, generation) else {
+            return;
+        };
+        tracing::info!("connection lost");
+        self.inner.transfers.forget_session(session_id);
+        let profile_id = lost.profile_id;
+        let runtime = tokio::runtime::Handle::try_current().ok();
+        if let Some(runtime) = &runtime {
+            // Found gone by a failed call: the connection may still be half
+            // open, so close it for good (its own close callback is then old
+            // news).
+            if !lost.ssh.is_closed() {
+                runtime.spawn(async move { lost.ssh.disconnect().await });
+            }
+        }
+        let max = self.settings().reconnect_attempts;
+        let run = match runtime {
+            Some(runtime) if max > 0 => self
+                .inner
+                .sessions
+                .begin_reconnect(session_id)
+                .map(|run| (runtime, run)),
+            _ => None,
+        };
+        match run {
+            Some((runtime, run)) => {
+                runtime.spawn(self.clone().auto_reconnect(session_id, run, max, reason));
+            }
+            None => self.publish_state(
+                session_id,
+                profile_id,
+                SessionState::Disconnected {
+                    reason: Some(reason),
+                },
+            ),
+        }
+    }
+
+    /// Up to `max` attempts with backoff ([`reconnect_delay_secs`]), each a
+    /// login without prompts (remembered secrets, the agent, key files). A
+    /// failure no retry can fix — a secret or a host key decision is needed,
+    /// the login or the host key is refused — gives up at once.
+    async fn auto_reconnect(
+        self,
+        session_id: SessionId,
+        run: ReconnectRun,
+        max: u32,
+        lost_reason: String,
+    ) {
+        let ReconnectRun {
+            run,
+            cancel,
+            profile_id,
+        } = run;
+        let mut last_error = lost_reason;
+        for attempt in 1..=max {
+            let secs = reconnect_delay_secs(attempt);
+            let reconnecting = |next_retry_in_secs| SessionState::Reconnecting {
+                attempt,
+                max_attempts: max,
+                next_retry_in_secs,
+            };
+            self.publish_state(session_id, profile_id, reconnecting(secs));
+            let wait = self.reconnect_unit().saturating_mul(secs as u32);
+            tokio::select! {
+                () = cancel.cancelled() => return,
+                () = tokio::time::sleep(wait) => {}
+            }
+            self.publish_state(session_id, profile_id, reconnecting(0));
+            let attempt_once = async {
+                let pending =
+                    self.prepare(session_id, profile_id, Credentials::default(), false)?;
+                self.establish(pending).await
+            };
+            let result = tokio::select! {
+                () = cancel.cancelled() => return,
+                result = attempt_once => result,
+            };
+            match result {
+                Ok(live) => {
+                    self.install(session_id, run, live).await;
+                    return;
                 }
-                self.sessions.insert(session_id, profile_id, ssh);
-                self.publish_state(session_id, profile_id, SessionState::Connected, None);
-                Ok(session_id)
+                Err(e) => {
+                    tracing::info!(kind = e.kind(), attempt, "reconnect attempt failed");
+                    if let Some(reason) = unrecoverable(&e) {
+                        self.give_up(session_id, profile_id, run, reason);
+                        return;
+                    }
+                    last_error = e.to_string();
+                }
             }
-            Err(e) => {
-                tracing::info!(kind = e.kind(), "connect failed");
-                self.publish_state(
-                    session_id,
-                    profile_id,
-                    SessionState::Disconnected,
-                    Some(e.to_string()),
-                );
-                Err(e)
+        }
+        let reason = format!("could not reconnect after {max} attempts: {last_error}");
+        self.give_up(session_id, profile_id, run, reason);
+    }
+
+    fn reconnect_unit(&self) -> Duration {
+        *self.inner.reconnect_unit.lock().expect(CONFIG_LOCK)
+    }
+
+    /// Put the connection a reconnect run opened in place and carry on with
+    /// the session's paused transfers. A run that was overtaken (a newer
+    /// one, or a user disconnect) closes its connection instead.
+    async fn install(&self, session_id: SessionId, run: u64, live: LiveSession) {
+        let profile_id = live.profile_id;
+        match self.inner.sessions.finish_reconnect(session_id, run, live) {
+            Ok(live) => {
+                tracing::info!("reconnected");
+                self.publish_state(session_id, profile_id, SessionState::Connected);
+                let resumed = self.inner.transfers.resume_paused(session_id);
+                tracing::debug!(resumed, "resumed paused transfers");
+                if live.ssh.is_closed() {
+                    self.connection_lost(session_id, live.generation, LOST.into());
+                }
             }
+            Err(stale) => stale.ssh.disconnect().await,
+        }
+    }
+
+    /// A reconnect run ends without a connection: the session is down.
+    fn give_up(&self, session_id: SessionId, profile_id: ProfileId, run: u64, reason: String) {
+        if self.inner.sessions.give_up(session_id, run) {
+            tracing::info!("gave up reconnecting");
+            self.publish_state(
+                session_id,
+                profile_id,
+                SessionState::Disconnected {
+                    reason: Some(reason),
+                },
+            );
         }
     }
 
@@ -470,46 +735,48 @@ impl Core {
         }
     }
 
-    /// Close a session. Idempotent: an unknown or already closed session is
-    /// not an error.
+    /// Close a session for good: its unfinished transfers are cancelled
+    /// (they could never continue), a running reconnect stops, and the id is
+    /// forgotten. Idempotent: an unknown or already closed session is not an
+    /// error.
     pub async fn disconnect(&self, session_id: SessionId) -> CoreResult<()> {
-        self.transfers.forget_session(session_id);
-        if let Some(live) = self.sessions.remove(session_id) {
-            live.ssh.disconnect().await;
-            self.publish_state(
-                session_id,
-                live.profile_id,
-                SessionState::Disconnected,
-                None,
-            );
-        }
+        self.inner.transfers.cancel_session(session_id);
+        self.inner.transfers.forget_session(session_id);
+        let Some(removed) = self.inner.sessions.remove(session_id) else {
+            return Ok(());
+        };
+        let profile_id = match removed {
+            Removed::Live(live) => {
+                live.ssh.disconnect().await;
+                live.profile_id
+            }
+            Removed::NotLive { profile_id } => profile_id,
+        };
+        self.publish_state(
+            session_id,
+            profile_id,
+            SessionState::Disconnected { reason: None },
+        );
         Ok(())
     }
 
-    /// Ids of the open sessions.
+    /// Ids of the sessions with an open connection.
     pub fn sessions(&self) -> Vec<SessionId> {
-        self.sessions.ids()
+        self.inner.sessions.ids()
     }
 
     /// Answer a [`CoreEvent::HostKeyPrompt`]: `trust = true` records the key
     /// in `known_hosts` and lets the connect continue; `false` refuses it.
     /// `InvalidInput` when the prompt is unknown or already closed.
     pub fn answer_host_key(&self, request_id: HostKeyRequestId, trust: bool) -> CoreResult<()> {
-        self.host_key_prompts.answer(request_id, trust)
+        self.inner.host_key_prompts.answer(request_id, trust)
     }
 
-    fn publish_state(
-        &self,
-        session_id: SessionId,
-        profile_id: ProfileId,
-        state: SessionState,
-        reason: Option<String>,
-    ) {
-        self.events.publish(CoreEvent::SessionStateChanged {
+    fn publish_state(&self, session_id: SessionId, profile_id: ProfileId, state: SessionState) {
+        self.inner.events.publish(CoreEvent::SessionStateChanged {
             session_id,
             profile_id,
             state,
-            reason,
         });
     }
 
@@ -540,11 +807,11 @@ impl Core {
     /// Local deletes go to `trash` (the OS Trash by default; tests install a
     /// fake so they never touch it).
     pub fn set_trash(&self, trash: Arc<dyn Trash>) {
-        *self.local.lock().expect(CONFIG_LOCK) = LocalFs::with_trash(trash);
+        *self.inner.local.lock().expect(CONFIG_LOCK) = LocalFs::with_trash(trash);
     }
 
     fn local(&self) -> LocalFs {
-        self.local.lock().expect(CONFIG_LOCK).clone()
+        self.inner.local.lock().expect(CONFIG_LOCK).clone()
     }
 
     /// Create the folder `path`; `AlreadyExists` when the name is taken.
@@ -599,23 +866,17 @@ impl Core {
         on_fs!(self, target, |fs| preview::preview(fs, path, max_bytes))
     }
 
-    /// A remote call that found the connection gone drops the session and
-    /// announces it, so the UI does not keep a dead session around.
+    /// A remote call that found the connection gone reports it, so the
+    /// session is reconnected (or shown as disconnected) instead of kept
+    /// around dead.
     fn forget_if_lost<T>(
         &self,
         session_id: SessionId,
-        profile_id: ProfileId,
+        generation: u64,
         result: CoreResult<T>,
     ) -> CoreResult<T> {
-        if matches!(result, Err(CoreError::NotConnected))
-            && self.sessions.remove(session_id).is_some()
-        {
-            self.publish_state(
-                session_id,
-                profile_id,
-                SessionState::Disconnected,
-                Some("the connection was lost".into()),
-            );
+        if matches!(result, Err(CoreError::NotConnected)) {
+            self.connection_lost(session_id, generation, LOST.into());
         }
         result
     }
@@ -628,19 +889,19 @@ impl Core {
     /// `NotConnected` for an unknown session, `InvalidInput` for an empty
     /// request. Must be called within a Tokio runtime.
     pub fn enqueue_transfers(&self, request: TransferRequest) -> CoreResult<BatchId> {
-        self.transfers.enqueue(request)
+        self.inner.transfers.enqueue(request)
     }
 
     /// Cancel one job (a running one leaves its partial file). `NotFound`
     /// for an unknown job; a finished job is left alone.
     pub fn cancel_transfer(&self, job_id: TransferId) -> CoreResult<()> {
-        self.transfers.cancel(job_id)
+        self.inner.transfers.cancel(job_id)
     }
 
     /// Cancel every unfinished job of a batch. `NotFound` for an unknown
     /// batch.
     pub fn cancel_batch(&self, batch_id: BatchId) -> CoreResult<()> {
-        self.transfers.cancel_batch(batch_id)
+        self.inner.transfers.cancel_batch(batch_id)
     }
 
     /// Answer a [`CoreEvent::TransferConflict`]; with `apply_to_all` the
@@ -651,36 +912,53 @@ impl Core {
         resolution: ConflictResolution,
         apply_to_all: bool,
     ) -> CoreResult<()> {
-        self.transfers
+        self.inner
+            .transfers
             .resolve_conflict(job_id, resolution, apply_to_all)
     }
 
     /// Every transfer job and the totals.
     pub fn list_transfers(&self) -> TransferList {
-        self.transfers.list()
+        self.inner.transfers.list()
     }
 
     /// Drop finished jobs from the list.
     pub fn clear_finished_transfers(&self) {
-        self.transfers.clear_finished();
+        self.inner.transfers.clear_finished();
     }
 
     /// Whether any transfer is queued, running, waiting for a conflict
     /// answer or paused.
     pub fn has_active_transfers(&self) -> bool {
-        self.transfers.has_active()
+        self.inner.transfers.has_active()
+    }
+
+    /// Queue a failed job again: a file is copied anew from the first byte,
+    /// a folder whose listing failed is listed again. `NotFound` for an
+    /// unknown job, `InvalidInput` when it has not failed, `NotConnected`
+    /// when its session is not connected.
+    pub fn retry_transfer(&self, job_id: TransferId) -> CoreResult<()> {
+        self.inner.transfers.retry(job_id)
+    }
+
+    /// Cancel every unfinished transfer (the user confirmed quitting while
+    /// work was in flight). Afterwards [`Core::has_active_work`] is false
+    /// once running jobs have stopped their current chunk.
+    pub fn cancel_all_transfers(&self) {
+        self.inner.transfers.cancel_all();
     }
 
     /// Continue the jobs that paused when `session_id`'s connection
-    /// dropped (appending to their partial files). Returns how many.
+    /// dropped (appending to their partial files). Returns how many. A
+    /// reconnect does this by itself.
     pub fn resume_paused(&self, session_id: SessionId) -> usize {
-        self.transfers.resume_paused(session_id)
+        self.inner.transfers.resume_paused(session_id)
     }
 
     /// Continue the jobs paused on `paused_on` over `resume_on`, the
     /// session a reconnect opened. Returns how many.
     pub fn resume_paused_on(&self, paused_on: SessionId, resume_on: SessionId) -> usize {
-        self.transfers.resume_paused_on(paused_on, resume_on)
+        self.inner.transfers.resume_paused_on(paused_on, resume_on)
     }
 
     // -- App lifecycle ----------------------------------------------------------
@@ -691,6 +969,52 @@ impl Core {
     /// or paused. Open sessions alone are not work in progress.
     pub fn has_active_work(&self) -> bool {
         self.has_active_transfers()
+    }
+}
+
+/// What a connect resolved up front, carried to [`Core::establish`].
+struct Pending {
+    request: ConnectRequest,
+    profile_id: ProfileId,
+    generation: u64,
+    to_remember: Vec<(SecretKind, Option<Secret>)>,
+}
+
+/// Why a session went down when a call found its connection gone.
+const LOST: &str = "the connection was lost";
+
+/// Backoff before reconnect attempt `attempt` (1-based), in steps of the
+/// reconnect unit (seconds): 1, 2, 4, 8, then 16 for every later attempt.
+pub fn reconnect_delay_secs(attempt: u32) -> u64 {
+    1 << attempt.saturating_sub(1).min(4)
+}
+
+/// The reason to stop reconnecting after `err`, when trying again cannot
+/// help: the login needs a secret or a host key decision nobody is there to
+/// give, or the server refused what Iris has. `None` for failures worth
+/// another attempt (unreachable, refused, timed out, …).
+fn unrecoverable(err: &CoreError) -> Option<String> {
+    match err {
+        CoreError::PasswordRequired => {
+            Some("reconnecting needs the password; use Retry to enter it".into())
+        }
+        CoreError::PassphraseRequired => {
+            Some("reconnecting needs the key passphrase; use Retry to enter it".into())
+        }
+        CoreError::HostKeyRejected => Some(
+            "the server's host key is not in known_hosts any more; use Retry to check it".into(),
+        ),
+        CoreError::AuthFailed => {
+            Some("the server refused the saved login; use Retry to log in again".into())
+        }
+        CoreError::HostKeyChanged { .. }
+        | CoreError::KeyFile(_)
+        | CoreError::Agent(_)
+        | CoreError::Keychain(_)
+        | CoreError::NotFound(_)
+        | CoreError::Config(_)
+        | CoreError::InvalidInput(_) => Some(err.to_string()),
+        _ => None,
     }
 }
 
@@ -751,6 +1075,51 @@ mod tests {
         };
         assert!(core.save_settings(bad).is_err());
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn the_reconnect_backoff_doubles_up_to_sixteen_seconds() {
+        let delays: Vec<u64> = (1..=8).map(reconnect_delay_secs).collect();
+        assert_eq!(delays, vec![1, 2, 4, 8, 16, 16, 16, 16]);
+        assert_eq!(reconnect_delay_secs(0), 1);
+        assert_eq!(reconnect_delay_secs(u32::MAX), 16);
+    }
+
+    #[test]
+    fn only_failures_a_retry_can_fix_keep_reconnecting() {
+        for err in [
+            CoreError::ConnectFailed("connection refused".into()),
+            CoreError::NotConnected,
+            CoreError::Remote("x".into()),
+            CoreError::JumpHost("bastion could not reach sftp.example.test:22".into()),
+        ] {
+            assert_eq!(unrecoverable(&err), None, "{err:?}");
+        }
+        for err in [
+            CoreError::PasswordRequired,
+            CoreError::PassphraseRequired,
+            CoreError::AuthFailed,
+            CoreError::HostKeyRejected,
+            CoreError::HostKeyChanged {
+                host: "sftp.example.test".into(),
+                port: 22,
+            },
+            CoreError::KeyFile("the file does not exist".into()),
+            CoreError::Agent("no SSH agent is running".into()),
+            CoreError::NotFound("connection".into()),
+        ] {
+            assert!(unrecoverable(&err).is_some(), "{err:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn reconnecting_an_unknown_session_is_not_connected() {
+        let core = Core::new();
+        let err = core
+            .reconnect(SessionId::new(), Credentials::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), "notConnected");
     }
 
     #[test]

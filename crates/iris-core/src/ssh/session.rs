@@ -36,6 +36,14 @@ use crate::ssh::hostkey::{self, HostKeyPrompts};
 /// time a host key prompt waits for the user, which has its own timeout).
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// A keepalive goes out after this long without traffic from the server…
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+/// …and the connection counts as dead after this many go unanswered, so a
+/// link that died silently (sleep, Wi-Fi switch, NAT timeout) is noticed in
+/// about half a minute and the reconnect can start, instead of hanging until
+/// TCP gives up.
+const KEEPALIVE_MAX: usize = 3;
+
 /// Called once when an established connection ends for any reason, with an
 /// Iris-owned description.
 pub type OnClosed = Box<dyn FnOnce(String) + Send + Sync>;
@@ -60,7 +68,9 @@ pub struct ConnectRequest {
     /// Where the SSH agent is; `None` = no agent.
     pub agent: Option<AgentLocation>,
     pub known_hosts: PathBuf,
-    pub prompts: Arc<HostKeyPrompts>,
+    /// Where an unknown host key is asked about; `None` refuses it instead
+    /// (an automatic reconnect, which nobody is watching).
+    pub prompts: Option<Arc<HostKeyPrompts>>,
     pub events: EventBus,
     pub on_closed: OnClosed,
 }
@@ -91,8 +101,8 @@ impl SshSession {
         let config = Arc::new(client::Config {
             nodelay: true,
             // Notice dead connections instead of hanging on them.
-            keepalive_interval: Some(Duration::from_secs(30)),
-            keepalive_max: 3,
+            keepalive_interval: Some(KEEPALIVE_INTERVAL),
+            keepalive_max: KEEPALIVE_MAX,
             ..client::Config::default()
         });
         let target_index = hops
@@ -114,7 +124,7 @@ impl SshSession {
                 port: hop.port,
                 session_id,
                 known_hosts: known_hosts.clone(),
-                prompts: Arc::clone(&prompts),
+                prompts: prompts.clone(),
                 events: events.clone(),
                 is_jump: !is_target,
                 on_closed: Arc::clone(&on_closed),
@@ -502,7 +512,7 @@ struct ClientHandler {
     port: u16,
     session_id: SessionId,
     known_hosts: PathBuf,
-    prompts: Arc<HostKeyPrompts>,
+    prompts: Option<Arc<HostKeyPrompts>>,
     events: EventBus,
     /// A jump connection: its end takes the session down too.
     is_jump: bool,
@@ -540,7 +550,7 @@ impl client::Handler for ClientHandler {
         };
         hostkey::verify(
             &self.known_hosts,
-            &self.prompts,
+            self.prompts.as_deref(),
             &self.events,
             self.session_id,
             &self.host,

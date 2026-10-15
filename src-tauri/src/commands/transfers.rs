@@ -31,6 +31,16 @@ pub async fn cancel_transfer(
     Ok(state.core.cancel_transfer(job_id)?)
 }
 
+/// Queue a failed job again (a file starts over; an unlisted folder is
+/// listed again).
+#[tauri::command]
+pub async fn retry_transfer(
+    state: State<'_, AppState>,
+    job_id: TransferId,
+) -> Result<(), IpcError> {
+    Ok(state.core.retry_transfer(job_id)?)
+}
+
 /// Cancel every unfinished job of a batch.
 #[tauri::command]
 pub async fn cancel_batch(state: State<'_, AppState>, batch_id: BatchId) -> Result<(), IpcError> {

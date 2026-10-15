@@ -148,9 +148,13 @@ impl Default for HostKeyPrompts {
 }
 
 /// The full policy for one presented server key; see the module docs.
+///
+/// `prompts` is `None` for a connect nobody watches (an automatic
+/// reconnect): an unknown key is then refused as `HostKeyRejected` instead
+/// of asking.
 pub async fn verify(
     known_hosts: &Path,
-    prompts: &HostKeyPrompts,
+    prompts: Option<&HostKeyPrompts>,
     events: &EventBus,
     session_id: SessionId,
     host: &str,
@@ -164,6 +168,9 @@ pub async fn verify(
             port,
         }),
         KnownHost::Unknown => {
+            let Some(prompts) = prompts else {
+                return Err(CoreError::HostKeyRejected);
+            };
             let question = HostKeyQuestion {
                 session_id,
                 host: host.to_string(),
@@ -264,7 +271,7 @@ mod tests {
         let prompts = HostKeyPrompts::default();
         let err = verify(
             &path,
-            &prompts,
+            Some(&prompts),
             &events,
             SessionId::new(),
             "sftp.example.test",
@@ -275,6 +282,28 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.kind(), "hostKeyChanged");
         assert!(rx.try_recv().is_err(), "no prompt for a changed key");
+    }
+
+    #[tokio::test]
+    async fn unknown_keys_are_refused_without_a_prompt_when_nobody_can_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        let events = EventBus::new();
+        let mut rx = events.subscribe();
+        let err = verify(
+            &path,
+            None,
+            &events,
+            SessionId::new(),
+            "sftp.example.test",
+            22,
+            &key(KEY_A),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind(), "hostKeyRejected");
+        assert!(rx.try_recv().is_err(), "no prompt without a listener");
+        assert!(!path.exists(), "nothing was learned");
     }
 
     #[tokio::test]

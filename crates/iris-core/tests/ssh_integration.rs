@@ -4,8 +4,8 @@
 //! [`testcontainers`] (sshd on 2222, mapped to a random host port) and drives
 //! the public [`Core`] API end to end: password, key and agent logins,
 //! `known_hosts` handling, a jump host (ProxyJump) on a shared Docker
-//! network, the file operations and previews, and parallel transfers with
-//! resume.
+//! network, the file operations and previews, parallel transfers with
+//! resume, and an automatic reconnect that lets the queue carry on.
 //!
 //! ## Why every test is `#[ignore]`-d
 //! `just test` must stay hermetic and fast, so these need Docker and run
@@ -30,8 +30,8 @@ use std::time::Duration;
 
 use iris_core::{
     AgentLocation, AuthMethod, ConflictResolution, ConnectionProfile, Core, CoreError, CoreEvent,
-    FsTarget, JumpHost, Preview, ProfileId, Secret, SessionId, TransferDirection, TransferItem,
-    TransferList, TransferRequest, TransferState,
+    FsTarget, JumpHost, Preview, ProfileId, Secret, SessionId, SessionState, TransferDirection,
+    TransferItem, TransferList, TransferRequest, TransferState,
 };
 use russh::keys::{PrivateKey, PublicKey};
 use tempfile::TempDir;
@@ -713,6 +713,115 @@ async fn parallel_transfers_and_resume_against_openssh() {
     .await;
     assert!(all_done(&list), "{list:#?}");
     assert_same_file(&cut.join("huge.bin"), &clean.join("huge.bin"));
+}
+
+#[tokio::test]
+#[ignore = "needs Docker; run with just test-integration"]
+async fn a_cut_connection_reconnects_and_the_queue_continues_against_openssh() {
+    let sshd = start_sshd(SshdOptions::default()).await;
+    let f = Fixture::new();
+    let _answers = auto_answer(&f.core, true);
+    f.core
+        .save_settings(iris_core::IrisSettings {
+            parallel_transfers: 1,
+            reconnect_attempts: 5,
+            ..iris_core::IrisSettings::default()
+        })
+        .unwrap();
+    let id = f.save(HOST, sshd.port, AuthMethod::Password, None);
+    // Remembered, so the automatic reconnect can log in by itself.
+    f.core
+        .set_secret(id, iris_core::SecretKind::Password, Secret::new(PASSWORD))
+        .unwrap();
+    let session = f.core.connect(id, None, None).await.unwrap();
+    let home = f.core.home_dir(remote(session)).await.unwrap();
+    let at = |name: &str| format!("{}/{name}", home.trim_end_matches('/'));
+
+    // Collect the session's states as they come.
+    let states = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut rx = f.core.subscribe_events();
+    let sink = Arc::clone(&states);
+    tokio::spawn(async move {
+        while let Ok(event) = rx.recv().await {
+            if let CoreEvent::SessionStateChanged { state, .. } = event {
+                sink.lock().unwrap().push(state);
+            }
+        }
+    });
+
+    // Three large random files (generated in the container), copied one at
+    // a time; the connection is cut while the first one runs.
+    sshd.sh("mkdir -p /config/queue && for i in 1 2 3; do \
+         head -c 134217728 /dev/urandom > /config/queue/part-$i.bin; done && \
+         chown -R 1000:1000 /config/queue")
+        .await;
+    let cut = f.dir.path().join("cut");
+    let clean = f.dir.path().join("clean");
+    std::fs::create_dir(&cut).unwrap();
+    std::fs::create_dir(&clean).unwrap();
+    f.core
+        .enqueue_transfers(TransferRequest {
+            session_id: session,
+            direction: TransferDirection::Download,
+            items: vec![TransferItem { src: at("queue") }],
+            dst_dir: cut.to_string_lossy().into_owned(),
+        })
+        .unwrap();
+    wait_transfers(&f.core, "progress", |l| {
+        l.jobs.len() == 3 && l.jobs.iter().any(|j| j.bytes_done > 0)
+    })
+    .await;
+    sshd.sh("pkill -f 'demo[@]notty'").await;
+
+    // Reconnected on its own, on the same session id.
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        let seen = states.lock().unwrap().clone();
+        let reconnecting = seen
+            .iter()
+            .position(|s| matches!(s, SessionState::Reconnecting { .. }));
+        if let Some(at) = reconnecting {
+            if seen[at..].contains(&SessionState::Connected) {
+                break;
+            }
+        }
+        assert!(
+            !seen
+                .iter()
+                .any(|s| matches!(s, SessionState::Disconnected { .. })),
+            "gave up: {seen:#?}"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no reconnect: {seen:#?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(f.core.sessions(), vec![session]);
+
+    // The queue carries on by itself: every file arrives.
+    let list = wait_transfers(&f.core, "the queue to finish", |l| {
+        l.jobs.iter().all(|j| j.state.is_finished())
+    })
+    .await;
+    assert!(all_done(&list), "{list:#?}");
+    assert!(list.jobs.iter().all(|j| j.session_id == session));
+
+    // An uninterrupted copy is the reference, byte for byte.
+    f.core.clear_finished_transfers();
+    let list = transfer(
+        &f.core,
+        session,
+        TransferDirection::Download,
+        &[at("queue")],
+        &clean.to_string_lossy(),
+    )
+    .await;
+    assert!(all_done(&list), "{list:#?}");
+    for i in 1..=3 {
+        let name = format!("queue/part-{i}.bin");
+        assert_same_file(&cut.join(&name), &clean.join(&name));
+    }
 }
 
 /// Compare two files chunk by chunk (they are too big to diff in memory).

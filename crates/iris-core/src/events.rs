@@ -51,14 +51,11 @@ pub enum CoreEvent {
         fingerprint_sha256: String,
     },
 
-    /// A session moved through its lifecycle. `reason` is set on a
-    /// `disconnected` that was not asked for (failed connect, dropped
-    /// connection) and is Iris-owned text.
+    /// A session moved through its lifecycle (see [`SessionState`]).
     SessionStateChanged {
         session_id: SessionId,
         profile_id: ProfileId,
         state: SessionState,
-        reason: Option<String>,
     },
 
     /// The transfer list changed shape (jobs found by a folder walk,
@@ -90,13 +87,39 @@ pub enum CoreEvent {
     },
 }
 
-/// Lifecycle of one SSH/SFTP session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// Lifecycle of one SSH/SFTP session, tagged by `status` on the wire, e.g.
+/// `{"status":"reconnecting","attempt":2,"maxAttempts":5,"nextRetryInSecs":2}`.
+///
+/// ```text
+/// connecting ──► connected ──(drop)──► reconnecting ──► connected
+///     │              │                      │
+///     ╰──────────────┴──► disconnected ◄────╯ (gave up, or a prompt needed)
+/// ```
+/// A manual reconnect of a `disconnected` session goes through `connecting`
+/// again, keeping the session id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum SessionState {
     Connecting,
     Connected,
-    Disconnected,
+    /// The connection dropped unexpectedly and Iris is retrying.
+    Reconnecting {
+        /// 1-based number of the attempt that is waiting or running.
+        attempt: u32,
+        max_attempts: u32,
+        /// Seconds until that attempt starts; 0 while it runs.
+        next_retry_in_secs: u64,
+    },
+    /// `reason` is Iris-owned text, set when the user did not ask for it (a
+    /// failed connect, a dropped connection that was not or could not be
+    /// re-established); `None` for a user disconnect.
+    Disconnected {
+        reason: Option<String>,
+    },
 }
 
 /// Fan-out bus for [`CoreEvent`]s, backed by a tokio broadcast channel.
@@ -214,13 +237,43 @@ mod tests {
         let json = serde_json::to_value(CoreEvent::SessionStateChanged {
             session_id: SessionId::new(),
             profile_id: ProfileId::new(),
-            state: SessionState::Disconnected,
-            reason: Some("connection lost".into()),
+            state: SessionState::Disconnected {
+                reason: Some("connection lost".into()),
+            },
         })
         .unwrap();
         assert_eq!(json["type"], "sessionStateChanged");
-        assert_eq!(json["state"], "disconnected");
-        assert_eq!(json["reason"], "connection lost");
+        assert_eq!(
+            json["state"],
+            serde_json::json!({ "status": "disconnected", "reason": "connection lost" })
+        );
         assert!(json["profileId"].is_string());
+        assert!(json.get("reason").is_none());
+    }
+
+    #[test]
+    fn session_states_are_tagged_by_status() {
+        let json = |s: SessionState| serde_json::to_value(s).unwrap();
+        assert_eq!(
+            json(SessionState::Connected),
+            serde_json::json!({ "status": "connected" })
+        );
+        assert_eq!(
+            json(SessionState::Reconnecting {
+                attempt: 2,
+                max_attempts: 5,
+                next_retry_in_secs: 2,
+            }),
+            serde_json::json!({
+                "status": "reconnecting",
+                "attempt": 2,
+                "maxAttempts": 5,
+                "nextRetryInSecs": 2,
+            })
+        );
+        assert_eq!(
+            json(SessionState::Disconnected { reason: None }),
+            serde_json::json!({ "status": "disconnected", "reason": null })
+        );
     }
 }

@@ -2,6 +2,10 @@
 //! call path. Folders are walked depth-first; each destination folder is
 //! created before the files inside it are queued, so a job never waits
 //! for its parent folder.
+//!
+//! When the connection goes mid-walk, the walk stops touching the network
+//! and records what is left as paused placeholders (see the module docs of
+//! [`super`]); a resume walks them again.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -11,40 +15,68 @@ use tokio_util::sync::CancellationToken;
 use crate::error::CoreError;
 use crate::events::CoreEvent;
 use crate::fs::{EntryKind, LinkTargetKind, SftpFs};
-use crate::ids::BatchId;
+use crate::ids::{BatchId, SessionId};
 
 use super::naming::is_safe_name;
 use super::progress::{Throttle, PROGRESS_INTERVAL};
 use super::side::Side;
-use super::{NewJob, Shared, TransferDirection, TransferError, TransferRequest, TransferState};
+use super::{NewJob, Shared, TransferDirection, TransferError, TransferState, Walk};
+
+/// One piece of a walk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Work {
+    /// A selected item, copied into `dst_dir` under its own name.
+    Item { src: String, dst_dir: String },
+    /// The folder `src`, created as `dst_parent/name` and filled.
+    Folder {
+        src: String,
+        dst_parent: String,
+        name: String,
+    },
+}
 
 pub(super) async fn run(
     shared: Arc<Shared>,
     batch_id: BatchId,
-    request: TransferRequest,
+    session_id: SessionId,
+    direction: TransferDirection,
+    work: Vec<Work>,
     remote: SftpFs,
     token: CancellationToken,
 ) {
     let remote = Side::Remote(remote);
     let local = Side::Local(shared.local());
-    let (src, dst) = match request.direction {
+    let (src, dst) = match direction {
         TransferDirection::Upload => (local, remote),
         TransferDirection::Download => (remote, local),
     };
     let mut walker = Walker {
         shared: &shared,
         batch_id,
-        request: &request,
+        session_id,
+        direction,
         src: &src,
         dst: &dst,
         token: &token,
         updates: Throttle::new(PROGRESS_INTERVAL),
+        stopped: false,
     };
-    for item in &request.items {
+    for piece in work {
         if token.is_cancelled() {
             break;
         }
-        walker.item(&item.src).await;
+        if walker.stopped {
+            walker.placeholder(piece);
+            continue;
+        }
+        match piece {
+            Work::Item { src, dst_dir } => walker.item(&src, &dst_dir).await,
+            Work::Folder {
+                src,
+                dst_parent,
+                name,
+            } => walker.folder(&src, &dst_parent, &name).await,
+        }
     }
     shared.expansion_done(batch_id);
 }
@@ -52,12 +84,15 @@ pub(super) async fn run(
 struct Walker<'a> {
     shared: &'a Arc<Shared>,
     batch_id: BatchId,
-    request: &'a TransferRequest,
+    session_id: SessionId,
+    direction: TransferDirection,
     src: &'a Side,
     dst: &'a Side,
     token: &'a CancellationToken,
     /// Coalesces the "list changed" signal while jobs pour in.
     updates: Throttle,
+    /// The connection is gone: what is left becomes placeholders.
+    stopped: bool,
 }
 
 /// Why an entry is not copied.
@@ -67,33 +102,45 @@ const SPECIAL: &str = "only files and folders are copied";
 const UNSAFE_NAME: &str = "the name is not a valid file name";
 
 impl Walker<'_> {
+    /// Whether `err` means the connection is gone (rather than this one
+    /// entry being a problem).
+    fn lost(&self, err: &CoreError) -> bool {
+        matches!(err, CoreError::NotConnected) || !self.shared.session_alive(self.session_id)
+    }
+
     /// One selected item. A selected link is followed (folders included:
     /// the user picked it); links met inside a folder are not (see
     /// [`Walker::folder`]).
-    async fn item(&mut self, path: &str) {
+    async fn item(&mut self, path: &str, dst_dir: &str) {
         let name = self.src.name_of(path);
-        let dst_dir = self.request.dst_dir.clone();
         if !is_safe_name(&name) {
-            self.skip(path, &dst_dir, &name, UNSAFE_NAME);
+            self.skip(path, dst_dir, &name, UNSAFE_NAME);
             return;
         }
         match self.src.entry(path).await {
-            Err(e) => self.fail(path, &dst_dir, &name, &e),
+            Err(e) if self.lost(&e) => {
+                self.stopped = true;
+                self.placeholder(Work::Item {
+                    src: path.to_string(),
+                    dst_dir: dst_dir.to_string(),
+                });
+            }
+            Err(e) => self.fail(path, dst_dir, &name, &e, Walk::Item),
             Ok(entry) => match entry.kind {
-                EntryKind::File => self.file(path, &dst_dir, &name, entry.size),
+                EntryKind::File => self.file(path, dst_dir, &name, entry.size),
                 EntryKind::Symlink {
                     target_kind: Some(LinkTargetKind::File),
                     ..
-                } => self.file(path, &dst_dir, &name, 0),
+                } => self.file(path, dst_dir, &name, 0),
                 EntryKind::Dir
                 | EntryKind::Symlink {
                     target_kind: Some(LinkTargetKind::Dir),
                     ..
-                } => self.folder(path, &dst_dir, &name).await,
+                } => self.folder(path, dst_dir, &name).await,
                 EntryKind::Symlink {
                     target_kind: None, ..
-                } => self.skip(path, &dst_dir, &name, BROKEN_LINK),
-                EntryKind::Other => self.skip(path, &dst_dir, &name, SPECIAL),
+                } => self.skip(path, dst_dir, &name, BROKEN_LINK),
+                EntryKind::Other => self.skip(path, dst_dir, &name, SPECIAL),
             },
         }
     }
@@ -106,14 +153,28 @@ impl Walker<'_> {
                 return;
             }
             let dst_dir = self.dst.join(&dst_parent, &name);
-            if let Err(e) = self.dst.mkdir_all(&dst_dir).await {
-                self.fail(&src_dir, &dst_parent, &name, &e);
-                continue;
-            }
-            let mut entries = match self.src.list(&src_dir).await {
+            let listed = match self.dst.mkdir_all(&dst_dir).await {
+                Ok(()) => self.src.list(&src_dir).await,
+                Err(e) => Err(e),
+            };
+            let mut entries = match listed {
                 Ok(entries) => entries,
+                Err(e) if self.lost(&e) => {
+                    // This folder and every one still on the stack wait for
+                    // the connection to come back.
+                    self.stopped = true;
+                    stack.push((src_dir, dst_parent, name));
+                    while let Some((src, dst_parent, name)) = stack.pop() {
+                        self.placeholder(Work::Folder {
+                            src,
+                            dst_parent,
+                            name,
+                        });
+                    }
+                    return;
+                }
                 Err(e) => {
-                    self.fail(&src_dir, &dst_parent, &name, &e);
+                    self.fail(&src_dir, &dst_parent, &name, &e, Walk::Folder);
                     continue;
                 }
             };
@@ -150,7 +211,7 @@ impl Walker<'_> {
     }
 
     fn file(&mut self, src: &str, dst_dir: &str, name: &str, size: u64) {
-        self.add(src, dst_dir, name, size, None);
+        self.add(src, dst_dir, name, size, TransferState::Queued, None, None);
     }
 
     fn skip(&mut self, src: &str, dst_dir: &str, name: &str, why: &str) {
@@ -158,22 +219,47 @@ impl Walker<'_> {
             kind: "invalidInput".into(),
             message: format!("{src}: {why}"),
         };
-        self.add(src, dst_dir, name, 0, Some((TransferState::Skipped, error)));
+        let state = TransferState::Skipped;
+        self.add(src, dst_dir, name, 0, state, Some(error), None);
     }
 
-    fn fail(&mut self, src: &str, dst_dir: &str, name: &str, err: &CoreError) {
+    /// A `failed` placeholder: retrying it walks `src` again.
+    fn fail(&mut self, src: &str, dst_dir: &str, name: &str, err: &CoreError, walk: Walk) {
         tracing::info!(kind = err.kind(), "could not expand a transfer item");
         let error = TransferError::from(err);
-        self.add(src, dst_dir, name, 0, Some((TransferState::Failed, error)));
+        let state = TransferState::Failed;
+        self.add(src, dst_dir, name, 0, state, Some(error), Some(walk));
     }
 
+    /// A `paused` placeholder for work the lost connection cut off.
+    fn placeholder(&mut self, work: Work) {
+        let state = TransferState::Paused;
+        match work {
+            Work::Item { src, dst_dir } => {
+                let name = self.src.name_of(&src);
+                self.add(&src, &dst_dir, &name, 0, state, None, Some(Walk::Item));
+            }
+            Work::Folder {
+                src,
+                dst_parent,
+                name,
+            } => {
+                let walk = Some(Walk::Folder);
+                self.add(&src, &dst_parent, &name, 0, state, None, walk);
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)] // one job's fields, passed through
     fn add(
         &mut self,
         src: &str,
         dst_dir: &str,
         name: &str,
         size: u64,
-        finished: Option<(TransferState, TransferError)>,
+        state: TransferState,
+        error: Option<TransferError>,
+        walk: Option<Walk>,
     ) {
         let dst = if is_safe_name(name) {
             self.dst.join(dst_dir, name)
@@ -182,14 +268,16 @@ impl Walker<'_> {
         };
         let added = self.shared.add_job(NewJob {
             batch_id: self.batch_id,
-            session_id: self.request.session_id,
-            direction: self.request.direction,
+            session_id: self.session_id,
+            direction: self.direction,
             src: src.to_string(),
             dst_dir: dst_dir.to_string(),
             name: name.to_string(),
             dst,
             size,
-            finished,
+            state,
+            error,
+            walk,
         });
         if added && self.updates.ready(Instant::now()) {
             self.shared.publish(CoreEvent::TransfersUpdated);

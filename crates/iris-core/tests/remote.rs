@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use iris_core::ssh::hostkey::fingerprint_sha256;
 use iris_core::{
-    AuthMethod, ConnectionProfile, Core, CoreError, CoreEvent, EntryKind, FsTarget, LinkTargetKind,
-    Preview, ProfileId, Secret, SessionId, SessionState,
+    AuthMethod, ConnectionProfile, Core, CoreError, CoreEvent, EntryKind, FsTarget, IrisSettings,
+    LinkTargetKind, Preview, ProfileId, Secret, SessionId, SessionState,
 };
 use tempfile::TempDir;
 use tokio::sync::broadcast;
@@ -94,7 +94,7 @@ fn states(events: &[CoreEvent]) -> Vec<SessionState> {
     events
         .iter()
         .filter_map(|e| match e {
-            CoreEvent::SessionStateChanged { state, .. } => Some(*state),
+            CoreEvent::SessionStateChanged { state, .. } => Some(state.clone()),
             _ => None,
         })
         .collect()
@@ -132,20 +132,23 @@ async fn password_auth_connects_lists_and_disconnects() {
         vec![
             SessionState::Connecting,
             SessionState::Connected,
-            SessionState::Disconnected
+            // A requested disconnect carries no reason.
+            SessionState::Disconnected { reason: None }
         ]
     );
-    // A requested disconnect carries no reason.
-    assert!(matches!(
-        events.last(),
-        Some(CoreEvent::SessionStateChanged { reason: None, .. })
-    ));
 }
 
 #[tokio::test]
 async fn a_connection_closed_by_the_server_is_announced_once() {
     let server = TestServer::start(None).await;
     let f = fixture(&server, true);
+    // Without reconnecting, a drop is final.
+    f.core
+        .save_settings(IrisSettings {
+            reconnect_attempts: 0,
+            ..IrisSettings::default()
+        })
+        .unwrap();
     let session = connect_with_password(&f, &server).await;
     let mut rx = f.core.subscribe_events();
 
@@ -159,8 +162,7 @@ async fn a_connection_closed_by_the_server_is_announced_once() {
             &event,
             CoreEvent::SessionStateChanged {
                 session_id,
-                state: SessionState::Disconnected,
-                reason: Some(_),
+                state: SessionState::Disconnected { reason: Some(_) },
                 ..
             } if *session_id == session
         ),
@@ -171,9 +173,20 @@ async fn a_connection_closed_by_the_server_is_announced_once() {
         f.core.list_dir(remote(session), "/").await,
         Err(CoreError::NotConnected)
     ));
-    // A late disconnect from the UI is a quiet no-op.
+    assert!(drain(&mut rx).is_empty(), "announced once");
+    // The UI's disconnect then forgets the session (a Retry is no longer
+    // possible), announced without a reason.
     f.core.disconnect(session).await.unwrap();
-    assert!(drain(&mut rx).is_empty());
+    assert_eq!(
+        states(&drain(&mut rx)),
+        vec![SessionState::Disconnected { reason: None }]
+    );
+    let err = f
+        .core
+        .reconnect(session, iris_core::Credentials::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CoreError::NotConnected), "{err:?}");
 }
 
 #[tokio::test]
@@ -192,12 +205,13 @@ async fn a_wrong_password_is_auth_failed() {
     let events = drain(&mut rx);
     assert_eq!(
         states(&events),
-        vec![SessionState::Connecting, SessionState::Disconnected]
+        vec![
+            SessionState::Connecting,
+            SessionState::Disconnected {
+                reason: Some("authentication failed".into())
+            }
+        ]
     );
-    assert!(matches!(
-        events.last(),
-        Some(CoreEvent::SessionStateChanged { reason: Some(r), .. }) if r == "authentication failed"
-    ));
     assert!(f.core.sessions().is_empty());
 }
 

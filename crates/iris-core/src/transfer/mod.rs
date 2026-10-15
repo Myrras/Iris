@@ -30,7 +30,24 @@
 //!   │     ╲     ╰──► paused (connection lost) ──(resume_paused)──► queued
 //!   │      ╲
 //!   ╰───────╲──── any non-final state ──(cancel)──► cancelled
+//!
+//! failed ──(retry)──► queued
 //! ```
+//!
+//! ## Folders cut off by a dropped connection
+//! When the connection goes while a batch is being expanded, the walk stops
+//! and records what it had not listed yet — the folder it was in, the
+//! folders still on its stack and the selected items it had not reached —
+//! as **placeholder** jobs (`folder: true`) in `paused`. Resuming the
+//! session's paused jobs replaces each placeholder by walking it again on
+//! the new connection, so the files found then join the batch as usual. A
+//! folder whose listing *failed* (say, permission denied) becomes a `failed`
+//! placeholder that [`TransferManager::retry`] walks again.
+//!
+//! ## Retry
+//! [`TransferManager::retry`] queues a `failed` job again. A file starts
+//! over from the first byte (replacing what an earlier attempt wrote: after
+//! an error mid-copy the partial file is not trusted as a prefix).
 //!
 //! ## Conflicts
 //! Before writing, a job looks at its destination. When something is there
@@ -54,6 +71,7 @@
 //! or a socket/device, becomes a `skipped` job that says why.
 
 mod expand;
+pub(crate) use expand::Work;
 pub mod naming;
 pub(crate) mod progress;
 mod side;
@@ -160,6 +178,10 @@ pub struct TransferJob {
     pub state: TransferState,
     /// Set when `failed`, and when `skipped` by Iris itself.
     pub error: Option<TransferError>,
+    /// A placeholder for a selected item or folder that was not listed yet
+    /// (its walk was cut off by a dropped connection, or failed); resuming
+    /// or retrying lists it, and it is replaced by the jobs found.
+    pub folder: bool,
 }
 
 /// The answer to a [`CoreEvent::TransferConflict`].
@@ -290,13 +312,25 @@ impl TransferManager {
             BatchEntry {
                 token: token.clone(),
                 policy: None,
-                expanding: true,
+                expanding: 1,
+                session_id: request.session_id,
+                direction: request.direction,
             },
         );
+        let work = request
+            .items
+            .into_iter()
+            .map(|item| Work::Item {
+                src: item.src,
+                dst_dir: request.dst_dir.clone(),
+            })
+            .collect();
         runtime.spawn(expand::run(
             Arc::clone(&self.shared),
             batch_id,
-            request,
+            request.session_id,
+            request.direction,
+            work,
             live.ssh.fs().clone(),
             token,
         ));
@@ -395,7 +429,18 @@ impl TransferManager {
 
     /// Resume the jobs paused on `paused_on` over the session `resume_on`
     /// (a reconnect opens a new session). Returns how many were queued.
+    ///
+    /// Placeholders of folders whose walk was cut off are walked again on
+    /// `resume_on` (and leave the list); they count too. Without a live
+    /// `resume_on` they stay paused.
     pub fn resume_paused_on(&self, paused_on: SessionId, resume_on: SessionId) -> usize {
+        let remote = self
+            .shared
+            .sessions
+            .get(resume_on)
+            .ok()
+            .map(|live| live.ssh.fs().clone());
+        let mut walks: Vec<(BatchId, Work)> = Vec::new();
         let count = {
             let mut reg = self.shared.lock();
             let reg = &mut *reg;
@@ -404,19 +449,134 @@ impl TransferManager {
                 let Some(entry) = reg.jobs.get_mut(id) else {
                     continue;
                 };
-                if entry.job.session_id == paused_on && entry.job.state == TransferState::Paused {
-                    entry.job.session_id = resume_on;
-                    entry.job.state = TransferState::Queued;
-                    entry.job.error = None;
-                    publish_changed(&self.shared.events, entry);
-                    reg.ready.push_back(*id);
-                    count += 1;
+                if entry.job.session_id != paused_on || entry.job.state != TransferState::Paused {
+                    continue;
                 }
+                if entry.walk.is_some() {
+                    if remote.is_some() {
+                        walks.push((entry.job.batch_id, entry.work()));
+                        count += 1;
+                    }
+                    continue;
+                }
+                entry.job.session_id = resume_on;
+                entry.job.state = TransferState::Queued;
+                entry.job.error = None;
+                publish_changed(&self.shared.events, entry);
+                reg.ready.push_back(*id);
+                count += 1;
+            }
+            if !walks.is_empty() {
+                reg.remove_placeholders(paused_on);
             }
             count
         };
+        if let Some(remote) = remote {
+            self.shared.walk_again(resume_on, walks, &remote);
+        }
         self.shared.pump();
         count
+    }
+
+    /// Queue a `failed` job again: a file starts over, a placeholder is
+    /// walked again. `NotFound` for an unknown job, `InvalidInput` when it
+    /// has not failed, `NotConnected` when its session is not connected.
+    pub fn retry(&self, job_id: TransferId) -> CoreResult<()> {
+        let session_id = {
+            let reg = self.shared.lock();
+            let entry = reg
+                .jobs
+                .get(&job_id)
+                .ok_or_else(|| CoreError::NotFound("transfer".into()))?;
+            if entry.job.state != TransferState::Failed {
+                return Err(CoreError::InvalidInput(
+                    "only a failed transfer can be retried".into(),
+                ));
+            }
+            entry.job.session_id
+        };
+        let remote = self.shared.sessions.get(session_id)?.ssh.fs().clone();
+        let walk = {
+            let mut reg = self.shared.lock();
+            let reg = &mut *reg;
+            // Checked again: the lock was let go while looking up the
+            // session.
+            let Some(entry) = reg.jobs.get_mut(&job_id) else {
+                return Err(CoreError::NotFound("transfer".into()));
+            };
+            if entry.job.state != TransferState::Failed {
+                return Err(CoreError::InvalidInput(
+                    "only a failed transfer can be retried".into(),
+                ));
+            }
+            let batch_id = entry.job.batch_id;
+            // A batch cancelled after this job failed: the retry starts a
+            // fresh token so it is not cancelled before it begins.
+            let batch_token = match reg.batches.get_mut(&batch_id) {
+                Some(batch) => {
+                    if batch.token.is_cancelled() {
+                        batch.token = CancellationToken::new();
+                    }
+                    batch.token.clone()
+                }
+                None => CancellationToken::new(),
+            };
+            let entry = reg.jobs.get_mut(&job_id).expect("checked above");
+            if entry.walk.is_some() {
+                let work = entry.work();
+                reg.jobs.remove(&job_id);
+                reg.order.retain(|id| *id != job_id);
+                Some((batch_id, work))
+            } else {
+                entry.token = batch_token.child_token();
+                entry.job.state = TransferState::Queued;
+                entry.job.error = None;
+                entry.job.bytes_done = 0;
+                if entry.append {
+                    // Its own partial copy, from the failed attempt: start
+                    // over rather than trust it as a prefix.
+                    entry.append = false;
+                    entry.resolution = Some(ConflictResolution::Replace);
+                }
+                publish_changed(&self.shared.events, entry);
+                reg.ready.push_back(job_id);
+                None
+            }
+        };
+        if let Some(walk) = walk {
+            self.shared.events.publish(CoreEvent::TransfersUpdated);
+            self.shared.walk_again(session_id, vec![walk], &remote);
+        }
+        self.shared.pump();
+        Ok(())
+    }
+
+    /// Cancel every unfinished job of a session and stop expanding its
+    /// batches (the session is being closed for good).
+    pub fn cancel_session(&self, session_id: SessionId) {
+        self.cancel_where(|session| session == session_id);
+    }
+
+    /// Cancel every unfinished job and expansion (Iris is quitting).
+    pub fn cancel_all(&self) {
+        self.cancel_where(|_| true);
+    }
+
+    fn cancel_where(&self, matches: impl Fn(SessionId) -> bool) {
+        let mut reg = self.shared.lock();
+        let reg = &mut *reg;
+        for batch in reg.batches.values() {
+            if matches(batch.session_id) {
+                batch.token.cancel();
+            }
+        }
+        for id in &reg.order {
+            if let Some(entry) = reg.jobs.get_mut(id) {
+                if matches(entry.job.session_id) {
+                    cancel_entry(&self.shared.events, entry);
+                }
+            }
+        }
     }
 
     /// Every job, in the order they were found, with the totals.
@@ -464,7 +624,7 @@ impl TransferManager {
             let jobs = &reg.jobs;
             reg.order.retain(|id| jobs.contains_key(id));
             reg.batches.retain(|batch_id, batch| {
-                batch.expanding || jobs.values().any(|e| e.job.batch_id == *batch_id)
+                batch.expanding > 0 || jobs.values().any(|e| e.job.batch_id == *batch_id)
             });
         }
         self.shared.events.publish(CoreEvent::TransfersUpdated);
@@ -474,7 +634,7 @@ impl TransferManager {
     /// paused, or a batch is still being expanded.
     pub fn has_active(&self) -> bool {
         let reg = self.shared.lock();
-        reg.batches.values().any(|b| b.expanding)
+        reg.batches.values().any(|b| b.expanding > 0)
             || reg.jobs.values().any(|e| e.job.state.is_active())
     }
 
@@ -544,13 +704,45 @@ struct JobEntry {
     resolution: Option<ConflictResolution>,
     throttle: Throttle,
     speed: SpeedMeter,
+    /// Set for a placeholder: what to walk to replace it.
+    walk: Option<Walk>,
+}
+
+impl JobEntry {
+    /// The walk that replaces this placeholder.
+    fn work(&self) -> Work {
+        match self.walk {
+            Some(Walk::Folder) => Work::Folder {
+                src: self.job.src.clone(),
+                dst_parent: self.dst_dir.clone(),
+                name: self.name.clone(),
+            },
+            Some(Walk::Item) | None => Work::Item {
+                src: self.job.src.clone(),
+                dst_dir: self.dst_dir.clone(),
+            },
+        }
+    }
+}
+
+/// What kind of walk a placeholder stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Walk {
+    /// A selected item not looked at yet (a link is followed).
+    Item,
+    /// A folder to create and fill (links inside it are not followed).
+    Folder,
 }
 
 struct BatchEntry {
     token: CancellationToken,
     /// An `apply_to_all` answer.
     policy: Option<ConflictResolution>,
-    expanding: bool,
+    /// How many walks of this batch are running.
+    expanding: usize,
+    /// The remote side (moves with a resume onto another session).
+    session_id: SessionId,
+    direction: TransferDirection,
 }
 
 #[derive(Default)]
@@ -568,6 +760,20 @@ struct Registry {
     speed: SpeedMeter,
 }
 
+impl Registry {
+    /// Drop the paused placeholders of `session_id` (they are being walked
+    /// again).
+    fn remove_placeholders(&mut self, session_id: SessionId) {
+        self.jobs.retain(|_, e| {
+            !(e.walk.is_some()
+                && e.job.session_id == session_id
+                && e.job.state == TransferState::Paused)
+        });
+        let jobs = &self.jobs;
+        self.order.retain(|id| jobs.contains_key(id));
+    }
+}
+
 /// A job to add to the registry.
 pub(crate) struct NewJob {
     pub batch_id: BatchId,
@@ -578,9 +784,11 @@ pub(crate) struct NewJob {
     pub name: String,
     pub dst: String,
     pub size: u64,
-    /// `None` queues the job; otherwise it is recorded as already finished
-    /// (skipped or failed during expansion).
-    pub finished: Option<(TransferState, TransferError)>,
+    /// `Queued` queues the job; anything else records it as it is
+    /// (skipped or failed during expansion, or a paused placeholder).
+    pub state: TransferState,
+    pub error: Option<TransferError>,
+    pub walk: Option<Walk>,
 }
 
 /// What the manager and its tasks share.
@@ -617,10 +825,7 @@ impl Shared {
             }
             let token = batch.token.child_token();
             let id = TransferId::new();
-            let (state, error) = match new.finished {
-                Some((state, error)) => (state, Some(error)),
-                None => (TransferState::Queued, None),
-            };
+            let state = new.state;
             reg.jobs.insert(
                 id,
                 JobEntry {
@@ -634,7 +839,8 @@ impl Shared {
                         size: new.size,
                         bytes_done: 0,
                         state,
-                        error,
+                        error: new.error,
+                        folder: new.walk.is_some(),
                     },
                     dst_dir: new.dst_dir,
                     name: new.name,
@@ -643,6 +849,7 @@ impl Shared {
                     resolution: None,
                     throttle: Throttle::new(PROGRESS_INTERVAL),
                     speed: SpeedMeter::new(),
+                    walk: new.walk,
                 },
             );
             reg.order.push(id);
@@ -654,12 +861,54 @@ impl Shared {
         true
     }
 
-    /// The expansion of `batch_id` is over.
+    /// One walk of `batch_id` is over.
     pub fn expansion_done(&self, batch_id: BatchId) {
         if let Some(batch) = self.lock().batches.get_mut(&batch_id) {
-            batch.expanding = false;
+            batch.expanding = batch.expanding.saturating_sub(1);
         }
         self.publish(CoreEvent::TransfersUpdated);
+    }
+
+    /// Walk `walks` (placeholders taken out of the list) again over
+    /// `remote`, the connection of `session_id`, one task per batch.
+    fn walk_again(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        walks: Vec<(BatchId, Work)>,
+        remote: &SftpFs,
+    ) {
+        let Some(runtime) = self.runtime.get() else {
+            return;
+        };
+        let mut by_batch: Vec<(BatchId, Vec<Work>)> = Vec::new();
+        for (batch_id, work) in walks {
+            match by_batch.iter_mut().find(|(id, _)| *id == batch_id) {
+                Some((_, works)) => works.push(work),
+                None => by_batch.push((batch_id, vec![work])),
+            }
+        }
+        for (batch_id, works) in by_batch {
+            let started = {
+                let mut reg = self.lock();
+                reg.batches.get_mut(&batch_id).map(|batch| {
+                    batch.expanding += 1;
+                    batch.session_id = session_id;
+                    (batch.token.clone(), batch.direction)
+                })
+            };
+            let Some((token, direction)) = started else {
+                continue;
+            };
+            runtime.spawn(expand::run(
+                Arc::clone(self),
+                batch_id,
+                session_id,
+                direction,
+                works,
+                remote.clone(),
+                token,
+            ));
+        }
     }
 
     /// Start queued jobs while slots are free.
@@ -880,6 +1129,7 @@ mod tests {
             bytes_done: 4,
             state: TransferState::NeedsDecision,
             error: None,
+            folder: false,
         };
         let json = serde_json::to_value(&job).unwrap();
         assert_eq!(json["state"], "needsDecision");
@@ -887,6 +1137,7 @@ mod tests {
         assert_eq!(json["bytesDone"], 4);
         assert!(json["batchId"].is_string());
         assert!(json["error"].is_null());
+        assert_eq!(json["folder"], false);
 
         let failed = TransferJob {
             state: TransferState::Failed,

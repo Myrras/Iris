@@ -89,8 +89,11 @@ mod tests {
                 CoreEvent::SessionStateChanged {
                     session_id: SessionId::new(),
                     profile_id: ProfileId::new(),
-                    state: SessionState::Connected,
-                    reason: None,
+                    state: SessionState::Reconnecting {
+                        attempt: 1,
+                        max_attempts: 5,
+                        next_retry_in_secs: 1,
+                    },
                 },
                 "session:state-changed",
             ),
@@ -108,6 +111,7 @@ mod tests {
                         bytes_done: 0,
                         state: TransferState::Queued,
                         error: None,
+                        folder: false,
                     },
                 },
                 "transfer:job-changed",

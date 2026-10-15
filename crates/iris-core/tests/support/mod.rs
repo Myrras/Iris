@@ -15,13 +15,15 @@
 //! writing files, and the file operations (mkdir, rename, remove, rmdir,
 //! setstat). For the transfer tests the server counts how many files are
 //! open at once (across all channels and connections) and can slow every
-//! read and write down. All data is fictitious.
+//! read and write (and folder listing) down. For the reconnect tests it can
+//! cut its TCP connections dead (no SSH goodbye, like a dropped link) and
+//! refuse new ones. All data is fictitious.
 
 #![allow(dead_code)] // Each test binary uses a different subset.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -49,9 +51,29 @@ struct Endpoint {
     config: Arc<russh::server::Config>,
     shared: Arc<Shared>,
     sessions: Arc<std::sync::Mutex<Vec<russh::server::Handle>>>,
+    /// The byte pumps between each accepted TCP socket and its SSH session;
+    /// aborting one drops the socket mid-stream.
+    pumps: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// Drop new TCP connections right after accepting them.
+    refusing: AtomicBool,
 }
 
 impl Endpoint {
+    /// Serve an accepted TCP socket through a pump that can be cut.
+    fn serve_tcp(&self, socket: tokio::net::TcpStream) {
+        if self.refusing.load(Ordering::SeqCst) {
+            return;
+        }
+        let (near, far) = tokio::io::duplex(256 * 1024);
+        self.serve(far);
+        let pump = tokio::spawn(async move {
+            let mut socket = socket;
+            let mut near = near;
+            let _ = tokio::io::copy_bidirectional(&mut socket, &mut near).await;
+        });
+        self.pumps.lock().unwrap().push(pump);
+    }
+
     /// Run one SSH connection over `socket` in the background.
     fn serve<S>(&self, socket: S)
     where
@@ -142,6 +164,8 @@ impl TestServer {
             config,
             shared,
             sessions: Arc::new(std::sync::Mutex::new(Vec::new())),
+            pumps: std::sync::Mutex::default(),
+            refusing: AtomicBool::new(false),
         });
 
         let (port, task) = if listen {
@@ -153,7 +177,7 @@ impl TestServer {
                     let Ok((socket, _)) = listener.accept().await else {
                         return;
                     };
-                    endpoint.serve(socket);
+                    endpoint.serve_tcp(socket);
                 }
             });
             (port, Some(task))
@@ -183,6 +207,31 @@ impl TestServer {
                 )
                 .await;
         }
+    }
+
+    /// Cut every accepted TCP connection dead: the sockets close with no
+    /// SSH disconnect message, as when the network drops.
+    pub fn kill_all(&self) {
+        for pump in self.endpoint.pumps.lock().unwrap().drain(..) {
+            pump.abort();
+        }
+        self.endpoint.sessions.lock().unwrap().clear();
+    }
+
+    /// While set, new connections are dropped as soon as they arrive (the
+    /// server is "gone"); existing ones are not touched.
+    pub fn set_refusing(&self, refusing: bool) {
+        self.endpoint.refusing.store(refusing, Ordering::SeqCst);
+    }
+
+    /// Delay every folder listing (OPENDIR) by `delay`, so a folder walk
+    /// takes long enough to cut off.
+    pub fn set_list_delay(&self, delay: Duration) {
+        self.endpoint
+            .shared
+            .stats
+            .list_delay_us
+            .store(delay.as_micros() as u64, Ordering::SeqCst);
     }
 
     /// The most files that were open at the same time since the last
@@ -300,6 +349,8 @@ struct Stats {
     max_open: AtomicUsize,
     /// Delay per READ / WRITE, in microseconds.
     delay_us: AtomicU64,
+    /// Delay per OPENDIR, in microseconds.
+    list_delay_us: AtomicU64,
 }
 
 impl Stats {
@@ -314,6 +365,13 @@ impl Stats {
 
     async fn delay(&self) {
         let us = self.delay_us.load(Ordering::SeqCst);
+        if us > 0 {
+            tokio::time::sleep(Duration::from_micros(us)).await;
+        }
+    }
+
+    async fn list_delay(&self) {
+        let us = self.list_delay_us.load(Ordering::SeqCst);
         if us > 0 {
             tokio::time::sleep(Duration::from_micros(us)).await;
         }
@@ -521,6 +579,7 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, Self::Error> {
+        self.stats.list_delay().await;
         let real = self.real(&path)?;
         let mut files = VecDeque::new();
         for item in std::fs::read_dir(&real).map_err(status_of)? {
