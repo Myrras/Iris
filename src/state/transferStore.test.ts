@@ -1,0 +1,237 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../ipc/commands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc/commands")>()),
+  listTransfers: vi.fn(),
+  enqueueTransfers: vi.fn(),
+  cancelTransfer: vi.fn(() => Promise.resolve()),
+  cancelBatch: vi.fn(() => Promise.resolve()),
+  clearFinished: vi.fn(() => Promise.resolve()),
+  listDir: vi.fn(() => Promise.resolve([])),
+}));
+vi.mock("./toastStore", () => ({
+  toastError: vi.fn(),
+  toastSuccess: vi.fn(),
+}));
+
+import {
+  cancelBatch,
+  cancelTransfer,
+  clearFinished,
+  enqueueTransfers,
+  listDir,
+  listTransfers,
+} from "../ipc/commands";
+import type { TransferJob, TransferList } from "../ipc/types";
+import { useLayoutStore } from "./layoutStore";
+import { initialPane, usePaneStore } from "./paneStore";
+import { usePromptStore } from "./promptStore";
+import { toastError } from "./toastStore";
+import {
+  EMPTY_SUMMARY,
+  RESYNC_MS,
+  orderedJobs,
+  resetTransferResync,
+  useTransferStore,
+} from "./transferStore";
+
+function job(id: string, extra: Partial<TransferJob> = {}): TransferJob {
+  return {
+    id,
+    batchId: "b-1",
+    sessionId: "s-1",
+    direction: "upload",
+    src: `/home/alice/${id}`,
+    dst: `/srv/${id}`,
+    size: 100,
+    bytesDone: 0,
+    state: "queued",
+    error: null,
+    ...extra,
+  };
+}
+
+function list(jobs: TransferJob[]): TransferList {
+  return { jobs, summary: { ...EMPTY_SUMMARY, queued: jobs.length } };
+}
+
+const store = () => useTransferStore.getState();
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  resetTransferResync();
+  useTransferStore.setState({
+    jobs: {},
+    order: [],
+    summary: EMPTY_SUMMARY,
+    speeds: {},
+  });
+  usePromptStore.setState({ queue: [] });
+  usePaneStore.setState({
+    panes: {
+      local: { ...initialPane(), target: { kind: "local" }, path: "/home" },
+      remote: {
+        ...initialPane(),
+        target: { kind: "remote", sessionId: "s-1" },
+        path: "/srv",
+      },
+    },
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("transferStore", () => {
+  it("re-pulls the list in discovery order", async () => {
+    vi.mocked(listTransfers).mockResolvedValue(list([job("a"), job("b")]));
+    await store().resync();
+    expect(orderedJobs(store()).map((j) => j.id)).toEqual(["a", "b"]);
+    expect(store().summary.queued).toBe(2);
+  });
+
+  it("merges progress and keeps running byte counts from going back", async () => {
+    useTransferStore.setState({
+      jobs: { a: job("a", { state: "running" }) },
+      order: ["a"],
+    });
+    store().applyProgress({
+      type: "transferProgress",
+      jobId: "a",
+      batchId: "b-1",
+      bytesDone: 60,
+      size: 100,
+      bytesPerSec: 30,
+    });
+    expect(store().jobs.a.bytesDone).toBe(60);
+    expect(store().speeds.a).toBe(30);
+
+    // An older answer from the core still says 20 bytes.
+    vi.mocked(listTransfers).mockResolvedValue(
+      list([job("a", { state: "running", bytesDone: 20 })]),
+    );
+    await store().resync();
+    expect(store().jobs.a.bytesDone).toBe(60);
+    expect(store().speeds.a).toBe(30);
+  });
+
+  it("throttles re-pulls after job changes", async () => {
+    vi.useFakeTimers();
+    vi.mocked(listTransfers).mockResolvedValue(list([job("a")]));
+    store().applyJob(job("a", { state: "running" }));
+    store().applyJob(job("a", { state: "running", bytesDone: 5 }));
+    store().scheduleResync();
+    expect(listTransfers).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(RESYNC_MS);
+    expect(listTransfers).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-pulls when progress names a job it does not know yet", async () => {
+    vi.useFakeTimers();
+    vi.mocked(listTransfers).mockResolvedValue(list([job("z")]));
+    store().applyProgress({
+      type: "transferProgress",
+      jobId: "z",
+      batchId: "b-1",
+      bytesDone: 1,
+      size: 100,
+      bytesPerSec: 1,
+    });
+    await vi.advanceTimersByTimeAsync(RESYNC_MS);
+    expect(store().jobs.z).toBeDefined();
+  });
+
+  it("refreshes the destination pane when a batch's last job finishes", () => {
+    useTransferStore.setState({
+      jobs: {
+        a: job("a", { state: "done" }),
+        b: job("b", { state: "running" }),
+      },
+      order: ["a", "b"],
+    });
+    store().applyJob(job("b", { state: "done" }));
+    expect(listDir).toHaveBeenCalledWith(
+      { kind: "remote", sessionId: "s-1" },
+      "/srv",
+    );
+    expect(listDir).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes the local pane after a download, not while one job is left", () => {
+    useTransferStore.setState({
+      jobs: {
+        a: job("a", { direction: "download", state: "running" }),
+        b: job("b", { direction: "download", state: "queued" }),
+      },
+      order: ["a", "b"],
+    });
+    store().applyJob(job("a", { direction: "download", state: "failed" }));
+    expect(listDir).not.toHaveBeenCalled();
+    store().applyJob(job("b", { direction: "download", state: "done" }));
+    expect(listDir).toHaveBeenCalledWith({ kind: "local" }, "/home");
+  });
+
+  it("drops a queued conflict once its job no longer waits", () => {
+    usePromptStore.getState().push({
+      kind: "transferConflict",
+      event: {
+        type: "transferConflict",
+        batchId: "b-1",
+        jobId: "a",
+        src: { path: "/home/alice/a", size: 10, mtime: null },
+        dst: { path: "/srv/a", size: 5, mtime: null },
+      },
+    });
+    store().applyJob(job("a", { state: "needsDecision" }));
+    expect(usePromptStore.getState().queue).toHaveLength(1);
+    store().applyJob(job("a", { state: "cancelled" }));
+    expect(usePromptStore.getState().queue).toHaveLength(0);
+  });
+
+  it("enqueues, opens the panel and reports a failure", async () => {
+    useLayoutStore.setState({ transfersCollapsed: true });
+    vi.mocked(enqueueTransfers).mockResolvedValue("b-9");
+    const request = {
+      sessionId: "s-1",
+      direction: "upload" as const,
+      items: [{ src: "/home/alice/a" }],
+      dstDir: "/srv",
+    };
+    await expect(store().enqueue(request)).resolves.toBe("b-9");
+    expect(enqueueTransfers).toHaveBeenCalledWith(request);
+    expect(useLayoutStore.getState().transfersCollapsed).toBe(false);
+
+    vi.mocked(enqueueTransfers).mockRejectedValue({
+      kind: "invalidInput",
+      message: "nothing to transfer",
+    });
+    await expect(store().enqueue(request)).resolves.toBeNull();
+    expect(toastError).toHaveBeenCalledWith(
+      "Could not start the upload",
+      "nothing to transfer",
+    );
+  });
+
+  it("cancels one job, every unfinished batch, and clears finished ones", async () => {
+    vi.mocked(listTransfers).mockResolvedValue(list([]));
+    useTransferStore.setState({
+      jobs: {
+        a: job("a", { state: "running" }),
+        b: job("b", { batchId: "b-2", state: "queued" }),
+        c: job("c", { batchId: "b-3", state: "done" }),
+      },
+      order: ["a", "b", "c"],
+    });
+    await store().cancel("a");
+    expect(cancelTransfer).toHaveBeenCalledWith("a");
+    await store().cancelAll();
+    expect(vi.mocked(cancelBatch).mock.calls.map(([b]) => b)).toEqual([
+      "b-1",
+      "b-2",
+    ]);
+    await store().clearFinished();
+    expect(clearFinished).toHaveBeenCalled();
+    expect(store().order).toEqual([]);
+  });
+});

@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ConnectionProfile, HostKeyPromptEvent } from "../ipc/types";
+import type {
+  ConnectionProfile,
+  HostKeyPromptEvent,
+  TransferConflictEvent,
+} from "../ipc/types";
 import { usePromptStore } from "./promptStore";
 
 const profile: ConnectionProfile = {
@@ -88,5 +92,32 @@ describe("promptStore", () => {
     const a = push(secret());
     resolve(9999);
     expect(head().id).toBe(a);
+  });
+
+  it("drops the conflicts of a batch and of a single job", () => {
+    const { push, dropTransferBatch, dropTransferJob } =
+      usePromptStore.getState();
+    const conflict = (batchId: string, jobId: string) =>
+      push({
+        kind: "transferConflict",
+        event: {
+          type: "transferConflict",
+          batchId,
+          jobId,
+          src: { path: `/src/${jobId}`, size: 10, mtime: null },
+          dst: { path: `/dst/${jobId}`, size: 5, mtime: null },
+        } satisfies TransferConflictEvent,
+      });
+    conflict("b-1", "j-1");
+    conflict("b-1", "j-2");
+    const other = conflict("b-2", "j-3");
+    const last = conflict("b-2", "j-4");
+    dropTransferBatch("b-1");
+    expect(usePromptStore.getState().queue.map((p) => p.id)).toEqual([
+      other,
+      last,
+    ]);
+    dropTransferJob("j-3");
+    expect(usePromptStore.getState().queue.map((p) => p.id)).toEqual([last]);
   });
 });

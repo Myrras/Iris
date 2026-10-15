@@ -1,6 +1,7 @@
 /**
- * Queue of blocking prompts raised by the connect flow: an unknown host key,
- * a password or key passphrase, and the changed-host-key warning. The head of
+ * Queue of blocking prompts: from the connect flow an unknown host key, a
+ * password or key passphrase and the changed-host-key warning; from the
+ * transfer engine a file that already exists at the destination. The head of
  * the queue is the one on screen (`PromptHost`); the rest wait their turn.
  *
  * SECURITY: a secret prompt never holds the typed value — the prompt
@@ -11,8 +12,11 @@ import { create } from "zustand";
 
 import type {
   ConnectionProfile,
+  BatchId,
   HostKeyPromptEvent,
   SessionId,
+  TransferConflictEvent,
+  TransferId,
 } from "../ipc/types";
 
 export type SecretKind = "password" | "passphrase";
@@ -49,6 +53,11 @@ export type PromptRequest =
       kind: "hostKeyChanged";
       profileName: string;
       message: string;
+    }
+  | {
+      /** A transfer's destination exists: the job waits for `resolveConflict`. */
+      kind: "transferConflict";
+      event: TransferConflictEvent;
     };
 
 export type Prompt = PromptRequest & { id: number };
@@ -61,6 +70,13 @@ interface PromptState {
   resolve: (id: number) => void;
   /** A session ended: its pending host key prompt is moot (backend timeout). */
   dropSession: (sessionId: SessionId) => void;
+  /**
+   * Drop the waiting conflicts of a batch: an apply-to-all answer decides
+   * them in the backend, without new events.
+   */
+  dropTransferBatch: (batchId: BatchId) => void;
+  /** A job no longer waits for an answer (cancelled, decided elsewhere). */
+  dropTransferJob: (jobId: TransferId) => void;
 }
 
 let seq = 0;
@@ -90,4 +106,22 @@ export const usePromptStore = create<PromptState>((set) => ({
         (p) => p.kind !== "hostKey" || p.event.sessionId !== sessionId,
       ),
     })),
+  dropTransferBatch: (batchId) =>
+    set((s) => ({
+      queue: s.queue.filter(
+        (p) => p.kind !== "transferConflict" || p.event.batchId !== batchId,
+      ),
+    })),
+  dropTransferJob: (jobId) =>
+    set((s) =>
+      s.queue.some(
+        (p) => p.kind === "transferConflict" && p.event.jobId === jobId,
+      )
+        ? {
+            queue: s.queue.filter(
+              (p) => p.kind !== "transferConflict" || p.event.jobId !== jobId,
+            ),
+          }
+        : s,
+    ),
 }));
