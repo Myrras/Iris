@@ -4,7 +4,8 @@
 //! [`testcontainers`] (sshd on 2222, mapped to a random host port) and drives
 //! the public [`Core`] API end to end: password, key and agent logins,
 //! `known_hosts` handling, a jump host (ProxyJump) on a shared Docker
-//! network, and the file operations and previews.
+//! network, the file operations and previews, and parallel transfers with
+//! resume.
 //!
 //! ## Why every test is `#[ignore]`-d
 //! `just test` must stay hermetic and fast, so these need Docker and run
@@ -28,8 +29,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use iris_core::{
-    AgentLocation, AuthMethod, ConnectionProfile, Core, CoreError, CoreEvent, FsTarget, JumpHost,
-    Preview, ProfileId, Secret, SessionId,
+    AgentLocation, AuthMethod, ConflictResolution, ConnectionProfile, Core, CoreError, CoreEvent,
+    FsTarget, JumpHost, Preview, ProfileId, Secret, SessionId, TransferDirection, TransferItem,
+    TransferList, TransferRequest, TransferState,
 };
 use russh::keys::{PrivateKey, PublicKey};
 use tempfile::TempDir;
@@ -110,8 +112,13 @@ impl Sshd {
             .exec(ExecCommand::new(["sh", "-c", script]))
             .await
             .expect("exec in the container");
-        let _ = result.stdout_to_vec().await;
-        assert_eq!(result.exit_code().await.unwrap(), Some(0), "{script}");
+        let out = result.stdout_to_vec().await.unwrap_or_default();
+        assert_eq!(
+            result.exit_code().await.unwrap(),
+            Some(0),
+            "{script}\n{}",
+            String::from_utf8_lossy(&out)
+        );
     }
 }
 
@@ -468,4 +475,261 @@ async fn file_operations_against_openssh() {
     ));
     assert!(f.core.stat(target, &at("keep/precious.txt")).await.is_ok());
     f.core.disconnect(session).await.unwrap();
+}
+
+// -- Transfers ----------------------------------------------------------------
+
+/// Deterministic, fictitious bytes.
+fn data(len: usize, seed: u64) -> Vec<u8> {
+    let mut x = seed;
+    (0..len)
+        .map(|_| {
+            x = x
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (x >> 33) as u8
+        })
+        .collect()
+}
+
+/// Poll the transfer list until `done` holds.
+async fn wait_transfers(
+    core: &Core,
+    what: &str,
+    done: impl Fn(&TransferList) -> bool,
+) -> TransferList {
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        let list = core.list_transfers();
+        if done(&list) {
+            return list;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}: {list:#?}"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+async fn transfer(
+    core: &Core,
+    session_id: SessionId,
+    direction: TransferDirection,
+    srcs: &[String],
+    dst_dir: &str,
+) -> TransferList {
+    core.enqueue_transfers(TransferRequest {
+        session_id,
+        direction,
+        items: srcs
+            .iter()
+            .map(|src| TransferItem { src: src.clone() })
+            .collect(),
+        dst_dir: dst_dir.into(),
+    })
+    .unwrap();
+    wait_transfers(core, "the transfers to settle", |_| {
+        !core.has_active_transfers()
+    })
+    .await
+}
+
+fn all_done(list: &TransferList) -> bool {
+    list.jobs.iter().all(|j| j.state == TransferState::Done)
+}
+
+#[tokio::test]
+#[ignore = "needs Docker; run with just test-integration"]
+async fn parallel_transfers_and_resume_against_openssh() {
+    let sshd = start_sshd(SshdOptions::default()).await;
+    let f = Fixture::new();
+    let _answers = auto_answer(&f.core, true);
+    f.core
+        .save_settings(iris_core::IrisSettings {
+            parallel_transfers: 3,
+            ..iris_core::IrisSettings::default()
+        })
+        .unwrap();
+    let id = f.save(HOST, sshd.port, AuthMethod::Password, None);
+    let session = f
+        .core
+        .connect(id, Some(Secret::new(PASSWORD)), None)
+        .await
+        .unwrap();
+    let home = f.core.home_dir(remote(session)).await.unwrap();
+    let at = |name: &str| format!("{}/{name}", home.trim_end_matches('/'));
+
+    // A local tree: six files over two folders, uploaded three at a time.
+    let local = f.dir.path().join("tree");
+    std::fs::create_dir_all(local.join("nested")).unwrap();
+    let files: Vec<(String, Vec<u8>)> = (0..6)
+        .map(|i| {
+            let name = if i % 2 == 0 {
+                format!("part-{i}.bin")
+            } else {
+                format!("nested/part-{i}.bin")
+            };
+            (name, data(1_500_000 + i * 100_000, i as u64 + 1))
+        })
+        .collect();
+    for (name, content) in &files {
+        std::fs::write(local.join(name), content).unwrap();
+    }
+    let list = transfer(
+        &f.core,
+        session,
+        TransferDirection::Upload,
+        &[local.to_string_lossy().into_owned()],
+        &home,
+    )
+    .await;
+    assert!(all_done(&list), "{list:#?}");
+    assert_eq!(list.jobs.len(), 6);
+
+    // Download it back somewhere else: byte-identical.
+    let back = f.dir.path().join("back");
+    std::fs::create_dir(&back).unwrap();
+    let list = transfer(
+        &f.core,
+        session,
+        TransferDirection::Download,
+        &[at("tree")],
+        &back.to_string_lossy(),
+    )
+    .await;
+    assert!(all_done(&list), "{list:#?}");
+    for (name, content) in &files {
+        assert_eq!(
+            &std::fs::read(back.join("tree").join(name)).unwrap(),
+            content,
+            "{name}"
+        );
+    }
+
+    // Resume an upload onto a partial remote copy (cut short in the
+    // container), through the conflict answer.
+    let big = data(8 * 1024 * 1024, 42);
+    let big_local = f.dir.path().join("big.bin");
+    std::fs::write(&big_local, &big).unwrap();
+    let list = transfer(
+        &f.core,
+        session,
+        TransferDirection::Upload,
+        &[big_local.to_string_lossy().into_owned()],
+        &home,
+    )
+    .await;
+    assert!(all_done(&list));
+    sshd.sh("truncate -s 3000000 /config/big.bin").await;
+    f.core
+        .enqueue_transfers(TransferRequest {
+            session_id: session,
+            direction: TransferDirection::Upload,
+            items: vec![TransferItem {
+                src: big_local.to_string_lossy().into_owned(),
+            }],
+            dst_dir: home.clone(),
+        })
+        .unwrap();
+    let list = wait_transfers(&f.core, "the conflict", |l| {
+        l.jobs
+            .iter()
+            .any(|j| j.state == TransferState::NeedsDecision)
+    })
+    .await;
+    let job = list
+        .jobs
+        .iter()
+        .find(|j| j.state == TransferState::NeedsDecision)
+        .unwrap();
+    f.core
+        .resolve_conflict(job.id, ConflictResolution::Resume, false)
+        .unwrap();
+    let list = wait_transfers(&f.core, "the resume", |_| !f.core.has_active_transfers()).await;
+    assert!(all_done(&list), "{list:#?}");
+
+    // Download a large file while the connection is cut midway: the job
+    // pauses and resumes over a fresh session. A second, uninterrupted
+    // download is the reference it must match byte for byte. (Random
+    // content, generated in the container, so compression cannot make it
+    // finish before the cut.)
+    sshd.sh(
+        "head -c 268435456 /dev/urandom > /config/huge.bin && chown 1000:1000 /config/huge.bin",
+    )
+    .await;
+    let cut = f.dir.path().join("cut");
+    let clean = f.dir.path().join("clean");
+    std::fs::create_dir(&cut).unwrap();
+    std::fs::create_dir(&clean).unwrap();
+    f.core.clear_finished_transfers();
+    f.core
+        .enqueue_transfers(TransferRequest {
+            session_id: session,
+            direction: TransferDirection::Download,
+            items: vec![TransferItem {
+                src: at("huge.bin"),
+            }],
+            dst_dir: cut.to_string_lossy().into_owned(),
+        })
+        .unwrap();
+    let list = wait_transfers(&f.core, "progress", |l| {
+        l.jobs.first().is_some_and(|j| j.bytes_done > 0)
+    })
+    .await;
+    let job_id = list.jobs[0].id;
+    // Kill the process that holds the user's connection (each SFTP channel
+    // is an `internal-sftp` child of it). `[@]` keeps the pattern from
+    // matching this very command line.
+    sshd.sh("pkill -f 'demo[@]notty'").await;
+    let paused = wait_transfers(&f.core, "the job to pause", |l| {
+        l.jobs[0].state != TransferState::Running
+    })
+    .await
+    .jobs[0]
+        .clone();
+    assert_eq!(paused.state, TransferState::Paused, "{paused:?}");
+    assert!(paused.bytes_done < paused.size, "{paused:?}");
+    let session2 = f
+        .core
+        .connect(id, Some(Secret::new(PASSWORD)), None)
+        .await
+        .unwrap();
+    assert_eq!(f.core.resume_paused_on(session, session2), 1);
+    wait_transfers(&f.core, "the resumed download", |l| {
+        l.jobs
+            .iter()
+            .any(|j| j.id == job_id && j.state == TransferState::Done)
+    })
+    .await;
+
+    let list = transfer(
+        &f.core,
+        session2,
+        TransferDirection::Download,
+        &[at("huge.bin")],
+        &clean.to_string_lossy(),
+    )
+    .await;
+    assert!(all_done(&list), "{list:#?}");
+    assert_same_file(&cut.join("huge.bin"), &clean.join("huge.bin"));
+}
+
+/// Compare two files chunk by chunk (they are too big to diff in memory).
+fn assert_same_file(a: &std::path::Path, b: &std::path::Path) {
+    use std::io::Read;
+    let (mut fa, mut fb) = (
+        std::fs::File::open(a).unwrap(),
+        std::fs::File::open(b).unwrap(),
+    );
+    assert_eq!(fa.metadata().unwrap().len(), fb.metadata().unwrap().len());
+    let (mut ba, mut bb) = (vec![0u8; 1 << 20], vec![0u8; 1 << 20]);
+    loop {
+        let n = fa.read(&mut ba).unwrap();
+        if n == 0 {
+            break;
+        }
+        fb.read_exact(&mut bb[..n]).unwrap();
+        assert!(ba[..n] == bb[..n], "the files differ");
+    }
 }
