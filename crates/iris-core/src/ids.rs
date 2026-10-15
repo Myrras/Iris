@@ -3,14 +3,8 @@
 //! A `uuid_newtype!` macro keeps ids distinct at the type level (you cannot pass
 //! one kind of id where another is expected) while serializing transparently
 //! as a plain UUID string across the IPC boundary.
-//!
-//! Phase 0 has no domain entities yet; the first ids (saved connections)
-//! arrive in Phase 1 and are declared here with the macro.
 
-// Unused until Phase 1 declares the first id; the tests below exercise it.
-// Paths inside are fully qualified so the module needs no imports of its own
-// while no id exists yet.
-#[allow(unused_macros)]
+// Paths inside are fully qualified so the macro works in any module.
 macro_rules! uuid_newtype {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
@@ -55,6 +49,22 @@ macro_rules! uuid_newtype {
         }
     };
 }
+
+uuid_newtype!(
+    /// A saved connection profile (`connection::ConnectionProfile`).
+    ProfileId
+);
+
+uuid_newtype!(
+    /// A live SSH/SFTP session owned by the session manager.
+    SessionId
+);
+
+uuid_newtype!(
+    /// One pending "trust this host key?" prompt, answered through
+    /// `Core::answer_host_key`.
+    HostKeyRequestId
+);
 
 #[cfg(test)]
 mod tests {

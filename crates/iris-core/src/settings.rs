@@ -17,6 +17,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, CoreResult};
+use crate::persist::write_json_atomic;
 
 const LOCK_POISONED: &str = "settings store lock poisoned";
 
@@ -124,7 +125,7 @@ impl IrisSettingsStore {
         let settings = settings.normalized()?;
         let mut inner = self.inner.lock().expect(LOCK_POISONED);
         if let Some(path) = &inner.path {
-            write_atomic(path, &settings)?;
+            write_json_atomic(path, &settings, "settings")?;
         }
         inner.settings = settings.clone();
         Ok(settings)
@@ -151,20 +152,6 @@ fn load(path: &Path) -> IrisSettings {
             tracing::warn!("settings file is corrupt, using defaults: {e}");
             IrisSettings::default()
         })
-}
-
-/// Atomically persist the settings: write a temp file, then rename it over the
-/// old one so a crash mid-write can never leave a torn file.
-fn write_atomic(path: &Path, settings: &IrisSettings) -> CoreResult<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let json = serde_json::to_string_pretty(settings)
-        .map_err(|e| CoreError::Config(format!("failed to encode settings: {e}")))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
 }
 
 #[cfg(test)]
