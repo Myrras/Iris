@@ -3,8 +3,8 @@
 //! Each test starts `lscr.io/linuxserver/openssh-server` containers through
 //! [`testcontainers`] (sshd on 2222, mapped to a random host port) and drives
 //! the public [`Core`] API end to end: password, key and agent logins,
-//! `known_hosts` handling, and a jump host (ProxyJump) on a shared Docker
-//! network.
+//! `known_hosts` handling, a jump host (ProxyJump) on a shared Docker
+//! network, and the file operations and previews.
 //!
 //! ## Why every test is `#[ignore]`-d
 //! `just test` must stay hermetic and fast, so these need Docker and run
@@ -29,11 +29,11 @@ use std::time::Duration;
 
 use iris_core::{
     AgentLocation, AuthMethod, ConnectionProfile, Core, CoreError, CoreEvent, FsTarget, JumpHost,
-    ProfileId, Secret, SessionId,
+    Preview, ProfileId, Secret, SessionId,
 };
 use russh::keys::{PrivateKey, PublicKey};
 use tempfile::TempDir;
-use testcontainers::core::{IntoContainerPort, WaitFor};
+use testcontainers::core::{ExecCommand, IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::CopyTargetOptions;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
@@ -57,7 +57,7 @@ grep -q '^AllowTcpForwarding yes$' /config/sshd/sshd_config\n";
 
 /// One running sshd container; dropping it removes the container.
 struct Sshd {
-    _container: ContainerAsync<GenericImage>,
+    container: ContainerAsync<GenericImage>,
     /// The host port mapped to 2222.
     port: u16,
 }
@@ -99,9 +99,19 @@ async fn start_sshd(options: SshdOptions<'_>) -> Sshd {
         .get_host_port_ipv4(SSHD_PORT.tcp())
         .await
         .expect("map port 2222");
-    Sshd {
-        _container: container,
-        port,
+    Sshd { container, port }
+}
+
+impl Sshd {
+    /// Run a shell script in the container (as root) and wait for it.
+    async fn sh(&self, script: &str) {
+        let mut result = self
+            .container
+            .exec(ExecCommand::new(["sh", "-c", script]))
+            .await
+            .expect("exec in the container");
+        let _ = result.stdout_to_vec().await;
+        assert_eq!(result.exit_code().await.unwrap(), Some(0), "{script}");
     }
 }
 
@@ -371,4 +381,91 @@ async fn proxy_jump_reaches_a_target_on_the_jump_network() {
         .await
         .unwrap_err();
     assert_eq!(err.kind(), "jumpHost", "{err:?}");
+}
+
+#[tokio::test]
+#[ignore = "needs Docker; run with just test-integration"]
+async fn file_operations_against_openssh() {
+    let sshd = start_sshd(SshdOptions::default()).await;
+    // A tree in the login folder (owned by the user) with a link that points
+    // outside it, and a text file to preview. All content is fictitious.
+    sshd.sh("cd /config && mkdir -p keep tree/a/b \
+         && echo fictional > keep/precious.txt \
+         && echo deep > tree/a/b/deep.txt \
+         && ln -s ../keep tree/to-keep \
+         && printf 'line one\\nline two\\n' > notes.txt \
+         && chown -R 1000:1000 keep tree notes.txt")
+        .await;
+    let f = Fixture::new();
+    let _answers = auto_answer(&f.core, true);
+    let id = f.save(HOST, sshd.port, AuthMethod::Password, None);
+    let session = f
+        .core
+        .connect(id, Some(Secret::new(PASSWORD)), None)
+        .await
+        .unwrap();
+    let target = remote(session);
+    let home = f.core.home_dir(target).await.unwrap();
+    let at = |name: &str| format!("{}/{name}", home.trim_end_matches('/'));
+
+    // mkdir, and an existing name is `alreadyExists` (OpenSSH itself only
+    // says "failure").
+    f.core.mkdir(target, &at("untitled folder")).await.unwrap();
+    assert!(matches!(
+        f.core.mkdir(target, &at("untitled folder")).await,
+        Err(CoreError::AlreadyExists(_))
+    ));
+
+    // rename, never onto an existing entry.
+    f.core
+        .rename(target, &at("untitled folder"), &at("Reports"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.core.rename(target, &at("Reports"), &at("keep")).await,
+        Err(CoreError::AlreadyExists(_))
+    ));
+
+    // chmod, recursive.
+    let report = f
+        .core
+        .chmod(target, &[at("tree")], 0o750, true)
+        .await
+        .unwrap();
+    assert!(report.failed.is_empty(), "{report:?}");
+    let deep = f.core.stat(target, &at("tree/a/b/deep.txt")).await.unwrap();
+    assert_eq!(deep.mode.unwrap() & 0o7777, 0o750);
+    let precious = f.core.stat(target, &at("keep/precious.txt")).await.unwrap();
+    assert_ne!(precious.mode.unwrap() & 0o7777, 0o750, "link not followed");
+
+    // preview, whole and truncated.
+    assert_eq!(
+        f.core
+            .preview(target, &at("notes.txt"), 1024)
+            .await
+            .unwrap(),
+        Preview::Text {
+            text: "line one\nline two\n".into(),
+            truncated: false,
+            total_size: 18,
+        }
+    );
+    assert!(matches!(
+        f.core.preview(target, &at("notes.txt"), 4).await.unwrap(),
+        Preview::Text { text, truncated: true, .. } if text == "line"
+    ));
+
+    // Recursive delete removes the link, not what it points at.
+    let report = f
+        .core
+        .delete(target, &[at("tree"), at("Reports")])
+        .await
+        .unwrap();
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert!(matches!(
+        f.core.stat(target, &at("tree")).await,
+        Err(CoreError::NotFound(_))
+    ));
+    assert!(f.core.stat(target, &at("keep/precious.txt")).await.is_ok());
+    f.core.disconnect(session).await.unwrap();
 }
