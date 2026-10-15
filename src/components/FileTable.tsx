@@ -219,6 +219,10 @@ interface FileTableProps {
   label: string;
   /** Shown instead of rows when `entries` is empty. */
   emptyText: string;
+  /** Primary-button press on a row without modifiers (a drag may follow). */
+  onRowDragStart?: (entry: Entry, e: React.MouseEvent) => void;
+  /** The folder row a drag would drop into, by path (highlighted). */
+  dropDir?: string | null;
 }
 
 export function FileTable({
@@ -238,6 +242,8 @@ export function FileTable({
   onRenameCancel,
   label,
   emptyText,
+  onRowDragStart,
+  dropDir = null,
 }: FileTableProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -379,6 +385,7 @@ export function FileTable({
           const row = rows[vr.index];
           const entry = row.original;
           const selected = selection.has(entry.path);
+          const dir = isDirLike(entry);
           return (
             <div
               key={row.id}
@@ -389,6 +396,11 @@ export function FileTable({
               data-selected={selected ? "true" : undefined}
               data-cursor={entry.path === cursor ? "true" : undefined}
               data-hidden={entry.hidden ? "true" : undefined}
+              // Folder rows are drop targets for transfers (`dragStore`).
+              data-drop-dir={dir ? entry.path : undefined}
+              data-drop-target={
+                dir && entry.path === dropDir ? "true" : undefined
+              }
               style={{
                 transform: `translateY(${HEADER_HEIGHT + vr.start}px)`,
                 height: vr.size,
@@ -396,6 +408,14 @@ export function FileTable({
               onMouseDown={(e) => {
                 // Keep Shift-click from selecting text across rows.
                 if (e.shiftKey) e.preventDefault();
+                else if (
+                  e.button === 0 &&
+                  !e.metaKey &&
+                  !e.ctrlKey &&
+                  editing !== entry.path
+                ) {
+                  onRowDragStart?.(entry, e);
+                }
               }}
               onClick={(e) =>
                 onRowClick(entry, {

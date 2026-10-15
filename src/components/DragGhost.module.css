@@ -1,0 +1,35 @@
+.ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  pointer-events: none;
+  /* Position is a per-frame inline transform: no transition on it. */
+  animation: ghostIn var(--dur-2) var(--ease-out);
+}
+
+.ghost[data-armed="true"] {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.icon {
+  color: var(--accent);
+}
+
+@keyframes ghostIn {
+  from {
+    opacity: 0;
+  }
+}

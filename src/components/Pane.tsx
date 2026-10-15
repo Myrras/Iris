@@ -8,7 +8,14 @@
  * Shortcuts (Finder's on macOS, with Ctrl for Cmd elsewhere): Cmd+Shift+N new
  * folder; F2, or Enter on macOS, rename; Delete / Cmd+Backspace delete (always
  * confirmed); Cmd+I Get Info; Space preview; Cmd+Down / Cmd+O open; Cmd+Up
- * enclosing folder.
+ * enclosing folder. Transfers: Cmd+Shift+U uploads the Local selection,
+ * Cmd+Shift+D downloads the Remote selection, and F5 (Total Commander's
+ * "copy to the other pane") does either, into the other pane's folder.
+ *
+ * Rows dragged onto the other pane (or a folder row in it) transfer too
+ * (`lib/paneDrag`); the pane under the drag, and the folder row, light up.
+ * Files dragged in from Finder / Explorer (`lib/useNativeDrop`) show a drop
+ * overlay on the Remote pane.
  *
  * The remote pane without a session shows the welcome screen; a session that
  * dropped shows why, with Reconnect.
@@ -25,10 +32,13 @@ import {
 import type { Entry } from "../ipc/types";
 import { connectProfile } from "../lib/connect";
 import { isDirLike, visibleEntries } from "../lib/entries";
-import { parentPath } from "../lib/path";
+import { startPaneDrag } from "../lib/paneDrag";
+import { baseName, parentPath } from "../lib/path";
 import { isMac } from "../lib/platform";
 import { clickSelection, moveCursor } from "../lib/selection";
+import { otherPane, startTransfer } from "../lib/transfer";
 import { useConnectionFormStore } from "../state/connectionFormStore";
+import { useDragStore } from "../state/dragStore";
 import { useLayoutStore } from "../state/layoutStore";
 import { actionTargets, usePaneStore, type PaneId } from "../state/paneStore";
 import { useProfilesStore } from "../state/profilesStore";
@@ -43,6 +53,7 @@ import { WelcomeScreen } from "./WelcomeScreen";
 import {
   BackIcon,
   DisconnectIcon,
+  DownloadIcon,
   FilterIcon,
   HideHiddenIcon,
   NewFolderIcon,
@@ -50,6 +61,7 @@ import {
   PreviewIcon,
   RefreshIcon,
   ShowHiddenIcon,
+  UploadIcon,
 } from "./icons";
 import styles from "./Pane.module.css";
 
@@ -122,10 +134,20 @@ export function Pane({
 
   const setActive = () => usePaneStore.getState().setActive(id);
 
+  // A drag (from the other pane, or from the OS) would drop here.
+  const dropHere = useDragStore((s) => s.over?.pane === id);
+  const nativeOver = useDragStore((s) =>
+    s.nativeDrag && s.over?.pane === id ? s.over : null,
+  );
+  const path = usePaneStore((s) => s.panes[id].path);
+  const connected = !!target && session?.state !== "disconnected";
+
   return (
     <section
       className={styles.pane}
       aria-label={`${title} files`}
+      data-drop-pane={id}
+      data-drop-target={dropHere ? "true" : undefined}
       onMouseDownCapture={setActive}
       onFocusCapture={setActive}
     >
@@ -135,6 +157,16 @@ export function Pane({
         {profile && <span className={styles.subtitle}>{profile.name}</span>}
       </header>
       <div className={styles.body}>{body}</div>
+      {nativeOver && (
+        <div className={styles.dropOverlay} role="status">
+          <UploadIcon size={24} />
+          <span>
+            {connected && path
+              ? `Drop to upload to ${baseName(nativeOver.dir ?? path)}`
+              : "Connect to a server to upload"}
+          </span>
+        </div>
+      )}
     </section>
   );
 }
@@ -147,6 +179,24 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   const previewOpen = useLayoutStore((s) => s.previewOpen);
   const store = usePaneStore.getState;
   const remote = pane.target?.kind === "remote";
+
+  // Copying to the other pane needs a live session and both folders.
+  const otherPath = usePaneStore((s) => s.panes[otherPane(id)].path);
+  const remoteTarget = usePaneStore((s) => s.panes.remote.target);
+  const remoteState = useSessionStore((s) =>
+    remoteTarget?.kind === "remote"
+      ? s.sessions[remoteTarget.sessionId]?.state
+      : undefined,
+  );
+  const canCopy =
+    remoteTarget?.kind === "remote" &&
+    remoteState !== "disconnected" &&
+    pane.path !== null &&
+    otherPath !== null;
+  const hasTargets = pane.selection.length > 0 || pane.cursor !== null;
+  const dropDir = useDragStore((s) =>
+    s.over?.pane === id ? s.over.dir : null,
+  );
 
   const [menu, setMenu] = useState<{
     x: number;
@@ -237,6 +287,24 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     const [entry] = targets();
     if (entry) onOpen(entry);
   };
+  const copyToOther = () => {
+    const list = targets();
+    if (canCopy && list.length > 0) {
+      void startTransfer(
+        id,
+        list.map((e) => e.path),
+      );
+    }
+  };
+  const copyVerb = id === "local" ? "Upload" : "Download";
+  const copyKey = id === "local" ? "u" : "d";
+  const copyShortcut = isMac
+    ? `⇧⌘${copyKey.toUpperCase()}`
+    : `Ctrl+Shift+${copyKey.toUpperCase()}`;
+  const onRowDragStart = (entry: Entry, e: React.MouseEvent) => {
+    if (!canCopy) return;
+    startPaneDrag(id, entry, e.clientX, e.clientY);
+  };
 
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.defaultPrevented || isEditable(e.target)) return;
@@ -255,6 +323,8 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     else if (e.key === " " && !mod) togglePreview();
     else if (mod && (e.key === "ArrowDown" || key === "o")) openCursor();
     else if (mod && e.key === "ArrowUp") void store().up(id);
+    else if ((mod && e.shiftKey && key === copyKey) || e.key === "F5")
+      copyToOther();
     else handled = false;
     if (handled) e.preventDefault();
   }
@@ -295,6 +365,11 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         label: "Preview",
         disabled: !single,
         onSelect: () => useLayoutStore.getState().setPreviewOpen(true),
+      },
+      {
+        label: id === "local" ? "Upload to Remote" : "Download to Local",
+        disabled: !canCopy,
+        onSelect: copyToOther,
       },
       create,
       { label: "Rename", disabled: !single, onSelect: () => rename(entry) },
@@ -386,6 +461,16 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         <button
           type="button"
           className={styles.tool}
+          aria-label={copyVerb}
+          title={`${copyVerb} to ${id === "local" ? "Remote" : "Local"} (${copyShortcut} or F5)`}
+          disabled={!canCopy || !hasTargets}
+          onClick={copyToOther}
+        >
+          {id === "local" ? <UploadIcon /> : <DownloadIcon />}
+        </button>
+        <button
+          type="button"
+          className={styles.tool}
           aria-label="New folder"
           title={`New folder (${isMac ? "⇧⌘N" : "Ctrl+Shift+N"})`}
           disabled={!hasFolder}
@@ -434,6 +519,8 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         onRenameCancel={() => store().cancelRename(id)}
         label={`${label} files list`}
         emptyText={emptyText}
+        onRowDragStart={onRowDragStart}
+        dropDir={dropDir}
       />
       <ContextMenu
         open={menu !== null}

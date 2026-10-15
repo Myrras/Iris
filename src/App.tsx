@@ -5,8 +5,9 @@
  * left and the work column on the right — the Local and Remote pane islands
  * side by side with the collapsible preview island at their right, and the
  * collapsible transfer island underneath. This
- * component also owns the app-level wiring: the backend connection events
- * (`useCoreEvents`), opening the local pane, settings access (native menu on
+ * component also owns the app-level wiring: the backend events
+ * (`useCoreEvents`), files dragged in from the OS (`useNativeDrop`), the
+ * pane-drag chip (`DragGhost`), opening the local pane, settings access (native menu on
  * macOS, title-bar gear elsewhere), the close-warning event, and suppressing
  * webview-only behaviour (reload shortcuts, the browser context menu).
  */
@@ -16,11 +17,13 @@ import { useCallback, useEffect, useState } from "react";
 import { onMenuOpenSettings, onWindowCloseRequested } from "./ipc/events";
 import { isMac, isWindows } from "./lib/platform";
 import { useCoreEvents } from "./lib/useCoreEvents";
+import { useNativeDrop } from "./lib/useNativeDrop";
 import { useLayoutStore } from "./state/layoutStore";
 import { usePaneStore } from "./state/paneStore";
 import { useSettingsRequestStore } from "./state/settingsRequestStore";
 import { CloseWarningModal } from "./components/CloseWarningModal";
 import { ConnectionForm } from "./components/ConnectionForm";
+import { DragGhost } from "./components/DragGhost";
 import { LogoMark } from "./components/LogoMark";
 import { Pane } from "./components/Pane";
 import { PreviewPanel } from "./components/PreviewPanel";
@@ -35,6 +38,7 @@ import styles from "./App.module.css";
 
 export default function App() {
   useCoreEvents();
+  useNativeDrop();
 
   // The local pane always shows this machine, starting in the home folder.
   useEffect(() => {
@@ -184,6 +188,7 @@ export default function App() {
       </div>
 
       <Toasts />
+      <DragGhost />
       <ConnectionForm />
       <PromptHost />
       <SettingsModal

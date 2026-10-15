@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -15,13 +16,23 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   rename: vi.fn(() => Promise.resolve()),
   deletePaths: vi.fn(() => Promise.resolve({ succeeded: [], failed: [] })),
   chmod: vi.fn(() => Promise.resolve({ succeeded: [], failed: [] })),
+  enqueueTransfers: vi.fn(() => Promise.resolve("b-1")),
+  listTransfers: vi.fn(() => new Promise(() => undefined)),
 }));
 vi.mock("../lib/connect", () => ({ connectProfile: vi.fn() }));
 
-import { chmod, deletePaths, listDir, mkdir, rename } from "../ipc/commands";
+import {
+  chmod,
+  deletePaths,
+  enqueueTransfers,
+  listDir,
+  mkdir,
+  rename,
+} from "../ipc/commands";
 import type { ConnectionProfile, Entry } from "../ipc/types";
 import { connectProfile } from "../lib/connect";
 import { useConnectionFormStore } from "../state/connectionFormStore";
+import { useDragStore } from "../state/dragStore";
 import { useLayoutStore } from "../state/layoutStore";
 import { initialPane, usePaneStore } from "../state/paneStore";
 import { useProfilesStore } from "../state/profilesStore";
@@ -350,6 +361,7 @@ describe("Pane", () => {
       expect(labels).toEqual([
         "Open",
         "Preview",
+        "Upload to Remote",
         "New Folder",
         "Rename",
         "Get Info…",
@@ -389,6 +401,159 @@ describe("Pane", () => {
       expect(
         within(dialog).getByRole("button", { name: "Delete permanently" }),
       ).toHaveClass("danger");
+    });
+  });
+
+  describe("transfers", () => {
+    const SRV = [
+      entry("/srv/www", { kind: { type: "dir" } }),
+      entry("/srv/readme.md"),
+    ];
+
+    async function openBoth() {
+      useSessionStore.getState().apply({
+        type: "sessionStateChanged",
+        sessionId: "s-1",
+        profileId: "p-1",
+        state: "connected",
+        reason: null,
+      });
+      vi.mocked(listDir).mockImplementation(async (_t, path) =>
+        path === "/home/alice" ? HOME : path === "/srv" ? SRV : [],
+      );
+      render(
+        <>
+          <Pane id="local" title="Local" Icon={LocalIcon} />
+          <Pane id="remote" title="Remote" Icon={ServerIcon} />
+        </>,
+      );
+      await usePaneStore.getState().open("local", { kind: "local" }, null);
+      await usePaneStore
+        .getState()
+        .open("remote", { kind: "remote", sessionId: "s-1" }, "/srv");
+      await screen.findByText("readme.md");
+    }
+
+    const localPane = () => screen.getByRole("region", { name: "Local files" });
+    const remotePane = () =>
+      screen.getByRole("region", { name: "Remote files" });
+
+    it("uploads the selection from the toolbar into the remote folder", async () => {
+      await openBoth();
+      const upload = within(localPane()).getByRole("button", {
+        name: "Upload",
+      });
+      expect(upload).toBeDisabled();
+      fireEvent.click(within(localPane()).getByText("notes.txt"));
+      fireEvent.click(upload);
+      await waitFor(() =>
+        expect(enqueueTransfers).toHaveBeenCalledWith({
+          sessionId: "s-1",
+          direction: "upload",
+          items: [{ src: "/home/alice/notes.txt" }],
+          dstDir: "/srv",
+        }),
+      );
+    });
+
+    it("downloads with Ctrl+Shift+D and F5", async () => {
+      await openBoth();
+      fireEvent.click(within(remotePane()).getByText("readme.md"));
+      const grid = within(remotePane()).getByRole("grid");
+      fireEvent.keyDown(grid, { key: "D", ctrlKey: true, shiftKey: true });
+      await waitFor(() =>
+        expect(enqueueTransfers).toHaveBeenCalledWith({
+          sessionId: "s-1",
+          direction: "download",
+          items: [{ src: "/srv/readme.md" }],
+          dstDir: "/home/alice",
+        }),
+      );
+      fireEvent.keyDown(grid, { key: "F5" });
+      await waitFor(() => expect(enqueueTransfers).toHaveBeenCalledTimes(2));
+      // Upload's shortcut does nothing in the remote pane.
+      fireEvent.keyDown(grid, { key: "U", ctrlKey: true, shiftKey: true });
+      expect(enqueueTransfers).toHaveBeenCalledTimes(2);
+    });
+
+    it("disables the transfer actions without a session", async () => {
+      await openLocal();
+      fireEvent.click(screen.getByText("notes.txt"));
+      expect(screen.getByRole("button", { name: "Upload" })).toBeDisabled();
+      fireEvent.contextMenu(screen.getByText("notes.txt"));
+      expect(
+        screen.getByRole("menuitem", { name: "Upload to Remote" }),
+      ).toBeDisabled();
+    });
+
+    it("drags rows onto a folder in the other pane", async () => {
+      await openBoth();
+      const notes = within(localPane()).getByText("notes.txt");
+      const www = within(remotePane()).getByText("www");
+
+      fireEvent.mouseDown(notes, { button: 0, clientX: 10, clientY: 10 });
+      // Below the threshold: still a click, no drag.
+      fireEvent.mouseMove(notes, { clientX: 11, clientY: 11 });
+      expect(useDragStore.getState().paneDrag).toBeNull();
+
+      fireEvent.mouseMove(www, { clientX: 400, clientY: 40 });
+      expect(useDragStore.getState().paneDrag).toMatchObject({
+        from: "local",
+        count: 1,
+      });
+      expect(remotePane()).toHaveAttribute("data-drop-target", "true");
+      expect(www.closest('[role="row"]')).toHaveAttribute(
+        "data-drop-target",
+        "true",
+      );
+      // The pressed row became the selection.
+      expect(usePaneStore.getState().panes.local.selection).toEqual([
+        "/home/alice/notes.txt",
+      ]);
+
+      fireEvent.mouseUp(www, { clientX: 400, clientY: 40 });
+      expect(useDragStore.getState().paneDrag).toBeNull();
+      await waitFor(() =>
+        expect(enqueueTransfers).toHaveBeenCalledWith({
+          sessionId: "s-1",
+          direction: "upload",
+          items: [{ src: "/home/alice/notes.txt" }],
+          dstDir: "/srv/www",
+        }),
+      );
+    });
+
+    it("ignores a drop on its own pane and cancels with Escape", async () => {
+      await openBoth();
+      const notes = within(localPane()).getByText("notes.txt");
+      const docs = within(localPane()).getByText("docs");
+
+      fireEvent.mouseDown(notes, { button: 0, clientX: 10, clientY: 10 });
+      fireEvent.mouseMove(docs, { clientX: 10, clientY: 80 });
+      expect(localPane()).not.toHaveAttribute("data-drop-target");
+      fireEvent.mouseUp(docs);
+      expect(enqueueTransfers).not.toHaveBeenCalled();
+
+      fireEvent.mouseDown(notes, { button: 0, clientX: 10, clientY: 10 });
+      fireEvent.mouseMove(remotePane(), { clientX: 400, clientY: 80 });
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(useDragStore.getState().paneDrag).toBeNull();
+      fireEvent.mouseUp(remotePane());
+      expect(enqueueTransfers).not.toHaveBeenCalled();
+    });
+
+    it("shows the drop overlay while OS files hover the remote pane", async () => {
+      await openBoth();
+      act(() =>
+        useDragStore
+          .getState()
+          .setNative(true, { pane: "remote", dir: "/srv/www" }),
+      );
+      expect(within(remotePane()).getByRole("status")).toHaveTextContent(
+        "Drop to upload to www",
+      );
+      act(() => useDragStore.getState().end());
+      expect(within(remotePane()).queryByRole("status")).toBeNull();
     });
   });
 });
