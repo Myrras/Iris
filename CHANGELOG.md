@@ -79,15 +79,26 @@ when it merges.
   time and permissions, and several files copy at once (as many as the
   "parallel transfers" setting allows; a change applies to the next file
   that starts).
-- Live progress and speed per transfer and for all of them together;
-  transfers can be cancelled one by one or per batch.
+- Upload and Download buttons in the pane toolbars and the right-click
+  menu, ⇧⌘U / ⇧⌘D (Ctrl+Shift+U / Ctrl+Shift+D elsewhere) or F5: copies the
+  selection into the folder the other pane shows.
+- Drag files and folders from one pane to the other, or onto a folder in
+  it; drag them in from Finder or Explorer onto the Remote pane to upload.
+  The pane and folder that would receive them light up.
+- Transfers panel: every file with its progress, size, speed and state (a
+  failure's reason on hover) and a cancel button; the header shows how many
+  are active and queued, the total speed and time left, with Cancel all and
+  Clear finished. It opens when a transfer starts, and the destination pane
+  refreshes when a transfer finishes.
 - When a file already exists at the destination you choose Replace, Skip,
-  Keep Both (saved as "name (2).ext") or Resume (continue a partial copy),
-  optionally for the rest of that transfer.
+  Keep Both (saved as "name (2).ext") or Resume (continue a partial copy;
+  only offered when the existing file is smaller), optionally for the rest
+  of that transfer. The dialog compares both files' size and date.
 - A transfer cut off by a dropped connection pauses instead of failing and
   can continue where it stopped; a cancelled one leaves its partial file,
   which a later transfer can resume.
 - Links to files are copied as the file; links to folders inside a folder
   are skipped (they could loop) and listed as skipped.
 - The quit warning now appears while transfers are still queued, running,
-  waiting for your answer or paused.
+  waiting for your answer or paused, and says how many of each.
+- Settings → Transfers: how many files transfer at once (1–16).

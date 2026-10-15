@@ -202,7 +202,7 @@ standalone template:
     Tests: `tests/remote.rs` covers mkdir/rename/delete/chmod/preview over
     SFTP (the `support/` server now serves open/read/mkdir/rmdir/remove/
     rename/setstat); `tests/core.rs` the local batch ops with a fake trash.
-- 🚧 **Phase 4 — Transfer engine.** Backend done; UI pending.
+- ✅ **Phase 4 — Transfer engine.** Backend and UI done.
   - `transfer/` (`TransferManager`, owned by `Core`): one registry behind a
     mutex holds every `TransferJob {id, batchId, sessionId, direction:
     upload|download, src, dst, size, bytesDone, state, error}`; all state
@@ -258,6 +258,39 @@ standalone template:
     partial → resume, connection drop → paused → resume over a new
     session, every conflict answer, apply-to-all and progress coalescing;
     the Docker test adds parallel tree transfers and a killed connection.
+  - Frontend: `transferStore` holds jobs by id + discovery order, the
+    core's summary and per-job speeds. `useCoreEvents` feeds it:
+    `transfer:job-changed` → `applyJob`, `transfer:progress` →
+    `applyProgress`, and both `transfers:updated` and job changes schedule
+    a `listTransfers` re-pull throttled to 250 ms (`RESYNC_MS`; the summary
+    has no event). Totals shown live are computed from the jobs
+    (`lib/transferFormat.transferTotals`). When a batch's last unfinished
+    job finishes, the destination pane is re-read. `transfer:conflict` goes
+    into the `promptStore` queue (`ConflictDialog`, Selene ConflictModal
+    look; closing = Skip; Resume only when dst < src); apply-to-all drops
+    the batch's other queued conflicts, and a job leaving `needsDecision`
+    drops its own. `TransferPanel` (bottom island): header summary +
+    total `ProgressBar` (Selene `OperationProgress`), Cancel all, Clear
+    finished; an always-virtualised job list (ProcessRow look,
+    `StatusDot` tones). A new batch un-collapses it (`enqueue`).
+  - Pane actions: toolbar Upload (Local) / Download (Remote), the context
+    menu, ⇧⌘U / ⇧⌘D (Ctrl+Shift elsewhere) and F5 (Total Commander's copy
+    to the other pane) → `lib/transfer.startTransfer` into the other
+    pane's folder; disabled without a live session.
+  - Drag and drop: pane-to-pane drags use **mouse events, not HTML5 DnD**
+    (`lib/paneDrag`, `dragStore`, `DragGhost`): `dragDropEnabled` is on so
+    Tauri delivers OS file drops, and its handler takes the webview's drop
+    target on every platform (wry's macOS handler answers the
+    `NSDraggingDestination` calls itself; on Windows it disables HTML5 DnD)
+    — DOM `drop` would never fire. Drop targets are marked in the DOM
+    (`data-drop-pane` on a pane, `data-drop-dir` on folder rows) and found
+    with `closest` from the event target. Finder/Explorer drops
+    (`lib/useNativeDrop`, `getCurrentWebview().onDragDropEvent`) hit-test
+    with `elementFromPoint` (positions are CSS pixels on macOS, physical
+    elsewhere) and upload when they land on the Remote pane.
+  - Settings → Transfers (`backendSettingsStore`, re-read on
+    `settings:changed`): parallel transfers 1–16. `CloseWarningModal` lists
+    the unfinished transfers per state.
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":
@@ -352,17 +385,20 @@ src/
   App.tsx     # the shell: title bar, sidebar, Local/Remote panes, preview,
               # transfers
   components/ # Sidebar + ConnectionSidebar/ConnectionRow, ConnectionForm,
-              # PromptHost (SecretPrompt, HostKeyDialog), Pane + Breadcrumb +
-              # FileTable, ContextMenu, DeleteConfirmModal, ChmodDialog,
-              # PreviewPanel, TransferPanel, WelcomeScreen, Modal,
+              # PromptHost (SecretPrompt, HostKeyDialog, ConflictDialog),
+              # Pane + Breadcrumb + FileTable, ContextMenu, DeleteConfirmModal,
+              # ChmodDialog, PreviewPanel, TransferPanel + ProgressBar,
+              # DragGhost, WelcomeScreen, Modal,
               # Toasts, SettingsModal, CloseWarningModal, WindowControls,
               # StatusDot, LogoMark, icons (lucide wrapper; import from here)
   ipc/        # commands.ts (typed wrappers), types.ts (wire types), events.ts
   state/      # Zustand stores: profiles, session, prompt (queue), pane,
-              # connectionForm, theme, settings (UI prefs), settingsRequest,
+              # transfer, drag, connectionForm, theme, settings (UI prefs),
+              # backendSettings (core settings.json), settingsRequest,
               # layout, toast — mirror the backend; don't guess
-  lib/        # connect flow, useCoreEvents, pure rules (entries, selection,
-              # path, fileFormat, fileName, mode, dateFormat,
+  lib/        # connect flow, useCoreEvents, useNativeDrop, paneDrag,
+              # transfer (pane → request), pure rules (entries, selection,
+              # path, fileFormat, fileName, mode, dateFormat, transferFormat,
               # connectionForm), log, motion, platform
   styles/     # tokens.css (design tokens) + global.css (resets/primitives)
   test/       # Vitest setup + stubViewport (jsdom has no layout)
