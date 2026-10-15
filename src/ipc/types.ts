@@ -24,3 +24,148 @@ export interface IpcError {
   /** Stable machine-readable category, e.g. `"invalidInput"`. */
   kind: string;
 }
+
+// ---------------------------------------------------------------------------
+// Connections (`iris_core::connection`)
+// ---------------------------------------------------------------------------
+
+/** A saved connection's id (UUID string, `iris_core::ProfileId`). */
+export type ProfileId = string;
+/** A live session's id (UUID string, `iris_core::SessionId`). */
+export type SessionId = string;
+/** An open host key prompt's id (UUID string, `HostKeyRequestId`). */
+export type HostKeyRequestId = string;
+
+/**
+ * How a profile authenticates (`iris_core::AuthMethod`), tagged by `kind`.
+ * Never holds a secret: passwords and key passphrases are passed to
+ * `connect` per attempt. Phase 2 adds `agent` and `sshConfigHost`.
+ */
+export type AuthMethod =
+  { kind: "password" } | { kind: "keyFile"; path: string };
+
+/** A saved connection (`iris_core::ConnectionProfile`). */
+export interface ConnectionProfile {
+  id: ProfileId;
+  /** Display name; the backend fills in `user@host` when blank. */
+  name: string;
+  host: string;
+  /** 1–65535; 22 by default. */
+  port: number;
+  user: string;
+  auth: AuthMethod;
+  /** Remote folder to open after connecting; `null` = the login folder. */
+  startDir: string | null;
+}
+
+/**
+ * What `saveProfile` accepts: a profile whose `id` (omit for a new one) and
+ * `port` (defaults to 22) are optional.
+ */
+export type ConnectionProfileInput = Omit<
+  ConnectionProfile,
+  "id" | "port" | "startDir"
+> & {
+  id?: ProfileId;
+  port?: number;
+  startDir?: string | null;
+};
+
+// ---------------------------------------------------------------------------
+// Browsing (`iris_core::fs`)
+// ---------------------------------------------------------------------------
+
+/** Which filesystem a browsing call addresses (`iris_core::FsTarget`). */
+export type FsTarget =
+  { kind: "local" } | { kind: "remote"; sessionId: SessionId };
+
+/** What a symlink resolves to (`iris_core::LinkTargetKind`). */
+export type LinkTargetKind = "file" | "dir";
+
+/** What an entry is (`iris_core::EntryKind`), tagged by `type`. */
+export type EntryKind =
+  | { type: "file" }
+  | { type: "dir" }
+  /** Sockets, devices, fifos. */
+  | { type: "other" }
+  | {
+      type: "symlink";
+      /** Raw link text; `null` when it could not be read. */
+      target: string | null;
+      /** What the link resolves to; `null` when it is broken. */
+      targetKind: LinkTargetKind | null;
+    };
+
+/** One file, folder or link in a listing (`iris_core::Entry`). */
+export interface Entry {
+  name: string;
+  /** Full path; pass it back to `listDir` / `stat`. */
+  path: string;
+  kind: EntryKind;
+  /** Bytes (of the link itself for a symlink); 0 when unknown. */
+  size: number;
+  /** Last modification in unix seconds; `null` when unknown. */
+  mtime: number | null;
+  /** Unix mode bits (type + permissions); `null` when unknown (Windows). */
+  mode: number | null;
+  /** Dotfile, or the Windows hidden attribute. */
+  hidden: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Session events (`iris_core::CoreEvent`)
+// ---------------------------------------------------------------------------
+
+/** Lifecycle of one session (`iris_core::SessionState`). */
+export type SessionState = "connecting" | "connected" | "disconnected";
+
+/**
+ * Payload of `session:host-key-prompt`: a connect reached a server whose key
+ * is not in `known_hosts` and waits for `answerHostKey(requestId, trust)`.
+ */
+export interface HostKeyPromptEvent {
+  type: "hostKeyPrompt";
+  requestId: HostKeyRequestId;
+  /** The connect this prompt belongs to. */
+  sessionId: SessionId;
+  host: string;
+  port: number;
+  /** SSH algorithm name, e.g. `ssh-ed25519`. */
+  keyType: string;
+  /** OpenSSH-style `SHA256:<base64>` fingerprint. */
+  fingerprintSha256: string;
+}
+
+/** Payload of `session:state-changed`. */
+export interface SessionStateChangedEvent {
+  type: "sessionStateChanged";
+  sessionId: SessionId;
+  profileId: ProfileId;
+  state: SessionState;
+  /**
+   * Set on a `disconnected` the user did not ask for (failed connect,
+   * dropped connection); app-owned text.
+   */
+  reason: string | null;
+}
+
+/**
+ * Every `IpcError.kind` the backend produces (`CoreError::kind` plus the
+ * IPC-only ones). `IpcError.kind` stays `string` so unknown kinds degrade
+ * gracefully.
+ */
+export type IpcErrorKind =
+  | "io"
+  | "config"
+  | "invalidInput"
+  | "notFound"
+  | "permissionDenied"
+  | "connectFailed"
+  | "authFailed"
+  | "passphraseRequired"
+  | "keyFile"
+  | "hostKeyChanged"
+  | "hostKeyRejected"
+  | "notConnected"
+  | "remote"
+  | "unknown";

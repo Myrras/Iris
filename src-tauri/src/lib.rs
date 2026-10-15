@@ -128,10 +128,18 @@ pub fn run() {
             }
 
             let state = app.state::<AppState>();
-            // Global settings persist in the app data dir.
-            state
-                .core
-                .set_settings_path(app.path().app_data_dir()?.join("settings.json"));
+            // Global settings and saved connections persist in the app data
+            // dir.
+            let data_dir = app.path().app_data_dir()?;
+            state.core.set_settings_path(data_dir.join("settings.json"));
+            state.core.set_profiles_path(data_dir.join("profiles.json"));
+            // Host keys are checked against (and learned into) the user's
+            // OpenSSH known_hosts. Without a home folder connecting reports
+            // a config error instead of guessing a location.
+            match iris_core::ssh::hostkey::default_known_hosts_path() {
+                Some(path) => state.core.set_known_hosts_path(path),
+                None => tracing::warn!("no home folder; known_hosts is not configured"),
+            }
             // Forward core lifecycle events to the webview for the app's
             // whole lifetime.
             events::spawn_forwarder(app.handle().clone(), Arc::clone(&state.core));
@@ -140,6 +148,16 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::settings::get_settings,
             commands::settings::save_settings,
+            commands::connection::list_profiles,
+            commands::connection::save_profile,
+            commands::connection::delete_profile,
+            commands::session::connect,
+            commands::session::disconnect,
+            commands::session::answer_host_key,
+            commands::fs::list_dir,
+            commands::fs::stat,
+            commands::fs::read_link,
+            commands::fs::home_dir,
             commands::window::window_confirm_close,
         ])
         .build(tauri::generate_context!())

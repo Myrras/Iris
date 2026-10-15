@@ -7,12 +7,22 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { invoke } from "@tauri-apps/api/core";
 
 import {
+  answerHostKey,
+  connect,
+  deleteProfile,
+  disconnect,
   getSettings,
+  homeDir,
+  listDir,
+  listProfiles,
+  readLink,
+  saveProfile,
   saveSettings,
+  stat,
   toIpcError,
   windowConfirmClose,
 } from "./commands";
-import type { IrisSettings } from "./types";
+import type { FsTarget, IrisSettings } from "./types";
 
 describe("IPC commands", () => {
   beforeEach(() => vi.mocked(invoke).mockClear());
@@ -32,6 +42,68 @@ describe("IPC commands", () => {
     await windowConfirmClose();
     expect(invoke).toHaveBeenCalledWith("get_settings");
     expect(invoke).toHaveBeenCalledWith("window_confirm_close");
+  });
+});
+
+describe("connection and session commands", () => {
+  beforeEach(() => vi.mocked(invoke).mockClear());
+
+  it("passes profiles and ids under camelCase keys", async () => {
+    const profile = {
+      name: "Example",
+      host: "sftp.example.test",
+      user: "demo",
+      auth: { kind: "password" as const },
+    };
+    await listProfiles();
+    await saveProfile(profile);
+    await deleteProfile("p-1");
+    expect(invoke).toHaveBeenCalledWith("list_profiles");
+    expect(invoke).toHaveBeenCalledWith("save_profile", { profile });
+    expect(invoke).toHaveBeenCalledWith("delete_profile", { id: "p-1" });
+  });
+
+  it("sends absent secrets as null", async () => {
+    await connect("p-1");
+    expect(invoke).toHaveBeenCalledWith("connect", {
+      profileId: "p-1",
+      password: null,
+      passphrase: null,
+    });
+    await connect("p-1", { password: "example-only" });
+    expect(invoke).toHaveBeenCalledWith("connect", {
+      profileId: "p-1",
+      password: "example-only",
+      passphrase: null,
+    });
+  });
+
+  it("names the session commands like the Rust handlers", async () => {
+    await disconnect("s-1");
+    await answerHostKey("r-1", true);
+    expect(invoke).toHaveBeenCalledWith("disconnect", { sessionId: "s-1" });
+    expect(invoke).toHaveBeenCalledWith("answer_host_key", {
+      requestId: "r-1",
+      trust: true,
+    });
+  });
+
+  it("passes the browsing target through as is", async () => {
+    const target: FsTarget = { kind: "remote", sessionId: "s-1" };
+    await listDir(target, "/srv");
+    await stat({ kind: "local" }, "/tmp");
+    await readLink(target, "/srv/link");
+    await homeDir(target);
+    expect(invoke).toHaveBeenCalledWith("list_dir", { target, path: "/srv" });
+    expect(invoke).toHaveBeenCalledWith("stat", {
+      target: { kind: "local" },
+      path: "/tmp",
+    });
+    expect(invoke).toHaveBeenCalledWith("read_link", {
+      target,
+      path: "/srv/link",
+    });
+    expect(invoke).toHaveBeenCalledWith("home_dir", { target });
   });
 });
 

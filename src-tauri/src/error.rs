@@ -60,14 +60,10 @@ impl From<std::io::Error> for IpcError {
 impl From<CoreError> for IpcError {
     fn from(err: CoreError) -> Self {
         // The `message` is `CoreError`'s own `Display`, which is built from
-        // app-owned text only — safe to forward verbatim.
-        let kind = match &err {
-            CoreError::Io(_) => "io",
-            CoreError::Config(_) => "config",
-            CoreError::InvalidInput(_) => "invalidInput",
-        };
+        // app-owned text only — safe to forward verbatim. The `kind` comes
+        // from the core so the mapping lives next to the variants.
         Self {
-            kind: kind.to_string(),
+            kind: err.kind().to_string(),
             message: err.to_string(),
         }
     }
@@ -83,6 +79,22 @@ mod tests {
             (CoreError::Io(std::io::Error::other("x")), "io"),
             (CoreError::Config("x".into()), "config"),
             (CoreError::InvalidInput("x".into()), "invalidInput"),
+            (CoreError::NotFound("/x".into()), "notFound"),
+            (CoreError::PermissionDenied("/x".into()), "permissionDenied"),
+            (CoreError::ConnectFailed("x".into()), "connectFailed"),
+            (CoreError::AuthFailed, "authFailed"),
+            (CoreError::PassphraseRequired, "passphraseRequired"),
+            (CoreError::KeyFile("x".into()), "keyFile"),
+            (
+                CoreError::HostKeyChanged {
+                    host: "sftp.example.test".into(),
+                    port: 22,
+                },
+                "hostKeyChanged",
+            ),
+            (CoreError::HostKeyRejected, "hostKeyRejected"),
+            (CoreError::NotConnected, "notConnected"),
+            (CoreError::Remote("x".into()), "remote"),
         ];
         for (err, kind) in cases {
             let message = err.to_string();
