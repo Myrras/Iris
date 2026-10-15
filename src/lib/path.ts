@@ -1,0 +1,44 @@
+/**
+ * Path helpers for the breadcrumb and the Up button (the webview has no Node
+ * `path`). Remote paths are POSIX; local ones may be Windows paths, so both
+ * separators are understood and the one the path already uses is kept.
+ */
+
+export interface PathSegment {
+  /** Label: a folder name, or the root itself (`/`, `C:\`). */
+  name: string;
+  /** Full path up to and including this segment. */
+  path: string;
+}
+
+/** `C:\` / `C:/` style drive root at the start of a path. */
+const DRIVE_ROOT = /^[A-Za-z]:[\\/]/;
+
+/** Split `path` into the segments a breadcrumb shows, root first. */
+export function pathSegments(path: string): PathSegment[] {
+  const sep = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  let root = "";
+  let rest = path;
+  const drive = DRIVE_ROOT.exec(path);
+  if (drive) {
+    root = drive[0];
+    rest = path.slice(root.length);
+  } else if (path.startsWith("/")) {
+    root = "/";
+    rest = path.slice(1);
+  }
+
+  const segments: PathSegment[] = root ? [{ name: root, path: root }] : [];
+  let acc = root;
+  for (const name of rest.split(/[\\/]/).filter(Boolean)) {
+    acc = acc === "" || acc === root ? `${acc}${name}` : `${acc}${sep}${name}`;
+    segments.push({ name, path: acc });
+  }
+  return segments;
+}
+
+/** The folder one level up, or `null` at a root (or a bare relative name). */
+export function parentPath(path: string): string | null {
+  const segments = pathSegments(path);
+  return segments.length > 1 ? segments[segments.length - 2].path : null;
+}
