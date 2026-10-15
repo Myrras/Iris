@@ -20,6 +20,8 @@ iris-core = { path = "../crates/iris-core" }
 tauri = { version = "2", features = [] }
 # Global logger sink (stdout + per-OS log dir + webview console).
 tauri-plugin-log = "2"
+# Native file picker for the key-file field of the connection form.
+tauri-plugin-dialog = "2"
 # Persist and restore window size/position across runs.
 tauri-plugin-window-state = "2"
 serde.workspace = true

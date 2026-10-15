@@ -15,7 +15,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@tanstack/react-table": "^8.21.3",
+    "@tanstack/react-virtual": "^3.14.20",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.8.3",
     "@tauri-apps/plugin-log": "^2",
     "lucide-react": "^1.57.0",
     "react": "^19.1.0",

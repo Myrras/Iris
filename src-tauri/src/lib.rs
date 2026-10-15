@@ -46,6 +46,8 @@ pub fn run() {
                 )
                 .build(),
         )
+        // Native open-file picker (the connection form's key-file field).
+        .plugin(tauri_plugin_dialog::init())
         // Logging sinks: stdout (dev), the per-OS log directory (support), and
         // the webview console (in-app diagnostics).
         .plugin(
