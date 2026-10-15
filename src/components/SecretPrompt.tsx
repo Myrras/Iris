@@ -7,6 +7,9 @@
  * It stays mounted while hidden: a host key question can jump in front of a
  * running attempt, and the busy state must survive until it comes back.
  *
+ * "Remember in keychain" (Selene's toggle style) stores the secret in the OS
+ * keychain once the connect succeeded; the backend does the storing.
+ *
  * SECURITY: the typed value lives only in this component's state, is cleared
  * the moment it is handed to `attempt`, and is never logged.
  */
@@ -23,6 +26,7 @@ type SecretPromptEntry = Extract<Prompt, { kind: "secret" }>;
 export function SecretPrompt({ prompt }: { prompt: SecretPromptEntry | null }) {
   const resolve = usePromptStore((s) => s.resolve);
   const [value, setValue] = useState("");
+  const [remember, setRemember] = useState(prompt?.rememberByDefault ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -33,6 +37,7 @@ export function SecretPrompt({ prompt }: { prompt: SecretPromptEntry | null }) {
   if (prompt && prompt.id !== shown?.id) {
     setShown(prompt);
     setValue("");
+    setRemember(prompt.rememberByDefault ?? false);
     setError(null);
     setBusy(false);
   }
@@ -60,7 +65,7 @@ export function SecretPrompt({ prompt }: { prompt: SecretPromptEntry | null }) {
     setBusy(true);
     setError(null);
     try {
-      await shown.attempt(secret);
+      await shown.attempt(secret, remember);
       resolve(shown.id);
     } catch (e) {
       setError(toIpcError(e).message);
@@ -116,6 +121,7 @@ export function SecretPrompt({ prompt }: { prompt: SecretPromptEntry | null }) {
             </>
           )}
         </p>
+        {shown?.notice && <p className={styles.notice}>{shown.notice}</p>}
         <div className={styles.field}>
           <label htmlFor="prompt-secret">{noun}</label>
           <input
@@ -131,6 +137,20 @@ export function SecretPrompt({ prompt }: { prompt: SecretPromptEntry | null }) {
             onChange={(e) => setValue(e.target.value)}
           />
         </div>
+        <label className={styles.toggle}>
+          <input
+            type="checkbox"
+            checked={remember}
+            disabled={busy}
+            onChange={(e) => setRemember(e.target.checked)}
+          />
+          <span>
+            Remember in keychain
+            <small>
+              Stored in your system keychain once the connection works.
+            </small>
+          </span>
+        </label>
         {error && (
           <p className={styles.error} role="alert">
             {error}

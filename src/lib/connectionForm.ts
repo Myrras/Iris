@@ -5,9 +5,22 @@
  * a round trip; the backend still has the final word.
  */
 
-import type { ConnectionProfile, ConnectionProfileInput } from "../ipc/types";
+import type {
+  AuthMethod,
+  ConnectionProfile,
+  ConnectionProfileInput,
+  JumpHost,
+  SshConfigHost,
+} from "../ipc/types";
 
-export type AuthKind = "password" | "keyFile";
+export type AuthKind = AuthMethod["kind"];
+
+/**
+ * The jump host picker's value: `""` (none), `profile:<id>`,
+ * `alias:<alias>` or `custom` (then `jumpCustom` holds the spec).
+ */
+export type JumpChoice =
+  "" | "custom" | `profile:${string}` | `alias:${string}`;
 
 export interface ConnectionFormValues {
   name: string;
@@ -17,7 +30,12 @@ export interface ConnectionFormValues {
   user: string;
   authKind: AuthKind;
   keyPath: string;
+  /** The `~/.ssh/config` host of an `sshConfigHost` login. */
+  configAlias: string;
   startDir: string;
+  jumpChoice: JumpChoice;
+  /** `[user@]host[:port]` when `jumpChoice` is `custom`. */
+  jumpCustom: string;
 }
 
 export type ConnectionFormErrors = Partial<
@@ -32,8 +50,18 @@ export function emptyForm(): ConnectionFormValues {
     user: "",
     authKind: "password",
     keyPath: "",
+    configAlias: "",
     startDir: "",
+    jumpChoice: "",
+    jumpCustom: "",
   };
+}
+
+function jumpChoiceOf(jump: JumpHost | null): JumpChoice {
+  if (!jump) return "";
+  return jump.kind === "profile"
+    ? `profile:${jump.profileId}`
+    : `alias:${jump.alias}`;
 }
 
 export function formFromProfile(
@@ -47,7 +75,29 @@ export function formFromProfile(
     user: profile.user,
     authKind: profile.auth.kind,
     keyPath: profile.auth.kind === "keyFile" ? profile.auth.path : "",
+    configAlias:
+      profile.auth.kind === "sshConfigHost" ? profile.auth.alias : "",
     startDir: profile.startDir ?? "",
+    jumpChoice: jumpChoiceOf(profile.jump),
+    jumpCustom: "",
+  };
+}
+
+/**
+ * The form after picking a `~/.ssh/config` host: the alias plus what the
+ * config says for host, port and user (the config wins at connect time; the
+ * fields are what shows and the fallback). A blank name stays blank.
+ */
+export function applyConfigHost(
+  form: ConnectionFormValues,
+  host: SshConfigHost,
+): ConnectionFormValues {
+  return {
+    ...form,
+    configAlias: host.alias,
+    host: host.hostName ?? host.alias,
+    port: host.port != null ? String(host.port) : form.port,
+    user: host.user ?? form.user,
   };
 }
 
@@ -72,7 +122,41 @@ export function validateForm(form: ConnectionFormValues): ConnectionFormErrors {
     else if (path.startsWith("~"))
       errors.keyPath = "Use the full path; ~ is not expanded.";
   }
+
+  if (form.authKind === "sshConfigHost" && !form.configAlias.trim()) {
+    errors.configAlias = "Choose a host from your SSH config.";
+  }
+
+  if (form.jumpChoice === "custom") {
+    const spec = form.jumpCustom.trim();
+    if (!spec) errors.jumpCustom = "Enter the jump host.";
+    else if (/\s/.test(spec)) errors.jumpCustom = "A jump host has no spaces.";
+  }
   return errors;
+}
+
+function authOf(form: ConnectionFormValues): AuthMethod {
+  switch (form.authKind) {
+    case "keyFile":
+      return { kind: "keyFile", path: form.keyPath.trim() };
+    case "agent":
+      return { kind: "agent" };
+    case "sshConfigHost":
+      return { kind: "sshConfigHost", alias: form.configAlias.trim() };
+    default:
+      return { kind: "password" };
+  }
+}
+
+function jumpOf(form: ConnectionFormValues): JumpHost | null {
+  const choice = form.jumpChoice;
+  if (choice === "") return null;
+  if (choice === "custom")
+    return { kind: "alias", alias: form.jumpCustom.trim() };
+  if (choice.startsWith("profile:")) {
+    return { kind: "profile", profileId: choice.slice("profile:".length) };
+  }
+  return { kind: "alias", alias: choice.slice("alias:".length) };
 }
 
 /** The `saveProfile` input for a valid form (`id` to replace a profile). */
@@ -88,10 +172,8 @@ export function formToInput(
     host: form.host.trim(),
     ...(port ? { port: Number(port) } : {}),
     user: form.user.trim(),
-    auth:
-      form.authKind === "keyFile"
-        ? { kind: "keyFile", path: form.keyPath.trim() }
-        : { kind: "password" },
+    auth: authOf(form),
     startDir: form.startDir.trim() || null,
+    jump: jumpOf(form),
   };
 }

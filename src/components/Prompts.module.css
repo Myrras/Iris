@@ -35,6 +35,44 @@
   font-size: var(--fs-xs);
 }
 
+/* Why the prompt asks again (e.g. a saved secret was not accepted). */
+.notice {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+/* Checkbox + label + explanation, after Selene's ConnectionDialog toggles. */
+.toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin: 0;
+  cursor: pointer;
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+
+.toggle input {
+  width: auto;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.toggle span {
+  display: flex;
+  flex-direction: column;
+}
+
+.toggle small {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
 .error {
   margin: 0;
   padding: var(--sp-2) var(--sp-3);

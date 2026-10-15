@@ -38,6 +38,22 @@
   flex-shrink: 0;
 }
 
+/* A control stacked under another in the same field (custom jump host). */
+.below {
+  margin-top: var(--sp-2);
+}
+
+/* "Forget saved password and passphrase" + its confirmation. */
+.forgetRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.forgetRow .hint {
+  margin-top: 0;
+}
+
 .hint {
   margin-top: var(--sp-1);
   color: var(--text-muted);
@@ -52,7 +68,8 @@
   margin-bottom: var(--sp-1);
 }
 
-/* Two-way switch (Password | Key file), styled like the settings tabs. */
+/* Auth method switch (Password | Key file | SSH agent | SSH config), styled
+   like the settings tabs. */
 .segmented {
   display: flex;
   padding: 2px;
@@ -83,11 +100,13 @@
   box-shadow: var(--shadow-sm);
 }
 
-.form input[aria-invalid="true"] {
+.form input[aria-invalid="true"],
+.form select[aria-invalid="true"] {
   border-color: var(--danger);
 }
 
-.form input[aria-invalid="true"]:focus {
+.form input[aria-invalid="true"]:focus,
+.form select[aria-invalid="true"]:focus {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent);
 }
 

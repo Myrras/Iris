@@ -13,6 +13,7 @@ const profile: ConnectionProfile = {
   user: "alice",
   auth: { kind: "password" },
   startDir: null,
+  jump: null,
 };
 
 beforeEach(() => {
@@ -20,13 +21,14 @@ beforeEach(() => {
 });
 
 function ask(
-  attempt: (value: string) => Promise<void>,
+  attempt: (value: string, remember: boolean) => Promise<void>,
   secret: "password" | "passphrase" = "password",
+  extra: { notice?: string; rememberByDefault?: boolean } = {},
 ) {
   const onCancel = vi.fn();
   usePromptStore
     .getState()
-    .push({ kind: "secret", secret, profile, attempt, onCancel });
+    .push({ kind: "secret", secret, profile, attempt, onCancel, ...extra });
   render(<PromptHost />);
   return { onCancel };
 }
@@ -54,9 +56,37 @@ describe("SecretPrompt", () => {
     fireEvent.change(input, { target: { value: "example-password" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
 
-    expect(attempt).toHaveBeenCalledWith("example-password");
+    expect(attempt).toHaveBeenCalledWith("example-password", false);
     expect(input).toHaveValue("");
     await waitFor(() => expect(usePromptStore.getState().queue).toEqual([]));
+  });
+
+  it("passes the remember-in-keychain choice", () => {
+    const attempt = vi.fn(() => Promise.resolve());
+    ask(attempt);
+    const remember = screen.getByRole("checkbox", {
+      name: /Remember in keychain/,
+    });
+    expect(remember).not.toBeChecked();
+    fireEvent.click(remember);
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "example-password" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    expect(attempt).toHaveBeenCalledWith("example-password", true);
+  });
+
+  it("shows why it asks again and starts with remember ticked", () => {
+    ask(vi.fn(), "password", {
+      notice: "The saved password was not accepted.",
+      rememberByDefault: true,
+    });
+    expect(
+      screen.getByText("The saved password was not accepted."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: /Remember in keychain/ }),
+    ).toBeChecked();
   });
 
   it("stays open with the error when the password is wrong", async () => {

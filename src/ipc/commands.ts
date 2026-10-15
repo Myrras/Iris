@@ -17,7 +17,9 @@ import type {
   IpcError,
   IrisSettings,
   ProfileId,
+  SecretKind,
   SessionId,
+  SshConfigHost,
 } from "./types";
 
 /** Narrow an unknown rejection to the structured `IpcError` shape. */
@@ -74,28 +76,62 @@ export function saveProfile(
   return invoke("save_profile", { profile });
 }
 
-/** Delete a saved connection; rejects with `notFound` if it does not exist. */
+/**
+ * Delete a saved connection and its remembered secrets; rejects with
+ * `notFound` if it does not exist.
+ */
 export function deleteProfile(id: ProfileId): Promise<void> {
   return invoke("delete_profile", { id });
+}
+
+/**
+ * Remember a password / key passphrase for a saved connection in the OS
+ * keychain. Rejects with `notFound` or `keychain`.
+ */
+export function setSecret(
+  profileId: ProfileId,
+  kind: SecretKind,
+  value: string,
+): Promise<void> {
+  return invoke("set_secret", { profileId, kind, value });
+}
+
+/** Forget a remembered secret (a no-op when none is stored). */
+export function clearSecret(
+  profileId: ProfileId,
+  kind: SecretKind,
+): Promise<void> {
+  return invoke("clear_secret", { profileId, kind });
+}
+
+/** The concrete `~/.ssh/config` hosts, resolved, in file order. */
+export function listSshConfigHosts(): Promise<SshConfigHost[]> {
+  return invoke("list_ssh_config_hosts");
 }
 
 // ---------------------------------------------------------------------------
 // Sessions
 // ---------------------------------------------------------------------------
 
-/** Per-connect credentials; used once, never stored. */
+/**
+ * Per-connect credentials. A secret left out is read from the keychain when
+ * the login needs it; the given ones are stored there only with `remember`.
+ */
 export interface ConnectSecrets {
-  /** Required for `password` profiles. */
+  /** For `password` profiles (else `passwordRequired` without a saved one). */
   password?: string;
   /** Only for an encrypted key file (else the connect rejects with `passphraseRequired`). */
   passphrase?: string;
+  /** Store the given secrets in the keychain once the login succeeded. */
+  remember?: boolean;
 }
 
 /**
  * Connect a saved profile; resolves with the session id once SFTP is ready.
  * An unknown host key first raises `session:host-key-prompt` and waits for
- * `answerHostKey`. Rejects with `authFailed`, `passphraseRequired`, `keyFile`,
- * `connectFailed`, `hostKeyChanged`, `hostKeyRejected`, `notFound`, …
+ * `answerHostKey`. Rejects with `authFailed`, `passwordRequired`,
+ * `passphraseRequired`, `keyFile`, `agent`, `jumpHost`, `connectFailed`,
+ * `hostKeyChanged`, `hostKeyRejected`, `notFound`, …
  */
 export function connect(
   profileId: ProfileId,
@@ -105,6 +141,7 @@ export function connect(
     profileId,
     password: secrets.password ?? null,
     passphrase: secrets.passphrase ?? null,
+    remember: secrets.remember ?? false,
   });
 }
 

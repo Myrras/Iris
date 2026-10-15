@@ -21,6 +21,7 @@ const alpha: ConnectionProfile = {
   user: "alice",
   auth: { kind: "password" },
   startDir: null,
+  jump: null,
 };
 
 beforeEach(() => {

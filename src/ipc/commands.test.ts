@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import {
   answerHostKey,
+  clearSecret,
   connect,
   deleteProfile,
   disconnect,
@@ -15,9 +16,11 @@ import {
   homeDir,
   listDir,
   listProfiles,
+  listSshConfigHosts,
   readLink,
   saveProfile,
   saveSettings,
+  setSecret,
   stat,
   toIpcError,
   windowConfirmClose,
@@ -63,19 +66,37 @@ describe("connection and session commands", () => {
     expect(invoke).toHaveBeenCalledWith("delete_profile", { id: "p-1" });
   });
 
-  it("sends absent secrets as null", async () => {
+  it("sends absent secrets as null and remember as false", async () => {
     await connect("p-1");
     expect(invoke).toHaveBeenCalledWith("connect", {
       profileId: "p-1",
       password: null,
       passphrase: null,
+      remember: false,
     });
-    await connect("p-1", { password: "example-only" });
+    await connect("p-1", { password: "example-only", remember: true });
     expect(invoke).toHaveBeenCalledWith("connect", {
       profileId: "p-1",
       password: "example-only",
       passphrase: null,
+      remember: true,
     });
+  });
+
+  it("names the secret and ssh config commands like the Rust handlers", async () => {
+    await setSecret("p-1", "passphrase", "example-only");
+    await clearSecret("p-1", "password");
+    await listSshConfigHosts();
+    expect(invoke).toHaveBeenCalledWith("set_secret", {
+      profileId: "p-1",
+      kind: "passphrase",
+      value: "example-only",
+    });
+    expect(invoke).toHaveBeenCalledWith("clear_secret", {
+      profileId: "p-1",
+      kind: "password",
+    });
+    expect(invoke).toHaveBeenCalledWith("list_ssh_config_hosts");
   });
 
   it("names the session commands like the Rust handlers", async () => {

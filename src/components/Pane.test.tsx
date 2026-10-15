@@ -36,6 +36,7 @@ const alpha: ConnectionProfile = {
   user: "alice",
   auth: { kind: "password" },
   startDir: null,
+  jump: null,
 };
 
 function entry(path: string, extra: Partial<Entry> = {}): Entry {

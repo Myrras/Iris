@@ -1,24 +1,30 @@
 /**
  * Create or edit a saved connection: name, host, port, user, authentication
- * (password, or a private key file picked with the native dialog) and an
- * optional start folder. Layout and seeding follow Selene's ConnectionDialog.
+ * (password, a private key file picked with the native dialog, the SSH agent,
+ * or a `~/.ssh/config` host that prefills the fields), an optional start
+ * folder and an optional jump host (a saved connection, a config host or any
+ * `user@host:port`). Layout and seeding follow Selene's ConnectionDialog.
  *
  * Problems show inline under their field once the user tried to save (and
  * update live from then on); a backend rejection shows inline at the bottom.
  * No secret is entered here: passwords and passphrases are asked for at
- * connect time and never stored.
+ * connect time, where they can be remembered in the keychain; editing a
+ * connection can forget them again.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { toIpcError } from "../ipc/commands";
+import { clearSecret, listSshConfigHosts, toIpcError } from "../ipc/commands";
+import type { SshConfigHost } from "../ipc/types";
 import { connectProfile } from "../lib/connect";
 import {
+  applyConfigHost,
   formFromProfile,
   formToInput,
   validateForm,
   type AuthKind,
   type ConnectionFormValues,
+  type JumpChoice,
 } from "../lib/connectionForm";
 import { useConnectionFormStore } from "../state/connectionFormStore";
 import { useProfilesStore } from "../state/profilesStore";
@@ -36,12 +42,28 @@ const PLAIN_INPUT = {
 const AUTH_OPTIONS: [AuthKind, string][] = [
   ["password", "Password"],
   ["keyFile", "Key file"],
+  ["agent", "SSH agent"],
+  ["sshConfigHost", "SSH config"],
 ];
+
+const AUTH_HINTS: Record<AuthKind, string> = {
+  password:
+    "Asked when connecting; you can choose to remember it in your keychain.",
+  keyFile:
+    "A passphrase-protected key asks for its passphrase when connecting.",
+  agent: "Uses the keys loaded in your running SSH agent.",
+  sshConfigHost:
+    "Uses the host's IdentityFile keys, then your SSH agent. What ~/.ssh/config sets for host, port and user wins over the fields above.",
+};
+
+/** The file name of a path, for compact summaries. */
+const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
 export function ConnectionForm() {
   const open = useConnectionFormStore((s) => s.open);
   const editing = useConnectionFormStore((s) => s.editing);
   const closeForm = useConnectionFormStore((s) => s.close);
+  const profiles = useProfilesStore((s) => s.profiles);
 
   const [form, setForm] = useState<ConnectionFormValues>(() =>
     formFromProfile(editing),
@@ -49,6 +71,30 @@ export function ConnectionForm() {
   const [submitted, setSubmitted] = useState(false);
   const [busy, setBusy] = useState<null | "save" | "connect">(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // `~/.ssh/config` hosts for the config-host and jump pickers; `null` until
+  // loaded (re-read each time the dialog opens, so config edits show up).
+  const [configHosts, setConfigHosts] = useState<SshConfigHost[] | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [forgotten, setForgotten] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    listSshConfigHosts()
+      .then((hosts) => {
+        if (!live) return;
+        setConfigHosts(hosts);
+        setConfigError(null);
+      })
+      .catch((e: unknown) => {
+        if (!live) return;
+        setConfigHosts([]);
+        setConfigError(toIpcError(e).message);
+      });
+    return () => {
+      live = false;
+    };
+  }, [open]);
 
   // Re-seed whenever the dialog opens (Selene's pattern): `undefined` means
   // "not seeded for this opening", so the first render after opening always
@@ -61,6 +107,7 @@ export function ConnectionForm() {
     setForm(formFromProfile(editing));
     setSubmitted(false);
     setSaveError(null);
+    setForgotten(false);
     setSeededFor(editing?.id ?? null);
   }
 
@@ -86,6 +133,26 @@ export function ConnectionForm() {
         title: "Choose a private key",
       });
       if (typeof picked === "string") field("keyPath", picked);
+    } catch (e) {
+      setSaveError(toIpcError(e).message);
+    }
+  }
+
+  function pickConfigHost(alias: string) {
+    const host = configHosts?.find((h) => h.alias === alias);
+    setForm((f) =>
+      host ? applyConfigHost(f, host) : { ...f, configAlias: alias },
+    );
+  }
+
+  /** Forget the password and passphrase remembered for this connection. */
+  async function forgetSecrets() {
+    if (!editing) return;
+    setSaveError(null);
+    try {
+      await clearSecret(editing.id, "password");
+      await clearSecret(editing.id, "passphrase");
+      setForgotten(true);
     } catch (e) {
       setSaveError(toIpcError(e).message);
     }
@@ -132,6 +199,139 @@ export function ConnectionForm() {
         {error && (
           <small id={`${id}-error`} className={styles.fieldError}>
             {error}
+          </small>
+        )}
+      </div>
+    );
+  }
+
+  /** The `~/.ssh/config` host picker and what it resolves to. */
+  function configHostField() {
+    const error = errors.configAlias;
+    const picked = configHosts?.find((h) => h.alias === form.configAlias);
+    const known = configHosts ?? [];
+    const missing =
+      form.configAlias && !known.some((h) => h.alias === form.configAlias);
+    return (
+      <div className={styles.field}>
+        <label htmlFor="conn-configAlias">Host from SSH config</label>
+        <select
+          id="conn-configAlias"
+          value={form.configAlias}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? "conn-configAlias-error" : undefined}
+          onChange={(e) => pickConfigHost(e.target.value)}
+        >
+          <option value="">
+            {configHosts === null ? "Loading…" : "Choose a host…"}
+          </option>
+          {known.map((h) => (
+            <option key={h.alias} value={h.alias}>
+              {h.alias}
+            </option>
+          ))}
+          {missing && (
+            <option value={form.configAlias}>
+              {form.configAlias} (not in your config)
+            </option>
+          )}
+        </select>
+        {error && (
+          <small id="conn-configAlias-error" className={styles.fieldError}>
+            {error}
+          </small>
+        )}
+        {!error && picked && (
+          <small className={styles.hint}>
+            {picked.identityFiles.length > 0
+              ? `Keys: ${picked.identityFiles.map(baseName).join(", ")}`
+              : "No IdentityFile: uses your SSH agent"}
+            {picked.proxyJump ? ` · via ${picked.proxyJump}` : ""}
+          </small>
+        )}
+        {!error && configHosts?.length === 0 && (
+          <small className={styles.hint}>
+            {configError ?? "No hosts found in ~/.ssh/config."}
+          </small>
+        )}
+      </div>
+    );
+  }
+
+  /** The optional jump host: none, a saved connection, a config host, or typed. */
+  function jumpField() {
+    const error = errors.jumpCustom;
+    const others = profiles.filter((p) => p.id !== editing?.id);
+    const aliases = (configHosts ?? []).map((h) => h.alias);
+    const choice = form.jumpChoice;
+    const unknownProfile =
+      choice.startsWith("profile:") &&
+      !others.some((p) => `profile:${p.id}` === choice);
+    const unknownAlias =
+      choice.startsWith("alias:") &&
+      !aliases.includes(choice.slice("alias:".length));
+    const configJump =
+      form.authKind === "sshConfigHost" && choice === ""
+        ? configHosts?.find((h) => h.alias === form.configAlias)?.proxyJump
+        : null;
+    return (
+      <div className={styles.field}>
+        <label htmlFor="conn-jump">Jump host (optional)</label>
+        <select
+          id="conn-jump"
+          value={choice}
+          onChange={(e) => field("jumpChoice", e.target.value as JumpChoice)}
+        >
+          <option value="">None: connect directly</option>
+          {others.length > 0 && (
+            <optgroup label="Saved connections">
+              {others.map((p) => (
+                <option key={p.id} value={`profile:${p.id}`}>
+                  {p.name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {aliases.length > 0 && (
+            <optgroup label="SSH config hosts">
+              {aliases.map((a) => (
+                <option key={a} value={`alias:${a}`}>
+                  {a}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {unknownProfile && (
+            <option value={choice}>(deleted connection)</option>
+          )}
+          {unknownAlias && (
+            <option value={choice}>{choice.slice("alias:".length)}</option>
+          )}
+          <option value="custom">Other host…</option>
+        </select>
+        {choice === "custom" && (
+          <input
+            id="conn-jumpCustom"
+            className={styles.below}
+            aria-label="Jump host address"
+            value={form.jumpCustom}
+            placeholder="user@bastion.example.com:22"
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "conn-jumpCustom-error" : undefined}
+            onChange={(e) => field("jumpCustom", e.target.value)}
+            {...PLAIN_INPUT}
+          />
+        )}
+        {error && (
+          <small id="conn-jumpCustom-error" className={styles.fieldError}>
+            {error}
+          </small>
+        )}
+        {!error && (
+          <small className={styles.hint}>
+            {configJump
+              ? `~/.ssh/config already jumps via ${configJump}.`
+              : "Reach the server through another SSH host (ProxyJump)."}
           </small>
         )}
       </div>
@@ -218,11 +418,7 @@ export function ConnectionForm() {
               </button>
             ))}
           </div>
-          <small className={styles.hint}>
-            {form.authKind === "password"
-              ? "You enter the password each time you connect; it is never stored."
-              : "A passphrase-protected key asks for its passphrase when connecting."}
-          </small>
+          <small className={styles.hint}>{AUTH_HINTS[form.authKind]}</small>
         </div>
 
         {form.authKind === "keyFile" && (
@@ -251,9 +447,31 @@ export function ConnectionForm() {
           </div>
         )}
 
+        {form.authKind === "sshConfigHost" && configHostField()}
+
         {textField("startDir", "Start folder (optional)", {
           placeholder: "Your home folder on the server",
         })}
+
+        {jumpField()}
+
+        {editing && editing.auth.kind !== "agent" && (
+          <div className={styles.forgetRow}>
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void forgetSecrets()}
+              disabled={busy !== null || forgotten}
+            >
+              Forget saved password and passphrase
+            </button>
+            {forgotten && (
+              <small className={styles.hint} role="status">
+                Removed from your keychain.
+              </small>
+            )}
+          </div>
+        )}
 
         {saveError && (
           <p className={styles.saveError} role="alert">

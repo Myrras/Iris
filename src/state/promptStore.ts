@@ -29,10 +29,18 @@ export type PromptRequest =
       secret: SecretKind;
       profile: ConnectionProfile;
       /**
-       * Connect with `value`. Resolves when the prompt may close; rejects
-       * with an `IpcError` to keep it open and show the message.
+       * Why it asks although a secret may be saved (e.g. the saved password
+       * was not accepted); shown above the field.
        */
-      attempt: (value: string) => Promise<void>;
+      notice?: string;
+      /** Whether "Remember in keychain" starts ticked. */
+      rememberByDefault?: boolean;
+      /**
+       * Connect with `value` (stored in the keychain afterwards when
+       * `remember`). Resolves when the prompt may close; rejects with an
+       * `IpcError` to keep it open and show the message.
+       */
+      attempt: (value: string, remember: boolean) => Promise<void>;
       /** The user dismissed the prompt without connecting. */
       onCancel: () => void;
     }

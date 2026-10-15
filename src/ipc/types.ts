@@ -39,10 +39,25 @@ export type HostKeyRequestId = string;
 /**
  * How a profile authenticates (`iris_core::AuthMethod`), tagged by `kind`.
  * Never holds a secret: passwords and key passphrases are passed to
- * `connect` per attempt. Phase 2 adds `agent` and `sshConfigHost`.
+ * `connect` per attempt or remembered in the OS keychain.
+ *
+ * - `agent`: each identity of the running SSH agent in turn.
+ * - `sshConfigHost`: everything as `~/.ssh/config` says for `alias`, at
+ *   connect time (its HostName/User/Port win over the profile's fields; its
+ *   IdentityFiles, then the agent; its ProxyJump unless `jump` is set).
  */
 export type AuthMethod =
-  { kind: "password" } | { kind: "keyFile"; path: string };
+  | { kind: "password" }
+  | { kind: "keyFile"; path: string }
+  | { kind: "agent" }
+  | { kind: "sshConfigHost"; alias: string };
+
+/**
+ * The jump host a profile is reached through (`iris_core::JumpHost`): another
+ * saved connection, or a `~/.ssh/config` alias / `[user@]host[:port]`.
+ */
+export type JumpHost =
+  { kind: "profile"; profileId: ProfileId } | { kind: "alias"; alias: string };
 
 /** A saved connection (`iris_core::ConnectionProfile`). */
 export interface ConnectionProfile {
@@ -56,20 +71,40 @@ export interface ConnectionProfile {
   auth: AuthMethod;
   /** Remote folder to open after connecting; `null` = the login folder. */
   startDir: string | null;
+  /** Reach the host through this jump host; `null` = directly. */
+  jump: JumpHost | null;
 }
 
 /**
- * What `saveProfile` accepts: a profile whose `id` (omit for a new one) and
- * `port` (defaults to 22) are optional.
+ * What `saveProfile` accepts: a profile whose `id` (omit for a new one),
+ * `port` (defaults to 22), `startDir` and `jump` are optional.
  */
 export type ConnectionProfileInput = Omit<
   ConnectionProfile,
-  "id" | "port" | "startDir"
+  "id" | "port" | "startDir" | "jump"
 > & {
   id?: ProfileId;
   port?: number;
   startDir?: string | null;
+  jump?: JumpHost | null;
 };
+
+/** Which remembered secret of a profile (`iris_core::SecretKind`). */
+export type SecretKind = "password" | "passphrase";
+
+/** One `~/.ssh/config` host, resolved (`iris_core::SshConfigHost`). */
+export interface SshConfigHost {
+  /** The name after `Host`. */
+  alias: string;
+  /** `HostName`; `null` when unset (the alias is then the host). */
+  hostName: string | null;
+  user: string | null;
+  port: number | null;
+  /** `IdentityFile`s, `~` and tokens expanded. */
+  identityFiles: string[];
+  /** Raw `ProxyJump` list; `null` when unset or `none`. */
+  proxyJump: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // Browsing (`iris_core::fs`)
@@ -162,8 +197,12 @@ export type IpcErrorKind =
   | "permissionDenied"
   | "connectFailed"
   | "authFailed"
+  | "passwordRequired"
   | "passphraseRequired"
   | "keyFile"
+  | "agent"
+  | "keychain"
+  | "jumpHost"
   | "hostKeyChanged"
   | "hostKeyRejected"
   | "notConnected"

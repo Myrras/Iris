@@ -11,6 +11,7 @@ const profile: ConnectionProfile = {
   user: "alice",
   auth: { kind: "password" },
   startDir: null,
+  jump: null,
 };
 
 function hostKey(
