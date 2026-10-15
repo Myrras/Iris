@@ -8,8 +8,10 @@ import { invoke } from "@tauri-apps/api/core";
 
 import {
   answerHostKey,
+  chmod,
   clearSecret,
   connect,
+  deletePaths,
   deleteProfile,
   disconnect,
   getSettings,
@@ -17,7 +19,10 @@ import {
   listDir,
   listProfiles,
   listSshConfigHosts,
+  mkdir,
+  preview,
   readLink,
+  rename,
   saveProfile,
   saveSettings,
   setSecret,
@@ -125,6 +130,50 @@ describe("connection and session commands", () => {
       path: "/srv/link",
     });
     expect(invoke).toHaveBeenCalledWith("home_dir", { target });
+  });
+});
+
+describe("file operation commands", () => {
+  beforeEach(() => vi.mocked(invoke).mockClear());
+  const target: FsTarget = { kind: "remote", sessionId: "s-1" };
+
+  it("names the commands like the Rust handlers with camelCase keys", async () => {
+    await mkdir(target, "/srv/new");
+    await rename(target, "/srv/a", "/srv/b");
+    await deletePaths(target, ["/srv/a", "/srv/b"]);
+    await preview(target, "/srv/a.txt", 1024);
+    expect(invoke).toHaveBeenCalledWith("mkdir", { target, path: "/srv/new" });
+    expect(invoke).toHaveBeenCalledWith("rename", {
+      target,
+      from: "/srv/a",
+      to: "/srv/b",
+    });
+    expect(invoke).toHaveBeenCalledWith("delete", {
+      target,
+      paths: ["/srv/a", "/srv/b"],
+    });
+    expect(invoke).toHaveBeenCalledWith("preview", {
+      target,
+      path: "/srv/a.txt",
+      maxBytes: 1024,
+    });
+  });
+
+  it("sends chmod non-recursive unless asked", async () => {
+    await chmod(target, ["/srv/a"], 0o755);
+    expect(invoke).toHaveBeenLastCalledWith("chmod", {
+      target,
+      paths: ["/srv/a"],
+      mode: 0o755,
+      recursive: false,
+    });
+    await chmod(target, ["/srv/d"], 0o700, true);
+    expect(invoke).toHaveBeenLastCalledWith("chmod", {
+      target,
+      paths: ["/srv/d"],
+      mode: 0o700,
+      recursive: true,
+    });
   });
 });
 

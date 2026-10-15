@@ -5,10 +5,13 @@
  * mounts the rows on screen.
  *
  * Purely presentational: entries arrive filtered and sorted, selection and
- * cursor come from the pane store, and every interaction is a callback.
+ * cursor come from the pane store, and every interaction is a callback. The
+ * entry being renamed shows an inline name field (Finder-style: the name
+ * without its extension is preselected; Enter or leaving the field commits,
+ * Escape cancels).
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createColumnHelper,
   flexRender,
@@ -22,6 +25,7 @@ import type { Entry } from "../ipc/types";
 import { formatModified, formatModifiedFull } from "../lib/dateFormat";
 import { isDirLike, type SortKey, type SortSpec } from "../lib/entries";
 import { formatPermissions, formatSize } from "../lib/fileFormat";
+import { renameSelection } from "../lib/fileName";
 import {
   ChevronDownIcon,
   ChevronUpIcon,
@@ -68,6 +72,77 @@ function NameCell({ entry }: { entry: Entry }) {
           role="img"
         />
       )}
+    </span>
+  );
+}
+
+/**
+ * The inline name field. Commits once: Enter, or focus leaving the field
+ * (as in Finder); Escape cancels. `byKey` tells the table to take the focus
+ * back so the keyboard keeps working in the list.
+ */
+function RenameField({
+  entry,
+  onCommit,
+  onCancel,
+}: {
+  entry: Entry;
+  onCommit: (name: string, byKey: boolean) => void;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState(entry.name);
+  const ref = useRef<HTMLInputElement>(null);
+  const done = useRef(false);
+  const Glyph = isDirLike(entry) ? FolderIcon : FileIcon;
+
+  useEffect(() => {
+    const input = ref.current;
+    if (!input) return;
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(...renameSelection(entry.name, isDirLike(entry)));
+    // Only on mount: re-selecting while the user types would fight them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function finish(commit: boolean, byKey: boolean) {
+    if (done.current) return;
+    done.current = true;
+    if (commit) onCommit(draft, byKey);
+    else onCancel();
+  }
+
+  return (
+    <span className={styles.name}>
+      <Glyph
+        className={styles.kindIcon}
+        data-dir={isDirLike(entry) ? "true" : undefined}
+      />
+      <input
+        ref={ref}
+        className={styles.renameInput}
+        value={draft}
+        aria-label={`Rename ${entry.name}`}
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        onChange={(e) => setDraft(e.target.value)}
+        // The row's click/double-click (select, open) must not see these.
+        onClick={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") {
+            e.preventDefault();
+            finish(true, true);
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            finish(false, true);
+          }
+        }}
+        onBlur={() => finish(true, false)}
+      />
     </span>
   );
 }
@@ -132,6 +207,14 @@ interface FileTableProps {
   /** Arrow keys: move the cursor `delta` rows; Shift extends the selection. */
   onMove: (delta: number, extend: boolean) => void;
   onSelectAll: () => void;
+  /** Enter on the cursor entry; opens it unless set (macOS renames). */
+  onEnter?: (entry: Entry) => void;
+  /** Right-click on an entry, or on the empty area (`null`). */
+  onContextMenu?: (entry: Entry | null, e: React.MouseEvent) => void;
+  /** The entry shown with an inline name field, by path. */
+  editing?: string | null;
+  onRenameCommit?: (entry: Entry, name: string) => void;
+  onRenameCancel?: () => void;
   /** Accessible name, e.g. "Remote files list". */
   label: string;
   /** Shown instead of rows when `entries` is empty. */
@@ -148,6 +231,11 @@ export function FileTable({
   onOpen,
   onMove,
   onSelectAll,
+  onEnter,
+  onContextMenu,
+  editing = null,
+  onRenameCommit,
+  onRenameCancel,
   label,
   emptyText,
 }: FileTableProps) {
@@ -196,18 +284,22 @@ export function FileTable({
     if (cursorIndex >= 0) virtualizer.scrollToIndex(cursorIndex);
   }, [cursorIndex, virtualizer]);
 
+  // Keys this table does not handle (Cmd+arrows included) bubble on to the
+  // pane, which owns the file-operation shortcuts.
   function onKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !e.metaKey) {
       e.preventDefault();
       onMove(e.key === "ArrowDown" ? 1 : -1, e.shiftKey);
     } else if (e.key === "Enter" && cursorIndex >= 0) {
       e.preventDefault();
-      onOpen(entries[cursorIndex]);
+      (onEnter ?? onOpen)(entries[cursorIndex]);
     } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
       e.preventDefault();
       onSelectAll();
     }
   }
+
+  const refocus = () => scrollRef.current?.focus({ preventScroll: true });
 
   const headers = table.getHeaderGroups()[0]?.headers ?? [];
 
@@ -221,6 +313,10 @@ export function FileTable({
       aria-multiselectable="true"
       tabIndex={0}
       onKeyDown={onKeyDown}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onContextMenu?.(null, e);
+      }}
       style={
         {
           "--cols": gridTemplate,
@@ -308,10 +404,17 @@ export function FileTable({
                 })
               }
               onDoubleClick={() => onOpen(entry)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onContextMenu?.(entry, e);
+              }}
             >
               {row.getVisibleCells().map((cell) => {
                 const meta = cell.column.columnDef.meta as
                   ColumnMeta | undefined;
+                const renaming =
+                  cell.column.id === "name" && editing === entry.path;
                 return (
                   <div
                     key={cell.id}
@@ -320,7 +423,21 @@ export function FileTable({
                     data-align={meta?.align}
                     data-mono={meta?.mono ? "true" : undefined}
                   >
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    {renaming ? (
+                      <RenameField
+                        entry={entry}
+                        onCommit={(name, byKey) => {
+                          onRenameCommit?.(entry, name);
+                          if (byKey) refocus();
+                        }}
+                        onCancel={() => {
+                          onRenameCancel?.();
+                          refocus();
+                        }}
+                      />
+                    ) : (
+                      flexRender(cell.column.columnDef.cell, cell.getContext())
+                    )}
                   </div>
                 );
               })}

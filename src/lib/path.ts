@@ -42,3 +42,22 @@ export function parentPath(path: string): string | null {
   const segments = pathSegments(path);
   return segments.length > 1 ? segments[segments.length - 2].path : null;
 }
+
+/** The separator `path` uses: `\` for a pure Windows path, else `/`. */
+function separatorOf(path: string): string {
+  return path.includes("\\") && !path.includes("/") ? "\\" : "/";
+}
+
+/** `name` inside the folder `parent`, with the folder's own separator. */
+export function joinPath(parent: string, name: string): string {
+  const sep = separatorOf(parent);
+  return parent.endsWith("/") || parent.endsWith("\\")
+    ? `${parent}${name}`
+    : `${parent}${sep}${name}`;
+}
+
+/** The last segment of `path` (the root itself for a root). */
+export function baseName(path: string): string {
+  const segments = pathSegments(path);
+  return segments[segments.length - 1]?.name ?? path;
+}

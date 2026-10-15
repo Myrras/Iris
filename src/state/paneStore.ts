@@ -7,16 +7,30 @@
  * replaces the pane's contents once it arrived, so a failed navigation leaves
  * the current folder in place. Responses are tokened per pane, so a slow
  * listing can never overwrite a newer one.
+ *
+ * The file operations (new folder, rename, delete, chmod) live here too: each
+ * calls the backend, then re-reads the folder so the pane mirrors the disk.
  */
 
 import { create } from "zustand";
 
-import { homeDir, listDir, toIpcError } from "../ipc/commands";
-import type { Entry, FsTarget } from "../ipc/types";
+import {
+  chmod as chmodPaths,
+  deletePaths,
+  homeDir,
+  listDir,
+  mkdir,
+  rename as renamePath,
+  toIpcError,
+} from "../ipc/commands";
+import type { BatchReport, Entry, FsTarget, IpcError } from "../ipc/types";
 import { DEFAULT_SORT, type SortKey, type SortSpec } from "../lib/entries";
-import { parentPath } from "../lib/path";
+import { NEW_FOLDER_NAME, nameError, uniqueName } from "../lib/fileName";
+import { formatOctalMode } from "../lib/mode";
+import { baseName, joinPath, parentPath } from "../lib/path";
+import { isWindows } from "../lib/platform";
 import type { SelectionState } from "../lib/selection";
-import { toastError } from "./toastStore";
+import { toastError, toastSuccess } from "./toastStore";
 
 export type PaneId = "local" | "remote";
 
@@ -35,6 +49,8 @@ export interface PaneState extends SelectionState {
   filter: string;
   /** `null` follows the "show hidden files" setting; a toggle overrides it. */
   showHidden: boolean | null;
+  /** The entry being renamed inline, by path. */
+  editing: string | null;
 }
 
 export function initialPane(): PaneState {
@@ -48,11 +64,46 @@ export function initialPane(): PaneState {
     sort: DEFAULT_SORT,
     filter: "",
     showHidden: null,
+    editing: null,
     selection: [],
     anchor: null,
     cursor: null,
   };
 }
+
+/**
+ * The entry the pane is "on" (what Preview shows): the keyboard cursor when
+ * it is selected, else the last selected entry.
+ */
+export function focusedEntry(pane: PaneState): Entry | null {
+  const { cursor, selection, entries } = pane;
+  const path =
+    cursor && selection.includes(cursor)
+      ? cursor
+      : selection[selection.length - 1];
+  return path ? (entries.find((e) => e.path === path) ?? null) : null;
+}
+
+/**
+ * What an action applies to: the selected entries in listing order, or the
+ * cursor entry when nothing is selected.
+ */
+export function actionTargets(pane: PaneState): Entry[] {
+  if (pane.selection.length > 0) {
+    const selected = new Set(pane.selection);
+    return pane.entries.filter((e) => selected.has(e.path));
+  }
+  const cursor = pane.entries.find((e) => e.path === pane.cursor);
+  return cursor ? [cursor] : [];
+}
+
+/** "1 item" / "3 items". */
+export function itemCount(n: number): string {
+  return n === 1 ? "1 item" : `${n} items`;
+}
+
+/** Where local deletes go, in the platform's own words. */
+export const TRASH_NAME = isWindows ? "Recycle Bin" : "Trash";
 
 interface PaneStoreState {
   panes: Record<PaneId, PaneState>;
@@ -71,6 +122,30 @@ interface PaneStoreState {
   setSelection: (pane: PaneId, selection: SelectionState) => void;
   /** Detach the pane from its filesystem (the remote pane's welcome state). */
   close: (pane: PaneId) => void;
+
+  /** The pane the user last worked in (Preview follows it). */
+  active: PaneId;
+  setActive: (pane: PaneId) => void;
+
+  /**
+   * Create "untitled folder" (numbered when taken) in the current folder,
+   * select it and start renaming it.
+   */
+  newFolder: (pane: PaneId) => Promise<void>;
+  /** Start renaming the entry at `path` inline. */
+  startRename: (pane: PaneId, path: string) => void;
+  cancelRename: (pane: PaneId) => void;
+  /** Rename the entry at `from` to `name` in the same folder; it stays selected. */
+  commitRename: (pane: PaneId, from: string, name: string) => Promise<void>;
+  /** Delete `paths` (local: to the Trash; remote: permanently). */
+  remove: (pane: PaneId, paths: string[]) => Promise<void>;
+  /** Set the permission bits of `paths`, optionally recursively. */
+  chmod: (
+    pane: PaneId,
+    paths: string[],
+    mode: number,
+    recursive: boolean,
+  ) => Promise<void>;
 }
 
 /** Latest request per pane; an older response is dropped on arrival. */
@@ -81,6 +156,10 @@ type LoadMode = "push" | "replace" | "refresh";
 export const usePaneStore = create<PaneStoreState>((set, get) => {
   const patch = (pane: PaneId, p: Partial<PaneState>) =>
     set((s) => ({ panes: { ...s.panes, [pane]: { ...s.panes[pane], ...p } } }));
+
+  /** Select just `path` (it becomes the cursor and anchor). */
+  const selectOnly = (pane: PaneId, path: string) =>
+    patch(pane, { selection: [path], anchor: path, cursor: path });
 
   /**
    * List `path` and, if still the latest request, show it. Resolves `true`
@@ -110,6 +189,7 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
           selection: current.selection.filter((p) => exists.has(p)),
           anchor: keep(current.anchor),
           cursor: keep(current.cursor),
+          editing: keep(current.editing),
         });
       } else {
         const nextHistory =
@@ -124,6 +204,7 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
           error: null,
           history: nextHistory,
           filter: "",
+          editing: null,
           selection: [],
           anchor: null,
           cursor: null,
@@ -215,5 +296,128 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
       const { sort, showHidden } = get().panes[pane];
       patch(pane, { ...initialPane(), sort, showHidden });
     },
+
+    active: "local",
+    setActive: (pane) => {
+      if (get().active !== pane) set({ active: pane });
+    },
+
+    newFolder: async (pane) => {
+      const { target, path, entries } = get().panes[pane];
+      if (!target || path === null) return;
+      const taken = new Set(entries.map((e) => e.name));
+      // The listing can be stale: on a clash, take the next number.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const name = uniqueName(NEW_FOLDER_NAME, taken);
+        const created = joinPath(path, name);
+        try {
+          await mkdir(target, created);
+        } catch (e) {
+          const err = toIpcError(e);
+          if (err.kind === "alreadyExists") {
+            taken.add(name);
+            continue;
+          }
+          failed("Could not create a folder", err);
+          return;
+        }
+        selectOnly(pane, created);
+        // A filter could hide the new folder (and its name field).
+        patch(pane, { filter: "" });
+        await get().refresh(pane);
+        if (get().panes[pane].entries.some((e) => e.path === created)) {
+          patch(pane, { editing: created });
+        }
+        return;
+      }
+      toastError("Could not create a folder", "Every name tried is taken.");
+    },
+
+    startRename: (pane, path) => {
+      selectOnly(pane, path);
+      patch(pane, { editing: path });
+    },
+
+    cancelRename: (pane) => patch(pane, { editing: null }),
+
+    commitRename: async (pane, from, name) => {
+      patch(pane, { editing: null });
+      const { target } = get().panes[pane];
+      const parent = parentPath(from);
+      if (!target || parent === null || name === baseName(from)) return;
+      const invalid = nameError(name);
+      if (invalid) {
+        toastError(`Could not rename ${baseName(from)}`, invalid);
+        return;
+      }
+      const to = joinPath(parent, name);
+      try {
+        await renamePath(target, from, to);
+      } catch (e) {
+        failed(`Could not rename ${baseName(from)}`, toIpcError(e));
+        return;
+      }
+      // Select the new name first, so the refresh keeps it selected.
+      selectOnly(pane, to);
+      await get().refresh(pane);
+    },
+
+    remove: async (pane, paths) => {
+      const { target } = get().panes[pane];
+      if (!target || paths.length === 0) return;
+      let report: BatchReport;
+      try {
+        report = await deletePaths(target, paths);
+      } catch (e) {
+        failed(`Could not delete ${itemCount(paths.length)}`, toIpcError(e));
+        await get().refresh(pane);
+        return;
+      }
+      await get().refresh(pane);
+      const done = report.succeeded.length;
+      if (done > 0) {
+        toastSuccess(
+          target.kind === "local"
+            ? `Moved ${itemCount(done)} to the ${TRASH_NAME}`
+            : `Deleted ${itemCount(done)}`,
+        );
+      }
+      reportFailures("delete", report);
+    },
+
+    chmod: async (pane, paths, mode, recursive) => {
+      const { target } = get().panes[pane];
+      if (!target || paths.length === 0) return;
+      let report: BatchReport;
+      try {
+        report = await chmodPaths(target, paths, mode, recursive);
+      } catch (e) {
+        failed("Could not change permissions", toIpcError(e));
+        return;
+      }
+      await get().refresh(pane);
+      if (report.succeeded.length > 0) {
+        toastSuccess(
+          `Permissions set to ${formatOctalMode(mode)} on ${itemCount(report.succeeded.length)}`,
+        );
+      }
+      reportFailures("change permissions of", report);
+    },
   };
 });
+
+/** Toast a failed operation, except a lost session (the pane shows that). */
+function failed(title: string, err: IpcError) {
+  if (err.kind !== "notConnected") toastError(title, err.message);
+}
+
+/** One toast for a batch's failures: the first reason, and how many failed. */
+function reportFailures(verb: string, report: BatchReport) {
+  const first = report.failed[0];
+  if (!first) return;
+  const title =
+    report.failed.length === 1
+      ? `Could not ${verb} ${baseName(first.path)}`
+      : `Could not ${verb} ${itemCount(report.failed.length)}`;
+  toastError(title, first.message);
+}

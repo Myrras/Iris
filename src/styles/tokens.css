@@ -93,6 +93,7 @@
   --sidebar-w: 280px;
   --tabbar-h: 38px;
   --statusbar-h: 28px;
+  --checker-size: 16px; /* image preview checkerboard tile */
 
   /* Repeating animations that are not state transitions (spinner, pulsing
      status dots) — kept off the --dur-* scale on purpose. */

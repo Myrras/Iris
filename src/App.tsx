@@ -3,7 +3,8 @@
  *
  * Layout: a slim title bar on the canvas; below it the sidebar island on the
  * left and the work column on the right — the Local and Remote pane islands
- * side by side, with the collapsible transfer island underneath. This
+ * side by side with the collapsible preview island at their right, and the
+ * collapsible transfer island underneath. This
  * component also owns the app-level wiring: the backend connection events
  * (`useCoreEvents`), opening the local pane, settings access (native menu on
  * macOS, title-bar gear elsewhere), the close-warning event, and suppressing
@@ -22,6 +23,7 @@ import { CloseWarningModal } from "./components/CloseWarningModal";
 import { ConnectionForm } from "./components/ConnectionForm";
 import { LogoMark } from "./components/LogoMark";
 import { Pane } from "./components/Pane";
+import { PreviewPanel } from "./components/PreviewPanel";
 import { PromptHost } from "./components/PromptHost";
 import { SettingsModal } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
@@ -175,6 +177,7 @@ export default function App() {
           <div className={styles.panes}>
             <Pane id="local" title="Local" Icon={LocalIcon} />
             <Pane id="remote" title="Remote" Icon={ServerIcon} />
+            <PreviewPanel />
           </div>
           <TransferPanel />
         </main>

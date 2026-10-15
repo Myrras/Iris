@@ -1,0 +1,212 @@
+/* The preview island: same chrome as the panes. */
+.panel {
+  width: 340px;
+  flex-shrink: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  animation: islandIn var(--dur-3) var(--ease-out);
+}
+
+/* Collapsed: a slim island holding just the expand button. */
+.collapsed {
+  width: 36px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: var(--sp-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  animation: islandIn var(--dur-3) var(--ease-out);
+}
+
+/* The panes' section-header look. */
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--tabbar-h);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.icon {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.subtitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.tool {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  margin-left: auto;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+}
+
+.tool:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border: none;
+  color: var(--text);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.loading {
+  margin: var(--sp-4);
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+}
+
+.note {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  text-align: center;
+  animation: fadeIn var(--dur-3) var(--ease-out);
+}
+
+.noteIcon {
+  color: var(--text-faint);
+}
+
+.noteTitle {
+  margin: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.noteText {
+  margin: 0;
+  max-width: 260px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.textWrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  animation: fadeIn var(--dur-2) var(--ease-out);
+}
+
+.notice {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: var(--fs-xs);
+}
+
+.text {
+  margin: 0;
+  padding: var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-ligatures: none;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  tab-size: 4;
+}
+
+.figure {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-3);
+  animation: fadeIn var(--dur-2) var(--ease-out);
+}
+
+/* Transparent pixels show a checkerboard in the theme's surface tones. */
+.checker {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background-color: var(--surface);
+  background-image: conic-gradient(
+    var(--surface-2) 25%,
+    transparent 0 50%,
+    var(--surface-2) 0 75%,
+    transparent 0
+  );
+  background-size: var(--checker-size) var(--checker-size);
+  overflow: hidden;
+}
+
+.image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.caption {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+@keyframes islandIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+}

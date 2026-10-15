@@ -9,6 +9,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  BatchReport,
   ConnectionProfile,
   ConnectionProfileInput,
   Entry,
@@ -16,6 +17,7 @@ import type {
   HostKeyRequestId,
   IpcError,
   IrisSettings,
+  Preview,
   ProfileId,
   SecretKind,
   SessionId,
@@ -180,6 +182,61 @@ export function readLink(target: FsTarget, path: string): Promise<string> {
 /** The home folder (local) or login folder (remote), absolute. */
 export function homeDir(target: FsTarget): Promise<string> {
   return invoke("home_dir", { target });
+}
+
+// ---------------------------------------------------------------------------
+// File operations
+// ---------------------------------------------------------------------------
+
+/** Create a folder; rejects with `alreadyExists` when the name is taken. */
+export function mkdir(target: FsTarget, path: string): Promise<void> {
+  return invoke("mkdir", { target, path });
+}
+
+/**
+ * Rename `from` to `to` (full paths). Never overwrites: rejects with
+ * `alreadyExists` when `to` is taken.
+ */
+export function rename(
+  target: FsTarget,
+  from: string,
+  to: string,
+): Promise<void> {
+  return invoke("rename", { target, from, to });
+}
+
+/**
+ * Delete each path (folders with their contents, symlinks themselves).
+ * Local entries go to the Trash; remote ones are deleted permanently.
+ * Per-path failures come back in the report; a lost session rejects.
+ */
+export function deletePaths(
+  target: FsTarget,
+  paths: string[],
+): Promise<BatchReport> {
+  return invoke("delete", { target, paths });
+}
+
+/**
+ * Set the permission bits (`0`–`0o7777`) of each path; `recursive` also
+ * changes everything inside folders (symlinks skipped).
+ */
+export function chmod(
+  target: FsTarget,
+  paths: string[],
+  mode: number,
+  recursive = false,
+): Promise<BatchReport> {
+  return invoke("chmod", { target, paths, mode, recursive });
+}
+
+/** Preview a file, reading at most `maxBytes` (text at most 1 MiB). */
+export function preview(
+  target: FsTarget,
+  path: string,
+  maxBytes: number,
+): Promise<Preview> {
+  return invoke("preview", { target, path, maxBytes });
 }
 
 // ---------------------------------------------------------------------------

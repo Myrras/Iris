@@ -174,3 +174,11 @@
     transform: rotate(360deg);
   }
 }
+
+/* Toolbar + table; catches the pane's keyboard shortcuts. */
+.browser {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}

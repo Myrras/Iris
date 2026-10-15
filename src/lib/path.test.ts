@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parentPath, pathSegments } from "./path";
+import { baseName, joinPath, parentPath, pathSegments } from "./path";
 
 describe("pathSegments", () => {
   it("splits a POSIX path into clickable segments", () => {
@@ -52,5 +52,20 @@ describe("parentPath", () => {
     expect(parentPath("/")).toBeNull();
     expect(parentPath("C:\\")).toBeNull();
     expect(parentPath("data")).toBeNull();
+  });
+});
+
+describe("joinPath / baseName", () => {
+  it("joins with the parent's separator", () => {
+    expect(joinPath("/srv", "a")).toBe("/srv/a");
+    expect(joinPath("/", "a")).toBe("/a");
+    expect(joinPath("C:\\Users\\alice", "a")).toBe("C:\\Users\\alice\\a");
+    expect(joinPath("C:\\", "a")).toBe("C:\\a");
+  });
+
+  it("takes the last segment", () => {
+    expect(baseName("/srv/data/report.pdf")).toBe("report.pdf");
+    expect(baseName("C:\\Users\\alice")).toBe("alice");
+    expect(baseName("/")).toBe("/");
   });
 });

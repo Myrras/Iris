@@ -161,4 +161,109 @@ describe("FileTable", () => {
     renderTable([]);
     expect(screen.getByText("This folder is empty.")).toBeInTheDocument();
   });
+
+  describe("inline rename", () => {
+    it("preselects the name without its extension and commits on Enter", () => {
+      const onRenameCommit = vi.fn();
+      const handlers = renderTable([entry("report.pdf")], {
+        editing: "/srv/report.pdf",
+        onRenameCommit,
+        onRenameCancel: vi.fn(),
+      });
+      const input =
+        screen.getByLabelText<HTMLInputElement>("Rename report.pdf");
+      expect(input).toHaveFocus();
+      expect([input.selectionStart, input.selectionEnd]).toEqual([0, 6]);
+
+      fireEvent.change(input, { target: { value: "summary.pdf" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onRenameCommit).toHaveBeenCalledWith(
+        expect.objectContaining({ path: "/srv/report.pdf" }),
+        "summary.pdf",
+      );
+      // The grid's own Enter (open) never saw the key, and the list has the
+      // focus back.
+      expect(handlers.onOpen).not.toHaveBeenCalled();
+      expect(screen.getByRole("grid")).toHaveFocus();
+    });
+
+    it("cancels on Escape and commits only once", () => {
+      const onRenameCommit = vi.fn();
+      const onRenameCancel = vi.fn();
+      renderTable([entry("a.txt")], {
+        editing: "/srv/a.txt",
+        onRenameCommit,
+        onRenameCancel,
+      });
+      const input = screen.getByLabelText("Rename a.txt");
+      fireEvent.keyDown(input, { key: "Escape" });
+      fireEvent.blur(input);
+      expect(onRenameCancel).toHaveBeenCalledTimes(1);
+      expect(onRenameCommit).not.toHaveBeenCalled();
+    });
+
+    it("commits when the field loses focus (as in Finder)", () => {
+      const onRenameCommit = vi.fn();
+      renderTable([entry("a.txt")], {
+        editing: "/srv/a.txt",
+        onRenameCommit,
+        onRenameCancel: vi.fn(),
+      });
+      const input = screen.getByLabelText("Rename a.txt");
+      fireEvent.change(input, { target: { value: "b.txt" } });
+      fireEvent.blur(input);
+      expect(onRenameCommit).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "a.txt" }),
+        "b.txt",
+      );
+    });
+
+    it("keeps clicks in the field away from the row", () => {
+      const handlers = renderTable([entry("a.txt")], {
+        editing: "/srv/a.txt",
+        onRenameCommit: vi.fn(),
+        onRenameCancel: vi.fn(),
+      });
+      const input = screen.getByLabelText("Rename a.txt");
+      fireEvent.click(input);
+      fireEvent.doubleClick(input);
+      expect(handlers.onRowClick).not.toHaveBeenCalled();
+      expect(handlers.onOpen).not.toHaveBeenCalled();
+    });
+  });
+
+  it("uses onEnter instead of opening when given", () => {
+    const onEnter = vi.fn();
+    const handlers = renderTable([entry("a.txt")], {
+      cursor: "/srv/a.txt",
+      onEnter,
+    });
+    fireEvent.keyDown(screen.getByRole("grid"), { key: "Enter" });
+    expect(onEnter).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "a.txt" }),
+    );
+    expect(handlers.onOpen).not.toHaveBeenCalled();
+  });
+
+  it("reports right-clicks on a row and on the empty area", () => {
+    const onContextMenu = vi.fn();
+    renderTable([entry("a.txt")], { onContextMenu });
+    fireEvent.contextMenu(screen.getByText("a.txt"));
+    expect(onContextMenu).toHaveBeenLastCalledWith(
+      expect.objectContaining({ name: "a.txt" }),
+      expect.anything(),
+    );
+    fireEvent.contextMenu(screen.getByRole("grid"));
+    expect(onContextMenu).toHaveBeenLastCalledWith(null, expect.anything());
+    expect(onContextMenu).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves Cmd+arrows to the pane", () => {
+    const handlers = renderTable([entry("a.txt")]);
+    fireEvent.keyDown(screen.getByRole("grid"), {
+      key: "ArrowDown",
+      metaKey: true,
+    });
+    expect(handlers.onMove).not.toHaveBeenCalled();
+  });
 });

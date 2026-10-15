@@ -1,4 +1,7 @@
-/** Persistent shell layout: sidebar width and the transfer panel's collapse. */
+/**
+ * Persistent shell layout: sidebar width, the transfer panel's collapse and
+ * whether the preview island is open.
+ */
 
 import { create } from "zustand";
 
@@ -6,6 +9,8 @@ interface LayoutPersisted {
   sidebarWidth: number;
   /** Whether the bottom transfer island is collapsed to its header. */
   transfersCollapsed: boolean;
+  /** Whether the preview island right of the panes is expanded. */
+  previewOpen: boolean;
 }
 
 export const SIDEBAR_MIN_WIDTH = 160;
@@ -16,6 +21,7 @@ const STORAGE_KEY = "iris.layout";
 const DEFAULTS: LayoutPersisted = {
   sidebarWidth: 280,
   transfersCollapsed: false,
+  previewOpen: false,
 };
 
 function clampWidth(width: number): number {
@@ -33,6 +39,7 @@ function load(): LayoutPersisted {
           ? clampWidth(saved.sidebarWidth)
           : DEFAULTS.sidebarWidth,
       transfersCollapsed: saved.transfersCollapsed === true,
+      previewOpen: saved.previewOpen === true,
     };
   } catch {
     return { ...DEFAULTS };
@@ -41,7 +48,14 @@ function load(): LayoutPersisted {
 
 function persist(state: LayoutPersisted) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        sidebarWidth: state.sidebarWidth,
+        transfersCollapsed: state.transfersCollapsed,
+        previewOpen: state.previewOpen,
+      }),
+    );
   } catch {
     /* quota exceeded */
   }
@@ -50,22 +64,21 @@ function persist(state: LayoutPersisted) {
 interface LayoutState extends LayoutPersisted {
   setSidebarWidth: (width: number) => void;
   setTransfersCollapsed: (collapsed: boolean) => void;
+  setPreviewOpen: (open: boolean) => void;
+  togglePreview: () => void;
 }
 
-export const useLayoutStore = create<LayoutState>((set, get) => ({
-  ...load(),
-  setSidebarWidth: (width) => {
-    set({ sidebarWidth: clampWidth(width) });
-    persist({
-      sidebarWidth: get().sidebarWidth,
-      transfersCollapsed: get().transfersCollapsed,
-    });
-  },
-  setTransfersCollapsed: (collapsed) => {
-    set({ transfersCollapsed: collapsed });
-    persist({
-      sidebarWidth: get().sidebarWidth,
-      transfersCollapsed: collapsed,
-    });
-  },
-}));
+export const useLayoutStore = create<LayoutState>((set, get) => {
+  const update = (patch: Partial<LayoutPersisted>) => {
+    set(patch);
+    persist(get());
+  };
+  return {
+    ...load(),
+    setSidebarWidth: (width) => update({ sidebarWidth: clampWidth(width) }),
+    setTransfersCollapsed: (collapsed) =>
+      update({ transfersCollapsed: collapsed }),
+    setPreviewOpen: (open) => update({ previewOpen: open }),
+    togglePreview: () => update({ previewOpen: !get().previewOpen }),
+  };
+});

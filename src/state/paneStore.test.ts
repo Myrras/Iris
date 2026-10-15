@@ -4,13 +4,32 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/commands")>()),
   listDir: vi.fn(),
   homeDir: vi.fn(),
+  mkdir: vi.fn(),
+  rename: vi.fn(),
+  deletePaths: vi.fn(),
+  chmod: vi.fn(),
 }));
-vi.mock("./toastStore", () => ({ toastError: vi.fn() }));
+vi.mock("./toastStore", () => ({
+  toastError: vi.fn(),
+  toastSuccess: vi.fn(),
+}));
 
-import { homeDir, listDir } from "../ipc/commands";
+import {
+  chmod,
+  deletePaths,
+  homeDir,
+  listDir,
+  mkdir,
+  rename,
+} from "../ipc/commands";
 import type { Entry, FsTarget } from "../ipc/types";
-import { initialPane, usePaneStore } from "./paneStore";
-import { toastError } from "./toastStore";
+import {
+  actionTargets,
+  focusedEntry,
+  initialPane,
+  usePaneStore,
+} from "./paneStore";
+import { toastError, toastSuccess } from "./toastStore";
 
 const local: FsTarget = { kind: "local" };
 const remote: FsTarget = { kind: "remote", sessionId: "s-1" };
@@ -38,6 +57,7 @@ const pane = (id: "local" | "remote" = "local") =>
   usePaneStore.getState().panes[id];
 
 beforeEach(() => {
+  vi.clearAllMocks();
   usePaneStore.setState({
     panes: { local: initialPane(), remote: initialPane() },
   });
@@ -193,5 +213,169 @@ describe("paneStore", () => {
       path: null,
       entries: [],
     });
+  });
+});
+
+describe("paneStore file operations", () => {
+  /** A fake folder on "disk" the mocked IPC reads and changes. */
+  let disk: Entry[];
+
+  function dir(path: string): Entry {
+    return { ...file(path), kind: { type: "dir" } };
+  }
+
+  beforeEach(async () => {
+    disk = [file("/home/alice/notes.txt"), dir("/home/alice/untitled folder")];
+    vi.mocked(listDir).mockImplementation(async () => [...disk]);
+    vi.mocked(mkdir).mockImplementation(async (_t, path) => {
+      if (disk.some((e) => e.path === path))
+        throw { kind: "alreadyExists", message: `already exists: ${path}` };
+      disk.push(dir(path));
+    });
+    vi.mocked(rename).mockImplementation(async (_t, from, to) => {
+      disk = disk.map((e) =>
+        e.path === from
+          ? { ...e, path: to, name: to.split("/").pop() ?? to }
+          : e,
+      );
+    });
+    await usePaneStore.getState().open("local", local, null);
+  });
+
+  it("creates a numbered untitled folder, selects it and starts renaming", async () => {
+    await usePaneStore.getState().newFolder("local");
+    const created = "/home/alice/untitled folder 2";
+    expect(mkdir).toHaveBeenCalledWith(local, created);
+    expect(pane()).toMatchObject({
+      selection: [created],
+      cursor: created,
+      editing: created,
+    });
+    expect(pane().entries.map((e) => e.path)).toContain(created);
+  });
+
+  it("takes the next number when the listing was stale", async () => {
+    disk.push(dir("/home/alice/untitled folder 2")); // created elsewhere
+    await usePaneStore.getState().newFolder("local");
+    expect(mkdir).toHaveBeenCalledTimes(2);
+    expect(pane().editing).toBe("/home/alice/untitled folder 3");
+  });
+
+  it("renames in place and keeps the renamed entry selected", async () => {
+    const store = usePaneStore.getState();
+    store.startRename("local", "/home/alice/notes.txt");
+    expect(pane().editing).toBe("/home/alice/notes.txt");
+    await store.commitRename("local", "/home/alice/notes.txt", "ideas.txt");
+    expect(rename).toHaveBeenCalledWith(
+      local,
+      "/home/alice/notes.txt",
+      "/home/alice/ideas.txt",
+    );
+    expect(pane()).toMatchObject({
+      editing: null,
+      selection: ["/home/alice/ideas.txt"],
+      cursor: "/home/alice/ideas.txt",
+    });
+  });
+
+  it("does nothing for an unchanged name and refuses an invalid one", async () => {
+    const store = usePaneStore.getState();
+    await store.commitRename("local", "/home/alice/notes.txt", "notes.txt");
+    await store.commitRename("local", "/home/alice/notes.txt", "a/b");
+    expect(rename).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledTimes(1);
+  });
+
+  it("toasts a rename onto an existing name", async () => {
+    vi.mocked(rename).mockRejectedValueOnce({
+      kind: "alreadyExists",
+      message: "already exists: /home/alice/untitled folder",
+    });
+    await usePaneStore
+      .getState()
+      .commitRename("local", "/home/alice/notes.txt", "untitled folder");
+    expect(toastError).toHaveBeenCalledWith(
+      "Could not rename notes.txt",
+      "already exists: /home/alice/untitled folder",
+    );
+  });
+
+  it("deletes, refreshes and reports success and failures", async () => {
+    vi.mocked(deletePaths).mockImplementation(async () => {
+      disk = disk.filter((e) => e.path !== "/home/alice/notes.txt");
+      return {
+        succeeded: ["/home/alice/notes.txt"],
+        failed: [
+          {
+            path: "/home/alice/untitled folder",
+            kind: "permissionDenied",
+            message: "permission denied: /home/alice/untitled folder",
+          },
+        ],
+      };
+    });
+    await usePaneStore
+      .getState()
+      .remove("local", [
+        "/home/alice/notes.txt",
+        "/home/alice/untitled folder",
+      ]);
+    expect(pane().entries.map((e) => e.name)).toEqual(["untitled folder"]);
+    expect(toastSuccess).toHaveBeenCalledWith("Moved 1 item to the Trash");
+    expect(toastError).toHaveBeenCalledWith(
+      "Could not delete untitled folder",
+      "permission denied: /home/alice/untitled folder",
+    );
+  });
+
+  it("says Deleted for remote deletes", async () => {
+    vi.mocked(deletePaths).mockResolvedValue({
+      succeeded: ["/srv/a", "/srv/b"],
+      failed: [],
+    });
+    await usePaneStore.getState().open("remote", remote, "/srv");
+    await usePaneStore.getState().remove("remote", ["/srv/a", "/srv/b"]);
+    expect(deletePaths).toHaveBeenCalledWith(remote, ["/srv/a", "/srv/b"]);
+    expect(toastSuccess).toHaveBeenCalledWith("Deleted 2 items");
+  });
+
+  it("changes permissions and refreshes", async () => {
+    vi.mocked(chmod).mockResolvedValue({
+      succeeded: ["/home/alice/untitled folder"],
+      failed: [],
+    });
+    const calls = vi.mocked(listDir).mock.calls.length;
+    await usePaneStore
+      .getState()
+      .chmod("local", ["/home/alice/untitled folder"], 0o750, true);
+    expect(chmod).toHaveBeenCalledWith(
+      local,
+      ["/home/alice/untitled folder"],
+      0o750,
+      true,
+    );
+    expect(vi.mocked(listDir).mock.calls.length).toBe(calls + 1);
+    expect(toastSuccess).toHaveBeenCalledWith(
+      "Permissions set to 750 on 1 item",
+    );
+  });
+
+  it("derives the focused entry and the action targets", () => {
+    usePaneStore.getState().setSelection("local", {
+      selection: ["/home/alice/notes.txt"],
+      anchor: "/home/alice/notes.txt",
+      cursor: "/home/alice/notes.txt",
+    });
+    expect(focusedEntry(pane())?.name).toBe("notes.txt");
+    expect(actionTargets(pane()).map((e) => e.name)).toEqual(["notes.txt"]);
+    usePaneStore.getState().setSelection("local", {
+      selection: [],
+      anchor: null,
+      cursor: "/home/alice/untitled folder",
+    });
+    expect(focusedEntry(pane())).toBeNull();
+    expect(actionTargets(pane()).map((e) => e.name)).toEqual([
+      "untitled folder",
+    ]);
   });
 });

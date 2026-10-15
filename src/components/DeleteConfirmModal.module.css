@@ -1,0 +1,29 @@
+.lead {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+
+.names {
+  margin: var(--sp-3) 0 0;
+  padding-left: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.names li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.more {
+  list-style: none;
+  margin-left: calc(-1 * var(--sp-4));
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+}

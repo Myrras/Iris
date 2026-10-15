@@ -148,6 +148,48 @@ export interface Entry {
 }
 
 // ---------------------------------------------------------------------------
+// File operations and previews (`iris_core::fs`, `iris_core::preview`)
+// ---------------------------------------------------------------------------
+
+/** One path a batch operation could not handle (`iris_core::BatchFailure`). */
+export interface BatchFailure {
+  path: string;
+  /** The error kind, as an `IpcError` would carry it. */
+  kind: string;
+  /** App-owned, sanitized text. */
+  message: string;
+}
+
+/**
+ * Outcome of `delete` / `chmod` over several paths (`iris_core::BatchReport`):
+ * one failure does not stop the others.
+ */
+export interface BatchReport {
+  succeeded: string[];
+  failed: BatchFailure[];
+}
+
+/** A file preview (`iris_core::Preview`), tagged by `kind`. */
+export type Preview =
+  | {
+      kind: "text";
+      text: string;
+      /** Only the start of the file is in `text`. */
+      truncated: boolean;
+      totalSize: number;
+    }
+  | {
+      kind: "image";
+      /** `image/png`, `image/jpeg`, `image/gif`, `image/webp` or `image/svg+xml`. */
+      mime: string;
+      dataBase64: string;
+      totalSize: number;
+    }
+  | { kind: "binary"; totalSize: number }
+  /** An image larger than the preview size limit. */
+  | { kind: "tooLarge"; totalSize: number };
+
+// ---------------------------------------------------------------------------
 // Session events (`iris_core::CoreEvent`)
 // ---------------------------------------------------------------------------
 
@@ -194,6 +236,7 @@ export type IpcErrorKind =
   | "config"
   | "invalidInput"
   | "notFound"
+  | "alreadyExists"
   | "permissionDenied"
   | "connectFailed"
   | "authFailed"

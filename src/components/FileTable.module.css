@@ -160,3 +160,22 @@
   font-size: var(--fs-sm);
   text-align: center;
 }
+
+/* Inline rename (Selene's rename field): fills the name cell. */
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  transition: box-shadow var(--dur-1) var(--ease-out);
+}
+
+.renameInput:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}

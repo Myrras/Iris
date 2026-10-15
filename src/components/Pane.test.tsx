@@ -11,13 +11,18 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/commands")>()),
   listDir: vi.fn(),
   homeDir: vi.fn(() => Promise.resolve("/home/alice")),
+  mkdir: vi.fn(() => Promise.resolve()),
+  rename: vi.fn(() => Promise.resolve()),
+  deletePaths: vi.fn(() => Promise.resolve({ succeeded: [], failed: [] })),
+  chmod: vi.fn(() => Promise.resolve({ succeeded: [], failed: [] })),
 }));
 vi.mock("../lib/connect", () => ({ connectProfile: vi.fn() }));
 
-import { listDir } from "../ipc/commands";
+import { chmod, deletePaths, listDir, mkdir, rename } from "../ipc/commands";
 import type { ConnectionProfile, Entry } from "../ipc/types";
 import { connectProfile } from "../lib/connect";
 import { useConnectionFormStore } from "../state/connectionFormStore";
+import { useLayoutStore } from "../state/layoutStore";
 import { initialPane, usePaneStore } from "../state/paneStore";
 import { useProfilesStore } from "../state/profilesStore";
 import { useSessionStore } from "../state/sessionStore";
@@ -67,6 +72,8 @@ const rowNames = () =>
     .map((r) => within(r).getAllByRole("gridcell")[0].textContent);
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  useLayoutStore.getState().setPreviewOpen(false);
   usePaneStore.setState({
     panes: { local: initialPane(), remote: initialPane() },
   });
@@ -206,5 +213,182 @@ describe("Pane", () => {
     await openLocal();
     fireEvent.doubleClick(screen.getByText("notes.txt"));
     expect(usePaneStore.getState().panes.local.path).toBe("/home/alice");
+  });
+
+  describe("file operations", () => {
+    const grid = () => screen.getByRole("grid");
+    const select = (name: string) => fireEvent.click(screen.getByText(name));
+
+    it("creates a folder from the toolbar and renames it inline", async () => {
+      await openLocal();
+      fireEvent.click(screen.getByRole("button", { name: "New folder" }));
+      await waitFor(() =>
+        expect(mkdir).toHaveBeenCalledWith(
+          { kind: "local" },
+          "/home/alice/untitled folder",
+        ),
+      );
+      // The listing now shows the new folder (the store re-reads it).
+      vi.mocked(listDir).mockResolvedValue([
+        ...HOME,
+        entry("/home/alice/untitled folder", { kind: { type: "dir" } }),
+      ]);
+      await usePaneStore.getState().refresh("local");
+      usePaneStore
+        .getState()
+        .startRename("local", "/home/alice/untitled folder");
+      const input = await screen.findByLabelText("Rename untitled folder");
+      fireEvent.change(input, { target: { value: "Reports" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() =>
+        expect(rename).toHaveBeenCalledWith(
+          { kind: "local" },
+          "/home/alice/untitled folder",
+          "/home/alice/Reports",
+        ),
+      );
+    });
+
+    it("starts a new folder with Ctrl+Shift+N", async () => {
+      await openLocal();
+      fireEvent.keyDown(grid(), { key: "N", ctrlKey: true, shiftKey: true });
+      await waitFor(() => expect(mkdir).toHaveBeenCalledTimes(1));
+    });
+
+    it("renames with F2 and cancels with Escape", async () => {
+      await openLocal();
+      select("notes.txt");
+      fireEvent.keyDown(grid(), { key: "F2" });
+      const input = await screen.findByLabelText("Rename notes.txt");
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(screen.queryByLabelText("Rename notes.txt")).toBeNull();
+      expect(usePaneStore.getState().panes.local.editing).toBeNull();
+      expect(rename).not.toHaveBeenCalled();
+    });
+
+    it("confirms a delete with Delete and says where it goes", async () => {
+      await openLocal();
+      select("notes.txt");
+      fireEvent.click(screen.getByText("todo.txt"), { metaKey: true });
+      fireEvent.keyDown(grid(), { key: "Delete" });
+      const dialog = await screen.findByRole("dialog");
+      expect(dialog).toHaveTextContent("Move 2 items to the Trash?");
+      expect(dialog).toHaveTextContent("notes.txt");
+      expect(deletePaths).not.toHaveBeenCalled();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Move to Trash" }),
+      );
+      await waitFor(() =>
+        expect(deletePaths).toHaveBeenCalledWith({ kind: "local" }, [
+          "/home/alice/notes.txt",
+          "/home/alice/todo.txt",
+        ]),
+      );
+    });
+
+    it("also deletes with Ctrl+Backspace, and Cancel deletes nothing", async () => {
+      await openLocal();
+      select("notes.txt");
+      fireEvent.keyDown(grid(), { key: "Backspace", ctrlKey: true });
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(deletePaths).not.toHaveBeenCalled();
+    });
+
+    it("toggles the preview with Space", async () => {
+      await openLocal();
+      fireEvent.keyDown(grid(), { key: " " });
+      expect(useLayoutStore.getState().previewOpen).toBe(true);
+      fireEvent.keyDown(grid(), { key: " " });
+      expect(useLayoutStore.getState().previewOpen).toBe(false);
+      // The toolbar button does the same.
+      fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+      expect(useLayoutStore.getState().previewOpen).toBe(true);
+    });
+
+    it("does not treat typing in the filter as shortcuts", async () => {
+      await openLocal();
+      const filter = screen.getByLabelText("Filter Local files");
+      fireEvent.keyDown(filter, { key: " " });
+      fireEvent.keyDown(filter, { key: "Delete" });
+      expect(useLayoutStore.getState().previewOpen).toBe(false);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("opens Get Info with Ctrl+I and applies a mode", async () => {
+      vi.mocked(listDir).mockResolvedValue([
+        entry("/home/alice/run.sh", { mode: 0o100644 }),
+      ]);
+      render(<Pane id="local" title="Local" Icon={LocalIcon} />);
+      await usePaneStore.getState().open("local", { kind: "local" }, null);
+      await screen.findByText("run.sh");
+      select("run.sh");
+      fireEvent.keyDown(grid(), { key: "i", ctrlKey: true });
+      const dialog = await screen.findByRole("dialog");
+      fireEvent.click(within(dialog).getByLabelText("Owner execute"));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Apply" }));
+      await waitFor(() =>
+        expect(chmod).toHaveBeenCalledWith(
+          { kind: "local" },
+          ["/home/alice/run.sh"],
+          0o744,
+          false,
+        ),
+      );
+    });
+
+    it("offers the file operations in the context menu", async () => {
+      await openLocal();
+      fireEvent.contextMenu(screen.getByText("docs"));
+      // Right-clicking selects the row.
+      expect(usePaneStore.getState().panes.local.selection).toEqual([
+        "/home/alice/docs",
+      ]);
+      const labels = screen
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent);
+      expect(labels).toEqual([
+        "Open",
+        "Preview",
+        "New Folder",
+        "Rename",
+        "Get Info…",
+        "Refresh",
+        "Delete…",
+      ]);
+      fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+      expect(await screen.findByLabelText("Rename docs")).toBeInTheDocument();
+    });
+
+    it("offers New Folder and Refresh on the empty area", async () => {
+      await openLocal();
+      fireEvent.contextMenu(grid());
+      expect(
+        screen.getAllByRole("menuitem").map((item) => item.textContent),
+      ).toEqual(["New Folder", "Refresh"]);
+    });
+
+    it("calls a remote delete permanent", async () => {
+      useSessionStore.getState().apply({
+        type: "sessionStateChanged",
+        sessionId: "s-1",
+        profileId: "p-1",
+        state: "connected",
+        reason: null,
+      });
+      render(<Pane id="remote" title="Remote" Icon={ServerIcon} />);
+      await usePaneStore
+        .getState()
+        .open("remote", { kind: "remote", sessionId: "s-1" }, null);
+      await screen.findByText("notes.txt");
+      select("notes.txt");
+      fireEvent.keyDown(grid(), { key: "Delete" });
+      const dialog = await screen.findByRole("dialog");
+      expect(dialog).toHaveTextContent("Delete “notes.txt”?");
+      expect(dialog).toHaveTextContent("permanently");
+      expect(
+        within(dialog).getByRole("button", { name: "Delete permanently" }),
+      ).toHaveClass("danger");
+    });
   });
 });

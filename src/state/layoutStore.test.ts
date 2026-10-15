@@ -25,4 +25,15 @@ describe("layoutStore", () => {
     const reloaded = await freshStore();
     expect(reloaded.getState().transfersCollapsed).toBe(true);
   });
+
+  it("remembers whether the preview is open", async () => {
+    const store = await freshStore();
+    expect(store.getState().previewOpen).toBe(false);
+    store.getState().togglePreview();
+    expect(store.getState().previewOpen).toBe(true);
+    const reloaded = await freshStore();
+    expect(reloaded.getState().previewOpen).toBe(true);
+    reloaded.getState().setPreviewOpen(false);
+    expect((await freshStore()).getState().previewOpen).toBe(false);
+  });
 });
