@@ -17,13 +17,15 @@
 
 .canvas {
   position: relative;
-  min-width: 100%;
+  /* Fill the pane; never shrink below the columns' minimums (then scroll). */
+  min-width: max(100%, var(--min-w));
 }
 
 .headerRow {
   position: sticky;
   top: 0;
   z-index: 2;
+  width: 100%;
   display: grid;
   grid-template-columns: var(--cols);
   background: var(--surface);

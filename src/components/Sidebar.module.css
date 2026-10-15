@@ -150,27 +150,6 @@
   padding-bottom: var(--sp-1);
 }
 
-/* Inline text-button in a placeholder ("Add a server…"), from Selene. */
-.linkBtn {
-  padding: 0;
-  background: none;
-  border: none;
-  color: var(--accent);
-  font-size: var(--fs-sm);
-  cursor: pointer;
-}
-
-.linkBtn:hover:not(:disabled) {
-  background: none;
-  border: none;
-  color: var(--accent-hover);
-  text-decoration: underline;
-}
-
-.linkBtn:active:not(:disabled) {
-  transform: none;
-}
-
 /* Body text of the delete confirmation. */
 .confirmText {
   margin: 0;

@@ -51,14 +51,12 @@ beforeEach(() => {
 });
 
 describe("Sidebar", () => {
-  it("shows the empty Connections section with a way to add one", () => {
+  it("shows the empty Connections section with a single call to action", () => {
     render(<Sidebar />);
     expect(screen.getByText("No connections yet.")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Add a server…" }));
-    expect(useConnectionFormStore.getState()).toMatchObject({
-      open: true,
-      editing: null,
-    });
+    // Only the footer button invites adding one (no second link inside).
+    const buttons = screen.getAllByRole("button").map((b) => b.textContent);
+    expect(buttons).toEqual(["Connections", "New connection…"]);
   });
 
   it("collapses and expands the Connections section", () => {
@@ -73,7 +71,10 @@ describe("Sidebar", () => {
   it("opens the new-connection form from the footer", () => {
     render(<Sidebar />);
     fireEvent.click(screen.getByRole("button", { name: "New connection…" }));
-    expect(useConnectionFormStore.getState().open).toBe(true);
+    expect(useConnectionFormStore.getState()).toMatchObject({
+      open: true,
+      editing: null,
+    });
   });
 
   it("lists saved connections with their state", () => {

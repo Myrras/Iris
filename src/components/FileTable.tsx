@@ -19,7 +19,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import type { Entry } from "../ipc/types";
-import { formatModified } from "../lib/dateFormat";
+import { formatModified, formatModifiedFull } from "../lib/dateFormat";
 import { isDirLike, type SortKey, type SortSpec } from "../lib/entries";
 import { formatPermissions, formatSize } from "../lib/fileFormat";
 import {
@@ -79,13 +79,13 @@ const COLUMNS: ColumnDef<Entry, unknown>[] = [
   col.display({
     id: "name",
     header: "Name",
-    size: 180, // minimum; the name column takes the remaining width
+    size: 120, // minimum; the name column takes the remaining width
     cell: ({ row }) => <NameCell entry={row.original} />,
   }),
   col.display({
     id: "size",
     header: "Size",
-    size: 84,
+    size: 64,
     meta: { align: "right" },
     cell: ({ row }) =>
       isDirLike(row.original) ? "" : formatSize(row.original.size),
@@ -93,13 +93,17 @@ const COLUMNS: ColumnDef<Entry, unknown>[] = [
   col.display({
     id: "mtime",
     header: "Modified",
-    size: 156,
-    cell: ({ row }) => formatModified(row.original.mtime),
+    size: 108,
+    cell: ({ row }) => (
+      <span title={formatModifiedFull(row.original.mtime)}>
+        {formatModified(row.original.mtime)}
+      </span>
+    ),
   }),
   col.display({
     id: "mode",
     header: "Permissions",
-    size: 104,
+    size: 84,
     meta: { mono: true },
     cell: ({ row }) => formatPermissions(row.original.mode),
   }),
@@ -164,12 +168,15 @@ export function FileTable({
   const rows = table.getRowModel().rows;
   const leafColumns = table.getVisibleLeafColumns();
 
-  // The name column stretches; the others keep their size.
+  // The columns fit the pane: Name takes the remaining width (down to its
+  // minimum), the others keep their compact size. Only a pane narrower than
+  // the sum of the minimums scrolls sideways (`--min-w` on the canvas).
   const gridTemplate = leafColumns
     .map((c) =>
       c.id === "name" ? `minmax(${c.getSize()}px, 1fr)` : `${c.getSize()}px`,
     )
     .join(" ");
+  const minWidth = leafColumns.reduce((sum, c) => sum + c.getSize(), 0);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -214,7 +221,12 @@ export function FileTable({
       aria-multiselectable="true"
       tabIndex={0}
       onKeyDown={onKeyDown}
-      style={{ "--cols": gridTemplate } as React.CSSProperties}
+      style={
+        {
+          "--cols": gridTemplate,
+          "--min-w": `${minWidth}px`,
+        } as React.CSSProperties
+      }
     >
       <div
         className={styles.canvas}

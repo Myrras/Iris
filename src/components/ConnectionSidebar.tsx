@@ -27,7 +27,6 @@ export function ConnectionSidebar() {
   const loaded = useProfilesStore((s) => s.loaded);
   const sessions = useSessionStore((s) => s.sessions);
   const remoteTarget = usePaneStore((s) => s.panes.remote.target);
-  const openNew = useConnectionFormStore((s) => s.openNew);
   const openEdit = useConnectionFormStore((s) => s.openEdit);
 
   const [collapsed, setCollapsed] = useState(false);
@@ -90,14 +89,8 @@ export function ConnectionSidebar() {
       </div>
     );
   } else if (profiles.length === 0) {
-    body = (
-      <div className={styles.placeholder}>
-        <span>No connections yet.</span>
-        <button type="button" className={styles.linkBtn} onClick={openNew}>
-          Add a server…
-        </button>
-      </div>
-    );
+    // The footer's "New connection…" is the one call to action.
+    body = <div className={styles.placeholder}>No connections yet.</div>;
   } else {
     body = (
       <div role="list" aria-label="Saved connections" className={styles.list}>
