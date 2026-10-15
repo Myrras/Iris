@@ -1,18 +1,17 @@
 /**
- * The left sidebar island. Phase 0 holds a placeholder Connections section;
- * saved connections and the new-connection flow arrive in Phase 1.
+ * The left sidebar island: the Connections section and, pinned below it, the
+ * "New connection…" button.
  */
 
-import { useState } from "react";
-
+import { useConnectionFormStore } from "../state/connectionFormStore";
 import { useLayoutStore } from "../state/layoutStore";
-import { SectionTitle } from "./SectionTitle";
-import { AddIcon, ServerIcon } from "./icons";
+import { ConnectionSidebar } from "./ConnectionSidebar";
+import { AddIcon } from "./icons";
 import styles from "./Sidebar.module.css";
 
 export function Sidebar() {
   const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
-  const [connectionsCollapsed, setConnectionsCollapsed] = useState(false);
+  const openNew = useConnectionFormStore((s) => s.openNew);
 
   return (
     <aside
@@ -21,33 +20,11 @@ export function Sidebar() {
       aria-label="Sidebar"
     >
       <div className={styles.groups}>
-        <section className={styles.subsection}>
-          <div className={styles.sectionHeader}>
-            <SectionTitle
-              title="Connections"
-              Icon={ServerIcon}
-              count={0}
-              collapsed={connectionsCollapsed}
-              onToggle={() => setConnectionsCollapsed(!connectionsCollapsed)}
-            />
-          </div>
-          <div
-            className={`${styles.sectionBody}${connectionsCollapsed ? ` ${styles.sectionBodyCollapsed}` : ""}`}
-          >
-            <div className={styles.sectionBodyInner}>
-              <div className={styles.placeholder}>No connections yet.</div>
-            </div>
-          </div>
-        </section>
+        <ConnectionSidebar />
       </div>
 
       <div className={styles.footer}>
-        <button
-          type="button"
-          className={styles.footerBtn}
-          disabled
-          title="Connections arrive in a later version"
-        >
+        <button type="button" className={styles.footerBtn} onClick={openNew}>
           <AddIcon />
           <span>New connection…</span>
         </button>

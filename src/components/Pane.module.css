@@ -1,0 +1,176 @@
+/* A file pane island: rounded, bordered, elevated, like Podium's work island. */
+.pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  animation: islandIn var(--dur-3) var(--ease-out);
+}
+
+/* Section-header look from the sidebar (uppercase, faint). */
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--tabbar-h);
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.icon {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* The connection shown in the remote pane. */
+.subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Toolbar ─────────────────────────────────────────────────────────────── */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: var(--sp-1) var(--sp-2);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tool {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+}
+
+.tool:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border: none;
+  color: var(--text);
+}
+
+.tool[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+.tool[data-loading="true"] svg {
+  animation: spin var(--dur-spin) linear infinite;
+}
+
+.crumbPlaceholder {
+  flex: 1;
+}
+
+.filter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 0 0 0 var(--sp-2);
+  width: 150px;
+  flex-shrink: 1;
+  min-width: 90px;
+}
+
+.filterIcon {
+  position: absolute;
+  left: var(--sp-2);
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+.filterInput {
+  padding: 3px var(--sp-2) 3px 26px;
+  font-size: var(--fs-sm);
+}
+
+/* ── Notices (disconnected) ──────────────────────────────────────────────── */
+
+.notice {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  text-align: center;
+  animation: fadeRise var(--dur-4) var(--ease-out);
+}
+
+.noticeIcon {
+  color: var(--text-faint);
+}
+
+.noticeTitle {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.noticeText {
+  margin: 0;
+  max-width: 340px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.noticeActions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+@keyframes islandIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}
+
+@keyframes fadeRise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

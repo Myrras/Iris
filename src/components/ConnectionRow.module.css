@@ -1,0 +1,74 @@
+/* Copied from Podium's ProcessRow.module.css (session tint, rename field and
+   activity rules left out). */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-3);
+  min-height: 28px;
+  font-size: var(--fs-md);
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.row:hover {
+  background: var(--surface-hover);
+}
+
+.row[data-selected="true"] {
+  background: var(--surface-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Actions appear on hover/selection to keep rows quiet. */
+.actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.row:hover .actions,
+.row:focus-within .actions,
+.row[data-selected="true"] .actions {
+  display: flex;
+}
+
+.action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+
+.action:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border: none;
+  color: var(--text);
+}

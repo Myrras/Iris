@@ -15,6 +15,7 @@
 
 import {
   ArrowDownUp,
+  ArrowLeft,
   ArrowUp,
   Check,
   ChevronDown,
@@ -29,12 +30,15 @@ import {
   Eye,
   EyeOff,
   File as FileGlyph,
+  FileQuestion,
   Folder,
   FolderOpen,
   FolderPlus,
   HardDrive,
   House,
   Info,
+  KeyRound,
+  Link2,
   Minus,
   Monitor,
   Moon,
@@ -42,11 +46,15 @@ import {
   Plug,
   Plus,
   RotateCw,
+  Search,
   Server,
+  ShieldAlert,
+  ShieldQuestion,
   Settings,
   Square,
   Sun,
   Trash2,
+  TriangleAlert,
   Unplug,
   Upload,
   X,
@@ -78,6 +86,11 @@ export const LocalIcon = icon(HardDrive);
 export const FolderIcon = icon(Folder);
 export const FolderOpenIcon = icon(FolderOpen);
 export const FileIcon = icon(FileGlyph);
+/** Sockets, devices, fifos. */
+export const OtherFileIcon = icon(FileQuestion);
+/** Marks a symlink in the file table. */
+export const SymlinkIcon = icon(Link2, { size: 12 });
+export const KeyIcon = icon(KeyRound);
 export const TransfersIcon = icon(ArrowDownUp);
 export const HomeIcon = icon(House);
 
@@ -89,6 +102,8 @@ export const CheckIcon = icon(Check);
 export const CopyIcon = icon(Copy);
 export const RefreshIcon = icon(RotateCw);
 export const ParentDirIcon = icon(ArrowUp);
+export const BackIcon = icon(ArrowLeft);
+export const FilterIcon = icon(Search, { size: 13 });
 export const NewFolderIcon = icon(FolderPlus);
 export const UploadIcon = icon(Upload);
 export const DownloadIcon = icon(Download);
@@ -124,3 +139,8 @@ export const WindowRestoreIcon = icon(Copy, { size: 12 });
 export const ErrorIcon = icon(CircleAlert, { size: 16 });
 export const SuccessIcon = icon(CircleCheck, { size: 16 });
 export const InfoIcon = icon(Info, { size: 16 });
+
+// Host key verification: an unknown key (trust?) and a changed one (danger).
+export const HostKeyUnknownIcon = icon(ShieldQuestion, { size: 28 });
+export const HostKeyChangedIcon = icon(ShieldAlert, { size: 28 });
+export const WarningIcon = icon(TriangleAlert, { size: 16 });

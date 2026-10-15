@@ -1,5 +1,5 @@
 /* Sidebar island styles, copied from Podium's Sidebar.module.css (the project
-   group / process-row rules are left out until Iris has rows of its own). */
+   group rules are left out; connection rows live in ConnectionRow.module.css). */
 
 /* A floating island: rounded, bordered, elevated; clips its sections. */
 .sidebar {
@@ -141,6 +141,46 @@
   flex-direction: column;
   gap: var(--sp-2);
   align-items: flex-start;
+}
+
+/* Saved-connection rows (ConnectionRow), flush with the section edges. */
+.list {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--sp-1);
+}
+
+/* Inline text-button in a placeholder ("Add a server…"), from Selene. */
+.linkBtn {
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.linkBtn:hover:not(:disabled) {
+  background: none;
+  border: none;
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+.linkBtn:active:not(:disabled) {
+  transform: none;
+}
+
+/* Body text of the delete confirmation. */
+.confirmText {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.confirmText strong {
+  color: var(--text);
+  font-weight: 600;
 }
 
 /* ── Footer ────────────────────────────────────────────────────────────────── */
