@@ -8,7 +8,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
-import type { IpcError, Note, NoteId } from "./types";
+import type { IpcError, IrisSettings } from "./types";
 
 /** Narrow an unknown rejection to the structured `IpcError` shape. */
 export function isIpcError(value: unknown): value is IpcError {
@@ -28,22 +28,28 @@ export function toIpcError(value: unknown): IpcError {
   return { message: String(value), kind: "unknown" };
 }
 
-/** Greet `name`; rejects with an `invalidInput` `IpcError` for blank input. */
-export function greet(name: string): Promise<string> {
-  return invoke("greet", { name });
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+/** The persisted backend settings (`settings.json`). */
+export function getSettings(): Promise<IrisSettings> {
+  return invoke("get_settings");
 }
 
-/** Add a note and return it. */
-export function noteAdd(text: string): Promise<Note> {
-  return invoke("note_add", { text });
+/**
+ * Replace the backend settings; resolves with what was stored (normalized),
+ * rejects with an `invalidInput` `IpcError` for out-of-range values.
+ */
+export function saveSettings(settings: IrisSettings): Promise<IrisSettings> {
+  return invoke("save_settings", { settings });
 }
 
-/** All notes, in insertion order. */
-export function noteList(): Promise<Note[]> {
-  return invoke("note_list");
-}
+// ---------------------------------------------------------------------------
+// Window
+// ---------------------------------------------------------------------------
 
-/** Remove a note by id. */
-export function noteRemove(noteId: NoteId): Promise<void> {
-  return invoke("note_remove", { noteId });
+/** Confirm quitting despite active work: arms the force-close flag and exits. */
+export function windowConfirmClose(): Promise<void> {
+  return invoke("window_confirm_close");
 }

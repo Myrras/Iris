@@ -1,0 +1,99 @@
+/* The bottom transfer island: same island chrome as the panes. */
+.panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  animation: islandIn var(--dur-3) var(--ease-out);
+}
+
+/* Full-width collapse toggle in the sidebar's section-header style. */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--sp-1);
+  height: var(--statusbar-h);
+  padding: 0 var(--sp-3) 0 var(--sp-2);
+  border: none;
+  border-radius: 0;
+  background: none;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  text-align: left;
+}
+
+/* Outrank the global button hover/press chrome: only recolour. */
+.header:hover:not(:disabled) {
+  background: none;
+  color: var(--text-muted);
+}
+
+.header:active:not(:disabled) {
+  transform: none;
+}
+
+.header:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Points up while collapsed (the panel opens upward), down while open. */
+.caretWrap {
+  display: flex;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  transform: rotate(-90deg);
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.caretWrap[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+.icon {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.title {
+  flex: 1;
+}
+
+/* Grid trick (as in the sidebar) for a smooth auto → 0 height animation. */
+.body {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--dur-3) var(--ease-out);
+}
+
+.bodyCollapsed {
+  grid-template-rows: 0fr;
+}
+
+.bodyInner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.placeholder {
+  margin: 0;
+  height: 120px;
+  padding: var(--sp-3);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+@keyframes islandIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}
