@@ -104,6 +104,60 @@ standalone template:
     narrower than their sum scrolls sideways. Remote pane: `WelcomeScreen` without a session, a
     Reconnect notice when it dropped. jsdom has no layout: tests that need
     virtualised rows call `stubViewport()` (`src/test/viewport.ts`).
+- ✅ **Phase 2 — Auth complete.** Backend and UI done.
+  - `AuthMethod` adds `agent` and `sshConfigHost{alias}`; `ConnectionProfile`
+    adds `jump: null | {kind:"profile",profileId} | {kind:"alias",alias}`
+    (alias = config host or `[user@]host[:port]`; a profile cannot jump
+    through itself). Old `profiles.json` files load unchanged.
+  - `connection/route.rs` turns a profile into `Hop`s (jumps first, target
+    last): profile jump wins, else the config `ProxyJump` (OpenSSH order:
+    first entry with its own config jumps, then each next through the
+    previous); profile jumps chain; loops and > 8 hops are `invalidInput`.
+    For `sshConfigHost` the config's HostName/User/Port win and the profile
+    fields are fallbacks. The SSH config is only read when a hop needs it.
+  - `ssh_config.rs` wraps `ssh2-config`: concrete `Host` aliases only
+    (patterns skipped), `Match` blocks stripped before parsing, unsupported
+    directives logged at DEBUG by name, `%h %n %r %p %u %d %%` expanded in
+    HostName/IdentityFile. Path **injected** (`Core::set_ssh_config_path`;
+    unset/missing = empty config).
+  - `ssh/session.rs` walks the hops: TCP for the first, a `direct-tcpip`
+    channel on the previous hop for every next one, each with its own host
+    key check and login; jump handles live as long as the session and any
+    hop that drops ends the session once (shared `OnClosed`). Jump failures
+    are `jumpHost` (host key verdicts keep their own kind). Logins:
+    password, key file, agent (each identity, certificates too) and config
+    identities (each file, missing ones skipped, then the agent;
+    `passphraseRequired` / wrong passphrase reported when nothing got in).
+  - `ssh/agent.rs`: `AgentLocation::System` (Unix `SSH_AUTH_SOCK`; Windows
+    `SSH_AUTH_SOCK` pipe, then the OpenSSH pipe, then Pageant —
+    compile-gated, **not yet run on Windows**) or `Path` (tests). Unset in
+    a fresh `Core` (= no agent); the shell sets `System`.
+  - `secrets.rs`: `SecretStore` trait, `KeychainStore` (`keyring` 3,
+    service `iris`, account `<profileId>/password|passphrase`) and
+    `MemorySecretStore`. A fresh `Core` uses memory; the shell installs the
+    keychain, so tests never touch it. `Core::connect_with(Credentials
+    {password, passphrase, remember})` falls back to stored secrets, stores
+    the given ones after a successful login when `remember`; jump profiles
+    use their stored secrets. `delete_profile` deletes its secrets.
+    New kinds: `passwordRequired`, `agent`, `keychain`, `jumpHost`.
+  - IPC: `connect` takes `remember`; new `set_secret` / `clear_secret`
+    (`kind: "password" | "passphrase"`) and `list_ssh_config_hosts`.
+  - UI: `ConnectionForm` auth switch Password / Key file / SSH agent / SSH
+    config (config host picker prefills host/port/user and shows keys +
+    ProxyJump), a jump host select (saved connections, config hosts,
+    "Other host…" text) and "Forget saved password and passphrase" when
+    editing. `lib/connect.ts` always connects without secrets first and
+    prompts on `passwordRequired` / `passphraseRequired`; a refused stored
+    secret re-prompts with a notice and "remember" ticked (unticking it
+    clears the stored one). `SecretPrompt` has "Remember in keychain".
+  - Tests: `support/` adds hidden servers reachable only through a jump
+    server's `direct-tcpip` (in-memory pipe) and an in-process agent
+    (`russh::keys::agent::server` on a temp socket); `tests/auth.rs` covers
+    agent, config hosts, jump chains, per-hop host keys, remembered secrets
+    and a no-secret-leak sweep. `tests/ssh_integration.rs` (Docker,
+    `#[ignore]`d) runs against `linuxserver/openssh-server` (jump container
+    with forwarding enabled by a custom init script): `just
+    test-integration`, nightly `.github/workflows/integration.yml`.
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":
@@ -132,11 +186,13 @@ standalone template:
 | Shell / UI  | Tauri 2 + React 19 + TypeScript + Vite                   |
 | Core        | Plain Rust crate, zero Tauri dependency                  |
 | SSH / SFTP  | `russh` 0.64 (`ring` backend) + `russh-sftp` 3, behind `ssh/` |
+| SSH config  | `ssh2-config` 0.8, behind `ssh_config.rs`                |
+| Keychain    | `keyring` 3 (macOS/Windows native, Linux Secret Service), behind `secrets.rs` |
 | FE state    | Zustand 5 (no data-fetching lib; call IPC, then resync)  |
 | Motion      | CSS tokens (`--dur-*`/`--ease-*`), reduced-motion guard  |
 | Icons       | `lucide-react`, only via `src/components/icons.tsx`      |
 | File table  | `@tanstack/react-table` + `@tanstack/react-virtual`      |
-| Tests       | `cargo test` (core + integration) · Vitest + jsdom + RTL |
+| Tests       | `cargo test` (core + integration) · Vitest + jsdom + RTL · testcontainers (Docker, opt-in) |
 
 ## Architecture
 
@@ -156,14 +212,20 @@ crates/iris-core/src/
   persist.rs  # shared atomic JSON write (temp file + rename)
   ids.rs      # UUID newtypes (uuid_newtype!): ProfileId, SessionId, HostKeyRequestId
   secret.rs   # Secret: redacted, non-serializable, zeroized password/passphrase
-  connection/ # ConnectionProfile + AuthMethod; store.rs = ProfileStore (profiles.json)
-  ssh/        # russh wrapper: session.rs (connect/auth/SFTP), hostkey.rs (known_hosts + prompts)
+  secrets.rs  # SecretStore: KeychainStore (keyring) + MemorySecretStore
+  ssh_config.rs  # ~/.ssh/config: host list, resolve, ProxyJump specs
+  connection/ # ConnectionProfile + AuthMethod + JumpHost; store.rs = ProfileStore
+              # (profiles.json); route.rs = profile → hops (jumps, config)
+  ssh/        # russh wrapper: session.rs (hops/auth/SFTP), hostkey.rs
+              # (known_hosts + prompts), agent.rs (ssh-agent / Pageant)
   fs/         # FileSystem trait, Entry/EntryKind/FsTarget; local.rs, sftp.rs
   session_manager.rs  # SessionId → live SshSession; drop-on-close callback
 crates/iris-core/tests/
   core.rs     # integration test over the public API — no UI required
   remote.rs   # connect/browse against the in-process SFTP server (unix only)
-  support/    # hermetic russh + russh-sftp test server
+  auth.rs     # agent, ssh config, jump hosts, remembered secrets (unix only)
+  ssh_integration.rs  # Docker OpenSSH servers, #[ignore]d (just test-integration)
+  support/    # hermetic russh + russh-sftp test server, jump routing, agent
 src-tauri/
   tauri.conf.json                # base config
   tauri.{macos,windows}.conf.json  # per-OS window chrome (merge patches)
@@ -173,7 +235,8 @@ src-tauri/src/
   state.rs    # AppState: Arc<Core> + force_close flag
   error.rs    # IpcError { kind, message } ← CoreError
   events.rs   # forwards CoreEvents to the webview (app.emit, Lagged-safe)
-  commands/   # thin shims: settings.rs, connection.rs (profiles), session.rs
+  commands/   # thin shims: settings.rs, connection.rs (profiles, secrets,
+              # ssh config hosts), session.rs
               # (connect/disconnect/answer_host_key), fs.rs (list_dir/stat/
               # read_link/home_dir), window.rs
 src/
@@ -232,6 +295,7 @@ just build          # production bundle
 just check          # cargo check --workspace
 just test           # cargo test --workspace + frontend vitest
 just test-core      # iris-core tests only
+just test-integration  # Docker OpenSSH tests (needs Docker; not in `just test`)
 just lint           # clippy -D warnings + eslint
 just format         # rustfmt + prettier
 just version 0.2.0  # bump + sync version across all manifests (emergencies only; CI bumps on merge)
@@ -243,7 +307,9 @@ CI (`.github/workflows/ci.yml`) is one `macos-latest` job: rustfmt, clippy
 production `pnpm build`. A stub `dist/` is created first so
 `tauri::generate_context!` compiles. A PR-only `changelog` job requires an
 `## [Unreleased]` entry, and a `release` job turns every merge to `main` into a
-tagged GitHub Release (see _Versioning & CI_).
+tagged GitHub Release (see _Versioning & CI_). `.github/workflows/
+integration.yml` runs the Docker SSH tests nightly and on demand
+(ubuntu, `libdbus-1-dev` for keyring's Linux backend).
 
 ## Conventions
 

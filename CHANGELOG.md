@@ -20,8 +20,8 @@ when it merges.
   Windows; window size and position are remembered.
 - A warning before quitting while work is still in progress.
 - Saved connections: name, host, port, user, authentication method and an
-  optional start folder. Passwords and passphrases are never stored; you
-  enter them when connecting.
+  optional start folder. Passwords and passphrases are never stored with
+  the connection; you enter them when connecting.
 - Connect over SSH with a password or a private key file, including
   passphrase-protected keys.
 - Host key verification against `~/.ssh/known_hosts`: a new server shows
@@ -43,3 +43,14 @@ when it merges.
   with the arrow keys, Cmd/Ctrl-click and Shift-click. Folders with
   thousands of entries scroll smoothly.
 - A dropped connection shows in its pane with a Reconnect button.
+- Log in with the keys in your running SSH agent.
+- Pick a host from `~/.ssh/config` in the connection form: host, port and
+  user are filled in, and connecting uses its IdentityFile keys (then your
+  SSH agent) and its ProxyJump, so config changes apply on the next connect.
+- Jump hosts (ProxyJump): reach a server through another saved connection,
+  a host from `~/.ssh/config` or any `user@host:port`. Chains of jump hosts
+  work, each with its own host key check.
+- "Remember in keychain" on the password and passphrase prompt stores the
+  secret in your system keychain, so the next connect asks nothing. If a
+  saved secret stops working you are asked again and can replace or forget
+  it; editing a connection can also forget it, and deleting one removes it.
