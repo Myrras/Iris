@@ -251,7 +251,7 @@ standalone template:
     applyToAll?)`, `list_transfers`, `clear_finished`,
     `has_active_transfers`; events `transfers:updated`,
     `transfer:job-changed`, `transfer:progress`, `transfer:conflict`.
-    `resume_paused` is core-only until Phase 5 reconnects.
+    A reconnect calls `resume_paused` (Phase 5).
   - Tests: `support/` serves writes/setstat-mtime, counts concurrently open
     files and can delay READ/WRITE; `tests/transfers.rs` covers byte-exact
     up/downloads with mtime/mode, trees, the parallelism limit, cancel →
@@ -291,6 +291,77 @@ standalone template:
   - Settings → Transfers (`backendSettingsStore`, re-read on
     `settings:changed`): parallel transfers 1–16. `CloseWarningModal` lists
     the unfinished transfers per state.
+- ✅ **Phase 5 — Tabs, auto-reconnect & quit warning.** Backend and UI done.
+  - **Sessions outlive connections** (`session_manager.rs`): each
+    `SessionId` maps to a slot — `Live(LiveSession {profileId, ssh,
+    generation})`, `Reconnecting {run, cancel}` or `Down`. Only a user
+    `disconnect` forgets the id. A connection's close callback (and a
+    remote call that hits `notConnected`, via `forget_if_lost`) calls
+    `Core::connection_lost(session, generation)`; a stale generation is
+    ignored, so old connections never touch newer ones. `Core` is a cheap
+    `Clone` handle over `Arc<CoreInner>` so the reconnect task can own one;
+    close callbacks hold it weakly.
+  - **Auto-reconnect**: with `reconnectAttempts` > 0 (default 5, 0 = off)
+    a lost session goes `reconnecting {attempt, maxAttempts,
+    nextRetryInSecs}` (published before each wait, then again with 0 while
+    the attempt runs), backoff `reconnect_delay_secs` = 1/2/4/8/16 s × the
+    backoff unit (`set_reconnect_backoff_unit`, 1 s; tests use 10 ms).
+    Attempts are non-interactive: remembered secrets / agent / key files,
+    and `ConnectRequest.prompts = None` so an unknown host key is refused
+    instead of asked (`hostkey::verify(.., None, ..)`). `unrecoverable()`
+    stops at once (password/passphrase needed, auth refused, host key
+    changed/unknown, key file, agent, profile gone); transient errors
+    (refused, timed out, handshake, jump host) retry. Success installs the
+    connection under the **same session id** and calls `resume_paused`;
+    giving up → `disconnected {reason}`. `Core::reconnect(session,
+    credentials)` is the manual Retry / "Retry now": cancels a waiting run,
+    publishes `connecting`, logs in interactively (prompts, secrets,
+    remember), then `connected` or `disconnected {reason}` (no automatic
+    attempts after a failed manual one). Keepalive: 10 s × 3 unanswered.
+  - **SessionState** is tagged by `status` on the wire: `connecting |
+    connected | reconnecting{…} | disconnected{reason}` (`reason` null =
+    user disconnect); the event has no separate `reason` any more.
+  - **Transfers**: `disconnect` cancels the session's unfinished jobs
+    (`cancel_session`); `window_confirm_close` calls
+    `cancel_all_transfers` before exiting. A walk cut off by a drop records
+    the rest (current folder, its stack, unreached items) as **paused
+    placeholders** (`TransferJob.folder = true`, `JobEntry.walk`); resuming
+    removes them and walks them again on the session (`walk_again`;
+    `BatchEntry.expanding` is a counter). A listing that *fails* becomes a
+    `failed` placeholder. `retry_transfer(jobId)`: a failed file starts over
+    (its own partial copy is replaced, not appended); a placeholder is
+    walked again; needs a live session.
+  - IPC: `reconnect(sessionId, password?, passphrase?, remember?)`,
+    `retry_transfer(jobId)`.
+  - **Tabs** (`state/tabsStore.ts`, `components/TabBar.tsx` in Selene's
+    look, `lib/tabs.ts`, `lib/useTabShortcuts.ts`): a tab is `{id, title,
+    profileId, sessionId, localPane, remotePane, …}` with its own session —
+    connecting always opens a new one, shown in the tab that started it.
+    `paneStore` holds the **active** tab's panes; background tabs keep
+    snapshots, swapped in on switch (`paneStore.restore` drops in-flight
+    listings, then both panes re-list). ⌘T / ⌘W / ⌘1–8 / ⌘9 / ⇧⌘[ ⇧⌘];
+    middle-click closes; always ≥ 1 tab. `TabCloseModal` warns before
+    closing/disconnecting a tab with unfinished transfers. Tabs persist in
+    localStorage `iris.tabs` (profile, title, both folders, active) and are
+    restored **without connecting** — the Remote pane offers Reconnect
+    (avoids a burst of secret/host key prompts and unwanted connections at
+    start); tabs of deleted profiles become blank.
+  - UI: Remote pane banner while `reconnecting` (attempt n of max, local
+    countdown, Retry now, Disconnect) and a disconnected notice with the
+    reason and Retry (same session id; asks for a missing secret like the
+    connect flow). `StatusDot` on tabs and sidebar rows
+    (`lib/sessionStatus.ts`; reconnecting = pulsing warning). Toasts on
+    `reconnecting → connected/disconnected`; panes re-list after a
+    reconnect. TransferPanel: Retry on failed rows, folder placeholders.
+    Settings → Transfers: Reconnect attempts 0–20.
+  - Tests: `tests/reconnect.rs` (hard TCP cut → reconnect → download
+    finishes byte-identical on the same id; server close; give up after N
+    with the backoff sequence, then Retry; user disconnect does not
+    reconnect; password needed and changed host key stop; walk cut off →
+    placeholders → resumed; retry of failed file/item; disconnect and quit
+    cancel). `support/` can cut TCP dead (`kill_all`), refuse connections
+    and slow listings. Docker: a cut connection reconnects and the queue
+    continues.
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":
@@ -311,7 +382,8 @@ standalone template:
   (Cmd+Q) are blocked while `Core::has_active_work()` (any queued, running,
   needsDecision or paused transfer); the webview gets
   `window:close-requested`, shows `CloseWarningModal`, and "Close anyway"
-  calls `window_confirm_close` (arms `AppState::force_close`, exits).
+  calls `window_confirm_close` (cancels all transfers, arms
+  `AppState::force_close`, exits).
 
 ## Tech stack
 
@@ -356,7 +428,7 @@ crates/iris-core/src/
   fs/         # FileSystem trait, Entry/EntryKind/FsTarget, BatchReport;
               # local.rs, sftp.rs, trash.rs (Trash trait + SystemTrash)
   preview.rs  # Preview (text/image/binary/tooLarge) from read_range
-  session_manager.rs  # SessionId → live SshSession; drop-on-close callback
+  session_manager.rs  # SessionId → Live | Reconnecting | Down slot (ids survive drops)
   transfer/   # TransferManager: mod.rs (types, registry, scheduling), expand.rs
               # (folder walk), worker.rs (one job), side.rs (local/remote end),
               # naming.rs (keep-both names), progress.rs (throttle, speed)
@@ -365,6 +437,7 @@ crates/iris-core/tests/
   remote.rs   # connect/browse against the in-process SFTP server (unix only)
   auth.rs     # agent, ssh config, jump hosts, remembered secrets (unix only)
   transfers.rs  # transfer engine against the in-process server (unix only)
+  reconnect.rs  # auto/manual reconnect, retry, cancel on disconnect/quit (unix only)
   ssh_integration.rs  # Docker OpenSSH servers, #[ignore]d (just test-integration)
   support/    # hermetic russh + russh-sftp test server, jump routing, agent
 src-tauri/
@@ -378,25 +451,26 @@ src-tauri/src/
   events.rs   # forwards CoreEvents to the webview (app.emit, Lagged-safe)
   commands/   # thin shims: settings.rs, connection.rs (profiles, secrets,
               # ssh config hosts), session.rs
-              # (connect/disconnect/answer_host_key), fs.rs (list_dir/stat/
+              # (connect/reconnect/disconnect/answer_host_key), fs.rs (list_dir/stat/
               # read_link/home_dir/mkdir/rename/delete/chmod/preview),
               # transfers.rs (async: the core spawns jobs on Tokio), window.rs
 src/
-  App.tsx     # the shell: title bar, sidebar, Local/Remote panes, preview,
-              # transfers
+  App.tsx     # the shell: title bar, sidebar, tab bar, Local/Remote panes,
+              # preview, transfers
   components/ # Sidebar + ConnectionSidebar/ConnectionRow, ConnectionForm,
               # PromptHost (SecretPrompt, HostKeyDialog, ConflictDialog),
               # Pane + Breadcrumb + FileTable, ContextMenu, DeleteConfirmModal,
               # ChmodDialog, PreviewPanel, TransferPanel + ProgressBar,
-              # DragGhost, WelcomeScreen, Modal,
+              # DragGhost, WelcomeScreen, Modal, TabBar, TabCloseModal,
               # Toasts, SettingsModal, CloseWarningModal, WindowControls,
               # StatusDot, LogoMark, icons (lucide wrapper; import from here)
   ipc/        # commands.ts (typed wrappers), types.ts (wire types), events.ts
-  state/      # Zustand stores: profiles, session, prompt (queue), pane,
+  state/      # Zustand stores: profiles, session, prompt (queue), tabs, pane,
               # transfer, drag, connectionForm, theme, settings (UI prefs),
               # backendSettings (core settings.json), settingsRequest,
               # layout, toast — mirror the backend; don't guess
-  lib/        # connect flow, useCoreEvents, useNativeDrop, paneDrag,
+  lib/        # connect flow, tabs, useTabShortcuts, sessionStatus,
+              # useCoreEvents, useNativeDrop, paneDrag,
               # transfer (pane → request), pure rules (entries, selection,
               # path, fileFormat, fileName, mode, dateFormat, transferFormat,
               # connectionForm), log, motion, platform

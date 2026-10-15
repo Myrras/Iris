@@ -102,3 +102,29 @@ when it merges.
 - The quit warning now appears while transfers are still queued, running,
   waiting for your answer or paused, and says how many of each.
 - Settings → Transfers: how many files transfer at once (1–16).
+- Tabs above the panes: each tab has its own Local and Remote panes and its
+  own connection, so the same server can be open in several tabs. ⌘T opens a
+  tab, ⌘W closes one, ⌘1–⌘8 jump to a tab and ⌘9 to the last (Ctrl
+  elsewhere); a middle-click closes a tab. Each tab shows its connection's
+  status dot. Clicking a server in the sidebar connects in the current tab,
+  or in a new tab when that one is already in use; "Connect in New Tab" is
+  in its menu.
+- Open tabs and their folders come back on the next start. They do not
+  connect by themselves: a Reconnect button in each tab does.
+- Closing a tab, or disconnecting, while its transfers are still running
+  asks first; going ahead cancels them.
+- A dropped connection is noticed within about half a minute and
+  reconnects by itself, waiting 1, 2, 4, 8, then 16 seconds between
+  attempts. The tab keeps its folder and its transfers continue where they
+  stopped once the connection is back. The Remote pane shows the attempt
+  and a countdown, with Retry now and Disconnect; a toast says whether the
+  reconnect worked.
+- Reconnecting stops, with the reason and a Retry button, when it would
+  need a password or passphrase that is not saved, or when the server's
+  host key changed or the login is refused. Retry asks for what is missing.
+- Settings → Transfers: Reconnect attempts (0–20; 0 turns reconnecting
+  off).
+- Failed transfers have a Retry button.
+- A folder transfer cut off by a dropped connection carries on with the
+  folders it had not listed yet instead of failing them.
+- Choosing to quit while transfers are in progress cancels them.
