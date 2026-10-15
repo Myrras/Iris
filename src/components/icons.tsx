@@ -50,6 +50,7 @@ import {
   Pencil,
   Plug,
   Plus,
+  RotateCcw,
   RotateCw,
   Search,
   Server,
@@ -106,6 +107,8 @@ export const CloseIcon = icon(X);
 export const CheckIcon = icon(Check);
 export const CopyIcon = icon(Copy);
 export const RefreshIcon = icon(RotateCw);
+/** Retry a failed transfer. */
+export const RetryIcon = icon(RotateCcw);
 export const ParentDirIcon = icon(ArrowUp);
 export const BackIcon = icon(ArrowLeft);
 export const FilterIcon = icon(Search, { size: 13 });

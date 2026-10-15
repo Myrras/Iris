@@ -129,6 +129,46 @@ describe("SettingsModal — Transfers tab", () => {
     ).toBeDisabled();
   });
 
+  it("steps reconnect attempts down to off and up to 20", async () => {
+    render(<SettingsModal open onClose={() => undefined} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Transfers" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Reconnect attempts")).toHaveTextContent(
+        "3",
+      ),
+    );
+    const fewer = screen.getByRole("button", {
+      name: "Decrease reconnect attempts",
+    });
+    for (const expected of ["2", "1", "Off"]) {
+      fireEvent.click(fewer);
+      await waitFor(() =>
+        expect(screen.getByLabelText("Reconnect attempts")).toHaveTextContent(
+          expected,
+        ),
+      );
+    }
+    expect(saveSettings).toHaveBeenLastCalledWith({
+      parallelTransfers: 15,
+      reconnectAttempts: 0,
+      editorOverrides: {},
+    });
+    expect(fewer).toBeDisabled();
+
+    act(() =>
+      useBackendSettingsStore.setState({
+        settings: {
+          parallelTransfers: 15,
+          reconnectAttempts: 20,
+          editorOverrides: {},
+        },
+      }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Increase reconnect attempts" }),
+    ).toBeDisabled();
+  });
+
   it("opens on the Transfers tab when asked to", () => {
     useSettingsRequestStore.getState().open("transfers");
     render(<SettingsModal open onClose={() => undefined} />);

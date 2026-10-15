@@ -37,7 +37,10 @@ export function onHostKeyPrompt(
   );
 }
 
-/** A session became `connecting`, `connected` or `disconnected`. */
+/**
+ * A session became `connecting`, `connected`, `reconnecting` (another
+ * attempt, or its countdown) or `disconnected`.
+ */
 export function onSessionStateChanged(
   handler: (event: SessionStateChangedEvent) => void,
 ): Promise<UnlistenFn> {

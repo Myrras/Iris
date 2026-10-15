@@ -3,8 +3,9 @@
  *
  * - General: theme, reduced motion, hidden files, preview size cap — UI
  *   prefs from `themeStore` / `settingsStore`.
- * - Transfers: parallel transfers, from the core's `settings.json` via
- *   `backendSettingsStore` (`getSettings` / `saveSettings`).
+ * - Transfers: parallel transfers and reconnect attempts, from the core's
+ *   `settings.json` via `backendSettingsStore` (`getSettings` /
+ *   `saveSettings`).
  *
  * A new tab: add the id to `SettingsTabId`, an entry to `TABS` and a branch
  * in `TabBody`.
@@ -16,6 +17,8 @@ import { Modal } from "./Modal";
 import {
   PARALLEL_TRANSFERS_MAX,
   PARALLEL_TRANSFERS_MIN,
+  RECONNECT_ATTEMPTS_MAX,
+  RECONNECT_ATTEMPTS_MIN,
   useBackendSettingsStore,
 } from "../state/backendSettingsStore";
 import { useThemeStore, type ThemeMode } from "../state/themeStore";
@@ -151,6 +154,47 @@ function TabBody({ tab }: { tab: SettingsTabId }) {
   }
 }
 
+/** A − value + control for a bounded whole number (`label` names it). */
+function Stepper({
+  label,
+  value,
+  min,
+  max,
+  show = String,
+  onChange,
+}: {
+  label: string;
+  value: number | null;
+  min: number;
+  max: number;
+  show?: (value: number) => string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className={styles.stepper}>
+      <button
+        type="button"
+        aria-label={`Decrease ${label.toLowerCase()}`}
+        disabled={value === null || value <= min}
+        onClick={() => value !== null && onChange(value - 1)}
+      >
+        <MinusIcon size={14} />
+      </button>
+      <span className={styles.stepperValue} aria-label={label}>
+        {value === null ? "–" : show(value)}
+      </span>
+      <button
+        type="button"
+        aria-label={`Increase ${label.toLowerCase()}`}
+        disabled={value === null || value >= max}
+        onClick={() => value !== null && onChange(value + 1)}
+      >
+        <AddIcon size={14} />
+      </button>
+    </div>
+  );
+}
+
 function TransfersTab() {
   const settings = useBackendSettingsStore((s) => s.settings);
   const save = useBackendSettingsStore((s) => s.save);
@@ -158,7 +202,6 @@ function TransfersTab() {
     void useBackendSettingsStore.getState().load();
   }, []);
 
-  const parallel = settings?.parallelTransfers ?? null;
   return (
     <section className={styles.section}>
       <h3 className={styles.sectionLabel}>Transfers</h3>
@@ -170,33 +213,31 @@ function TransfersTab() {
             starts.
           </small>
         </span>
-        <div className={styles.stepper}>
-          <button
-            type="button"
-            aria-label="Decrease parallel transfers"
-            disabled={parallel === null || parallel <= PARALLEL_TRANSFERS_MIN}
-            onClick={() =>
-              parallel !== null &&
-              void save({ parallelTransfers: parallel - 1 })
-            }
-          >
-            <MinusIcon size={14} />
-          </button>
-          <span className={styles.stepperValue} aria-label="Parallel transfers">
-            {parallel ?? "–"}
-          </span>
-          <button
-            type="button"
-            aria-label="Increase parallel transfers"
-            disabled={parallel === null || parallel >= PARALLEL_TRANSFERS_MAX}
-            onClick={() =>
-              parallel !== null &&
-              void save({ parallelTransfers: parallel + 1 })
-            }
-          >
-            <AddIcon size={14} />
-          </button>
-        </div>
+        <Stepper
+          label="Parallel transfers"
+          value={settings?.parallelTransfers ?? null}
+          min={PARALLEL_TRANSFERS_MIN}
+          max={PARALLEL_TRANSFERS_MAX}
+          onChange={(n) => void save({ parallelTransfers: n })}
+        />
+      </div>
+      <div className={styles.row}>
+        <span className={styles.rowLabel}>
+          Reconnect attempts
+          <small className={styles.rowHelp}>
+            How often a dropped connection is retried (after 1, 2, 4, 8, then
+            every 16 seconds) before Iris gives up. Paused transfers continue
+            once it is back. 0 = never reconnect.
+          </small>
+        </span>
+        <Stepper
+          label="Reconnect attempts"
+          value={settings?.reconnectAttempts ?? null}
+          min={RECONNECT_ATTEMPTS_MIN}
+          max={RECONNECT_ATTEMPTS_MAX}
+          show={(n) => (n === 0 ? "Off" : String(n))}
+          onChange={(n) => void save({ reconnectAttempts: n })}
+        />
       </div>
     </section>
   );

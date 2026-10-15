@@ -152,7 +152,29 @@ export function connect(
   });
 }
 
-/** Close a session (a no-op when it is already gone). */
+/**
+ * Reconnect a session that dropped, under the same id (the "Retry" buttons).
+ * While the core is still auto-reconnecting it skips the wait and tries now.
+ * Secrets work as for `connect`. Publishes `connecting`, then `connected`
+ * (its paused transfers resume) or `disconnected`. Rejects like `connect`,
+ * and with `notConnected` for an unknown or user-closed session.
+ */
+export function reconnect(
+  sessionId: SessionId,
+  secrets: ConnectSecrets = {},
+): Promise<void> {
+  return invoke("reconnect", {
+    sessionId,
+    password: secrets.password ?? null,
+    passphrase: secrets.passphrase ?? null,
+    remember: secrets.remember ?? false,
+  });
+}
+
+/**
+ * Close a session (a no-op when it is already gone). Its unfinished
+ * transfers are cancelled, so ask first when it has any.
+ */
 export function disconnect(sessionId: SessionId): Promise<void> {
   return invoke("disconnect", { sessionId });
 }
@@ -287,6 +309,15 @@ export function resolveConflict(
   return invoke("resolve_conflict", { jobId, resolution, applyToAll });
 }
 
+/**
+ * Queue a `failed` job again: a file starts over, a folder placeholder is
+ * listed again. Rejects with `notFound`, `invalidInput` (not failed) or
+ * `notConnected` (its session is not connected).
+ */
+export function retryTransfer(jobId: TransferId): Promise<void> {
+  return invoke("retry_transfer", { jobId });
+}
+
 /** Every transfer job (in discovery order) and the totals. */
 export function listTransfers(): Promise<TransferList> {
   return invoke("list_transfers");
@@ -306,7 +337,10 @@ export function hasActiveTransfers(): Promise<boolean> {
 // Window
 // ---------------------------------------------------------------------------
 
-/** Confirm quitting despite active work: arms the force-close flag and exits. */
+/**
+ * Confirm quitting despite active work: cancels every transfer, arms the
+ * force-close flag and exits.
+ */
 export function windowConfirmClose(): Promise<void> {
   return invoke("window_confirm_close");
 }

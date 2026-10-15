@@ -21,10 +21,12 @@ import {
   clearFinished as clearFinishedCmd,
   enqueueTransfers,
   listTransfers,
+  retryTransfer,
   toIpcError,
 } from "../ipc/commands";
 import type {
   BatchId,
+  SessionId,
   TransferId,
   TransferJob,
   TransferProgressEvent,
@@ -70,6 +72,8 @@ interface TransferStoreState {
   /** Queue a transfer; opens the panel. Resolves with the batch id, or `null`. */
   enqueue: (request: TransferRequest) => Promise<BatchId | null>;
   cancel: (jobId: TransferId) => Promise<void>;
+  /** Queue a failed job again (a file starts over, a folder is re-listed). */
+  retry: (jobId: TransferId) => Promise<void>;
   cancelBatch: (batchId: BatchId) => Promise<void>;
   /** Cancel every batch that still has unfinished jobs. */
   cancelAll: () => Promise<void>;
@@ -249,6 +253,16 @@ export const useTransferStore = create<TransferStoreState>((set, get) => ({
     get().scheduleResync();
   },
 
+  retry: async (jobId) => {
+    try {
+      await retryTransfer(jobId);
+    } catch (e) {
+      // Asked for explicitly, so even a lost session is worth saying.
+      toastError("Could not retry the transfer", toIpcError(e).message);
+    }
+    get().scheduleResync();
+  },
+
   cancelBatch: async (batchId) => {
     try {
       await cancelBatchCmd(batchId);
@@ -301,4 +315,17 @@ export function orderedJobs(state: {
     if (job) out.push(job);
   }
   return out;
+}
+
+/**
+ * The unfinished (queued, running, waiting or paused) jobs of a session:
+ * what a disconnect would cancel.
+ */
+export function unfinishedJobsOf(
+  jobs: Record<TransferId, TransferJob>,
+  sessionId: SessionId,
+): TransferJob[] {
+  return Object.values(jobs).filter(
+    (job) => job.sessionId === sessionId && !isFinal(job.state),
+  );
 }

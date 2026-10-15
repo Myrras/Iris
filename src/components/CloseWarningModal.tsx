@@ -3,8 +3,8 @@
  *
  * Raised by the backend's close/exit guard (via the `window:close-requested`
  * event, see `Core::has_active_work` — unfinished transfers); "Close anyway"
- * confirms via `windowConfirmClose` (which arms the backend force-close flag
- * and exits). Lists what would be interrupted, as Podium lists its
+ * confirms via `windowConfirmClose` (which cancels every transfer, arms the
+ * backend force-close flag and exits). Lists what would be interrupted, as Podium lists its
  * processes: the running, queued, waiting and paused transfers (re-pulled
  * when the dialog opens).
  */
@@ -83,8 +83,8 @@ export function CloseWarningModal({
     >
       <p className={styles.intro}>
         {unfinished > 0
-          ? `${transferCount(unfinished)} will be interrupted if you close Iris now. Partly copied files stay where they are.`
-          : "Iris is still busy. Closing now will interrupt any transfers in progress."}
+          ? `${transferCount(unfinished)} will be cancelled if you close Iris now. Partly copied files stay where they are.`
+          : "Iris is still busy. Closing now cancels any transfers in progress."}
       </p>
       {lines.length > 0 && (
         <ul className={styles.list} aria-label="Unfinished transfers">

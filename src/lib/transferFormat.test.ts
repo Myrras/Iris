@@ -24,6 +24,7 @@ function job(id: string, extra: Partial<TransferJob> = {}): TransferJob {
     bytesDone: 0,
     state: "queued",
     error: null,
+    folder: false,
     ...extra,
   };
 }

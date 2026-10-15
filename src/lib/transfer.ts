@@ -14,12 +14,20 @@ export function otherPane(pane: PaneId): PaneId {
   return pane === "local" ? "remote" : "local";
 }
 
-/** The live session the remote pane browses, or `null`. */
+/**
+ * The session the remote pane browses, or `null` while it is not connected
+ * (connecting, reconnecting or down: a transfer queued then would only
+ * fail with `notConnected`).
+ */
 export function remoteSessionId(): string | null {
   const target = usePaneStore.getState().panes.remote.target;
   if (target?.kind !== "remote") return null;
   const session = useSessionStore.getState().sessions[target.sessionId];
-  return session?.state === "disconnected" ? null : target.sessionId;
+  // No state heard yet counts as usable: the pane only gets the target once
+  // `connect` resolved, i.e. after the session was up.
+  return session && session.state.status !== "connected"
+    ? null
+    : target.sessionId;
 }
 
 /**

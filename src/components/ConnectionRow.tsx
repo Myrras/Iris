@@ -1,56 +1,40 @@
 /**
  * One saved connection in the sidebar: status dot, name, hover actions —
- * Podium's ProcessRow, with a connection's lifecycle on the dot. Clicking
- * connects (or shows the open session); right-click opens the row's menu.
+ * Podium's ProcessRow, with a connection's lifecycle on the dot (across all
+ * of the profile's tabs). Clicking connects (in the tab on screen when it is
+ * free, else in a new tab); right-click opens the row's menu.
  */
 
 import type { ConnectionProfile } from "../ipc/types";
+import { sessionStatus } from "../lib/sessionStatus";
 import type { SessionInfo } from "../state/sessionStore";
-import { StatusDot, type StatusTone } from "./StatusDot";
+import { StatusDot } from "./StatusDot";
 import { DisconnectIcon, EditIcon } from "./icons";
 import styles from "./ConnectionRow.module.css";
-
-/** Dot tone, label and pulse for a profile's latest session. */
-function connectionStatus(session: SessionInfo | undefined): {
-  tone: StatusTone;
-  label: string;
-  pulse: boolean;
-} {
-  switch (session?.state) {
-    case "connecting":
-      return { tone: "busy", label: "Connecting…", pulse: true };
-    case "connected":
-      return { tone: "ok", label: "Connected", pulse: false };
-    case "disconnected":
-      return session.reason
-        ? { tone: "error", label: session.reason, pulse: false }
-        : { tone: "idle", label: "Not connected", pulse: false };
-    default:
-      return { tone: "idle", label: "Not connected", pulse: false };
-  }
-}
 
 export function ConnectionRow({
   profile,
   session,
   active,
+  canDisconnect,
   onConnect,
   onEdit,
   onDisconnect,
   onContextMenu,
 }: {
   profile: ConnectionProfile;
-  /** The profile's latest session, if any. */
+  /** The session that speaks for the profile (`summarySessionFor`). */
   session: SessionInfo | undefined;
-  /** Shown in the remote pane right now. */
+  /** The tab on screen is about this profile. */
   active: boolean;
+  /** The tab on screen has a session of this profile to disconnect. */
+  canDisconnect: boolean;
   onConnect: () => void;
   onEdit: () => void;
   onDisconnect: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
-  const status = connectionStatus(session);
-  const connected = session?.state === "connected";
+  const status = sessionStatus(session?.state);
 
   return (
     <div
@@ -74,7 +58,7 @@ export function ConnectionRow({
       <StatusDot tone={status.tone} label={status.label} pulse={status.pulse} />
       <span className={styles.name}>{profile.name}</span>
       <span className={styles.actions} onClick={(e) => e.stopPropagation()}>
-        {connected && (
+        {canDisconnect && (
           <button
             type="button"
             className={styles.action}

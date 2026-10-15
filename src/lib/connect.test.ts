@@ -3,20 +3,38 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../ipc/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/commands")>()),
   connect: vi.fn(),
+  reconnect: vi.fn(),
   clearSecret: vi.fn(() => Promise.resolve()),
   disconnect: vi.fn(),
   listDir: vi.fn(() => Promise.resolve([])),
   homeDir: vi.fn(() => Promise.resolve("/home/alice")),
 }));
-vi.mock("../state/toastStore", () => ({ toastError: vi.fn() }));
+vi.mock("../state/toastStore", () => ({
+  toastError: vi.fn(),
+  toastSuccess: vi.fn(),
+}));
 
-import { clearSecret, connect, disconnect } from "../ipc/commands";
+import {
+  clearSecret,
+  connect,
+  disconnect,
+  listDir,
+  reconnect,
+} from "../ipc/commands";
 import type { ConnectionProfile } from "../ipc/types";
 import { initialPane, usePaneStore } from "../state/paneStore";
 import { usePromptStore } from "../state/promptStore";
+import { useProfilesStore } from "../state/profilesStore";
 import { useSessionStore } from "../state/sessionStore";
-import { toastError } from "../state/toastStore";
-import { connectProfile, disconnectSession } from "./connect";
+import { resetTabs, useTabsStore } from "../state/tabsStore";
+import { toastError, toastSuccess } from "../state/toastStore";
+import { useTransferStore } from "../state/transferStore";
+import {
+  connectInTab,
+  connectProfile,
+  disconnectSession,
+  retrySession,
+} from "./connect";
 
 const passwordProfile: ConnectionProfile = {
   id: "p-1",
@@ -39,7 +57,17 @@ const keyProfile: ConnectionProfile = {
 const head = () => usePromptStore.getState().queue[0];
 const remote = () => usePaneStore.getState().panes.remote;
 
+const tabs = () => useTabsStore.getState().tabs;
+const activeId = () => useTabsStore.getState().activeTabId;
+
 beforeEach(() => {
+  vi.clearAllMocks();
+  resetTabs();
+  useTransferStore.setState({ jobs: {}, order: [] });
+  useProfilesStore.setState({
+    profiles: [passwordProfile, keyProfile],
+    loaded: true,
+  });
   usePromptStore.setState({ queue: [] });
   useSessionStore.setState({ sessions: {} });
   usePaneStore.setState({
@@ -247,49 +275,195 @@ describe("connectProfile", () => {
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("shows an already connected session instead of reconnecting", async () => {
-    useSessionStore.getState().apply({
-      type: "sessionStateChanged",
-      sessionId: "s-9",
-      profileId: "p-2",
-      state: "connected",
-      reason: null,
+  it("connects in the tab on screen and names it after the profile", async () => {
+    vi.mocked(connect).mockResolvedValue("s-1");
+    await connectProfile(passwordProfile);
+    expect(tabs()).toHaveLength(1);
+    expect(tabs()[0]).toMatchObject({
+      sessionId: "s-1",
+      profileId: "p-1",
+      title: "Alpha",
+      connecting: false,
     });
-    await expect(connectProfile(keyProfile)).resolves.toBe("s-9");
-    expect(connect).not.toHaveBeenCalled();
-    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-9" });
   });
 
-  it("ignores a second connect while one is running", async () => {
+  it("opens a new session in a new tab when the tab on screen has one", async () => {
+    vi.mocked(connect)
+      .mockResolvedValueOnce("s-1")
+      .mockResolvedValueOnce("s-2");
+    await connectProfile(keyProfile);
+    const first = activeId();
+    // The same profile again: its own session, in its own tab.
+    await connectProfile(keyProfile);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(tabs().map((t) => t.sessionId)).toEqual(["s-1", "s-2"]);
+    expect(activeId()).not.toBe(first);
+    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-2" });
+  });
+
+  it("can connect in a new tab even when the one on screen is free", async () => {
+    vi.mocked(connect).mockResolvedValue("s-1");
+    await connectProfile(keyProfile, { newTab: true });
+    expect(tabs()).toHaveLength(2);
+    expect(tabs()[1].sessionId).toBe("s-1");
+  });
+
+  it("shows the session in the tab that asked, even after a switch", async () => {
     let release: (id: string) => void = () => undefined;
     vi.mocked(connect).mockImplementationOnce(
       () => new Promise((r) => (release = r)),
     );
-    const first = connectProfile(keyProfile);
-    await expect(connectProfile(keyProfile)).resolves.toBeNull();
+    const origin = activeId();
+    const result = connectProfile(keyProfile);
+    expect(tabs()[0].connecting).toBe(true);
+    useTabsStore.getState().newTab();
+    release("s-3");
+    await result;
+    const tab = tabs().find((t) => t.id === origin);
+    expect(tab).toMatchObject({ sessionId: "s-3", connecting: false });
+    expect(tab?.remotePane.target).toEqual({
+      kind: "remote",
+      sessionId: "s-3",
+    });
+    // The tab on screen is untouched.
+    expect(remote().target).toBeNull();
+    useTabsStore.getState().switchTo(origin);
+    await flush();
+    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-3" });
+  });
+
+  it("disconnects a session whose tab was closed while connecting", async () => {
+    let release: (id: string) => void = () => undefined;
+    vi.mocked(connect).mockImplementationOnce(
+      () => new Promise((r) => (release = r)),
+    );
+    vi.mocked(disconnect).mockResolvedValue(undefined);
+    useTabsStore.getState().newTab();
+    const tabId = activeId();
+    const result = connectInTab(tabId, keyProfile);
+    useTabsStore.getState().removeTab(tabId);
+    release("s-4");
+    await expect(result).resolves.toBeNull();
+    expect(disconnect).toHaveBeenCalledWith("s-4");
+  });
+
+  it("ignores a second connect in the same tab while one is running", async () => {
+    let release: (id: string) => void = () => undefined;
+    vi.mocked(connect).mockImplementationOnce(
+      () => new Promise((r) => (release = r)),
+    );
+    const tabId = activeId();
+    const first = connectInTab(tabId, keyProfile);
+    await expect(connectInTab(tabId, keyProfile)).resolves.toBeNull();
     release("s-3");
     await expect(first).resolves.toBe("s-3");
     expect(connect).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("disconnectSession", () => {
-  it("disconnects and returns the remote pane to its welcome state", async () => {
-    await usePaneStore
-      .getState()
-      .open("remote", { kind: "remote", sessionId: "s-1" }, null);
-    vi.mocked(disconnect).mockResolvedValue(undefined);
-    await disconnectSession("s-1");
-    expect(disconnect).toHaveBeenCalledWith("s-1");
-    expect(remote().target).toBeNull();
+describe("retrySession", () => {
+  function dropped(sessionId: string, profileId = "p-1") {
+    useSessionStore.getState().apply({
+      type: "sessionStateChanged",
+      sessionId,
+      profileId,
+      state: { status: "disconnected", reason: "the connection was lost" },
+    });
+  }
+
+  it("reconnects the same session and re-lists its pane", async () => {
+    vi.mocked(connect).mockResolvedValue("s-1");
+    await connectProfile(keyProfile);
+    await flush();
+    dropped("s-1", "p-2");
+    vi.mocked(reconnect).mockResolvedValue(undefined);
+    const lists = vi.mocked(listDir).mock.calls.length;
+    await expect(retrySession("s-1")).resolves.toBe(true);
+    expect(reconnect).toHaveBeenCalledWith("s-1");
+    expect(toastSuccess).toHaveBeenCalledWith("Reconnected to Beta");
+    await flush();
+    expect(vi.mocked(listDir).mock.calls.length).toBeGreaterThan(lists);
+    expect(connect).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves the remote pane alone for another session", async () => {
-    await usePaneStore
-      .getState()
-      .open("remote", { kind: "remote", sessionId: "s-1" }, null);
+  it("asks for the password the reconnect needs", async () => {
+    dropped("s-1");
+    vi.mocked(reconnect)
+      .mockRejectedValueOnce({
+        kind: "passwordRequired",
+        message: "a password is required",
+      })
+      .mockResolvedValueOnce(undefined);
+    const result = retrySession("s-1");
+    await flush();
+    const prompt = head();
+    expect(prompt).toMatchObject({ kind: "secret", secret: "password" });
+    if (prompt.kind !== "secret") throw new Error("unreachable");
+    await prompt.attempt("example-password", true);
+    await expect(result).resolves.toBe(true);
+    expect(reconnect).toHaveBeenLastCalledWith("s-1", {
+      password: "example-password",
+      remember: true,
+    });
+  });
+
+  it("reports a reconnect that fails", async () => {
+    dropped("s-1");
+    vi.mocked(reconnect).mockRejectedValueOnce({
+      kind: "connectFailed",
+      message: "could not connect: connection refused",
+    });
+    await expect(retrySession("s-1")).resolves.toBe(false);
+    expect(toastError).toHaveBeenCalledWith(
+      "Could not reconnect to Alpha",
+      "could not connect: connection refused",
+    );
+  });
+});
+
+describe("disconnectSession", () => {
+  it("disconnects and keeps the tab, ready to connect again", async () => {
+    vi.mocked(connect).mockResolvedValue("s-1");
     vi.mocked(disconnect).mockResolvedValue(undefined);
-    await disconnectSession("s-2");
-    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-1" });
+    await connectProfile(passwordProfile);
+    await flush();
+    disconnectSession("s-1");
+    await flush();
+    expect(disconnect).toHaveBeenCalledWith("s-1");
+    expect(remote().target).toBeNull();
+    expect(tabs()[0]).toMatchObject({
+      sessionId: null,
+      profileId: "p-1",
+      pendingRemotePath: "/srv",
+    });
+  });
+
+  it("asks first when the session still has transfers", async () => {
+    vi.mocked(connect).mockResolvedValue("s-1");
+    await connectProfile(passwordProfile);
+    useTransferStore.setState({
+      jobs: {
+        "j-1": {
+          id: "j-1",
+          batchId: "b-1",
+          sessionId: "s-1",
+          direction: "upload",
+          src: "/home/alice/a.txt",
+          dst: "/srv/a.txt",
+          size: 10,
+          bytesDone: 2,
+          state: "paused",
+          error: null,
+          folder: false,
+        },
+      },
+      order: ["j-1"],
+    });
+    disconnectSession("s-1");
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(useTabsStore.getState().pending).toEqual({
+      tabId: activeId(),
+      action: "disconnect",
+    });
   });
 });

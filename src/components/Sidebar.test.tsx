@@ -24,6 +24,7 @@ import { useConnectionFormStore } from "../state/connectionFormStore";
 import { initialPane, usePaneStore } from "../state/paneStore";
 import { useProfilesStore } from "../state/profilesStore";
 import { useSessionStore } from "../state/sessionStore";
+import { resetTabs, useTabsStore } from "../state/tabsStore";
 import { Sidebar } from "./Sidebar";
 
 const alpha: ConnectionProfile = {
@@ -43,6 +44,8 @@ function withProfiles(profiles: ConnectionProfile[]) {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  resetTabs();
   useProfilesStore.setState({ profiles: [], loaded: true });
   useSessionStore.setState({ sessions: {} });
   useConnectionFormStore.setState({ open: false, editing: null });
@@ -84,15 +87,13 @@ describe("Sidebar", () => {
       type: "sessionStateChanged",
       sessionId: "s-1",
       profileId: "p-1",
-      state: "connected",
-      reason: null,
+      state: { status: "connected" },
     });
     useSessionStore.getState().apply({
       type: "sessionStateChanged",
       sessionId: "s-2",
       profileId: "p-2",
-      state: "disconnected",
-      reason: "connection refused",
+      state: { status: "disconnected", reason: "connection refused" },
     });
     render(<Sidebar />);
     const list = screen.getByRole("list", { name: "Saved connections" });
@@ -113,25 +114,29 @@ describe("Sidebar", () => {
     expect(connectProfile).toHaveBeenCalledWith(alpha);
   });
 
-  it("marks the connection shown in the remote pane", () => {
+  it("marks the connection of the tab on screen and disconnects only it", () => {
     withProfiles([alpha, beta]);
     useSessionStore.getState().apply({
       type: "sessionStateChanged",
       sessionId: "s-1",
       profileId: "p-1",
-      state: "connected",
-      reason: null,
+      state: { status: "connected" },
     });
-    usePaneStore.setState((s) => ({
-      panes: {
-        ...s.panes,
-        remote: {
-          ...s.panes.remote,
-          target: { kind: "remote", sessionId: "s-1" },
-        },
-      },
-    }));
+    useSessionStore.getState().apply({
+      type: "sessionStateChanged",
+      sessionId: "s-2",
+      profileId: "p-2",
+      state: { status: "connected" },
+    });
+    const tabId = useTabsStore.getState().activeTabId;
+    useTabsStore
+      .getState()
+      .update(tabId, { sessionId: "s-1", profileId: "p-1" });
     render(<Sidebar />);
+    // Beta is connected in another tab: its dot says so, but no Disconnect.
+    expect(
+      screen.queryByRole("button", { name: "Disconnect Beta" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("Alpha").closest("[role=button]")).toHaveAttribute(
       "data-selected",
       "true",
@@ -141,6 +146,43 @@ describe("Sidebar", () => {
     ).not.toHaveAttribute("data-selected");
     fireEvent.click(screen.getByRole("button", { name: "Disconnect Alpha" }));
     expect(disconnectSession).toHaveBeenCalledWith("s-1");
+  });
+
+  it("shows a reconnecting session of any tab on the row's dot", () => {
+    withProfiles([alpha]);
+    useSessionStore.getState().apply({
+      type: "sessionStateChanged",
+      sessionId: "s-1",
+      profileId: "p-1",
+      state: { status: "connected" },
+    });
+    useSessionStore.getState().apply({
+      type: "sessionStateChanged",
+      sessionId: "s-2",
+      profileId: "p-1",
+      state: {
+        status: "reconnecting",
+        attempt: 2,
+        maxAttempts: 5,
+        nextRetryInSecs: 2,
+      },
+    });
+    render(<Sidebar />);
+    const dot = screen.getByRole("img", {
+      name: "Reconnecting (attempt 2 of 5)",
+    });
+    expect(dot).toHaveAttribute("data-tone", "warning");
+    expect(dot).toHaveAttribute("data-pulse", "true");
+  });
+
+  it("connects in a new tab from the context menu", () => {
+    withProfiles([alpha]);
+    render(<Sidebar />);
+    fireEvent.contextMenu(screen.getByText("Alpha"));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Connect in New Tab" }),
+    );
+    expect(connectProfile).toHaveBeenCalledWith(alpha, { newTab: true });
   });
 
   it("edits from the context menu", () => {

@@ -17,7 +17,9 @@ import {
   enqueueTransfers,
   hasActiveTransfers,
   listTransfers,
+  reconnect,
   resolveConflict,
+  retryTransfer,
   deletePaths,
   deleteProfile,
   disconnect,
@@ -111,6 +113,23 @@ describe("connection and session commands", () => {
     expect(invoke).toHaveBeenCalledWith("list_ssh_config_hosts");
   });
 
+  it("reconnects the same session with optional secrets", async () => {
+    await reconnect("s-1");
+    expect(invoke).toHaveBeenCalledWith("reconnect", {
+      sessionId: "s-1",
+      password: null,
+      passphrase: null,
+      remember: false,
+    });
+    await reconnect("s-1", { passphrase: "example-only", remember: true });
+    expect(invoke).toHaveBeenCalledWith("reconnect", {
+      sessionId: "s-1",
+      password: null,
+      passphrase: "example-only",
+      remember: true,
+    });
+  });
+
   it("names the session commands like the Rust handlers", async () => {
     await disconnect("s-1");
     await answerHostKey("r-1", true);
@@ -200,6 +219,8 @@ describe("transfer commands", () => {
 
   it("names the job commands like the Rust handlers", async () => {
     await cancelTransfer("t-1");
+    await retryTransfer("t-2");
+    expect(invoke).toHaveBeenCalledWith("retry_transfer", { jobId: "t-2" });
     await cancelBatch("b-1");
     await listTransfers();
     await clearFinished();

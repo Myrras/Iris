@@ -251,6 +251,12 @@ export interface TransferJob {
    * `skip` answer.
    */
   error: TransferError | null;
+  /**
+   * A placeholder for a folder whose listing was cut off by a dropped
+   * connection (`paused`) or failed (`failed`): resuming or retrying lists
+   * it, and the placeholder is replaced by its file jobs.
+   */
+  folder: boolean;
 }
 
 /** One selected file or folder (`iris_core::TransferItem`). */
@@ -344,8 +350,30 @@ export interface TransferConflictEvent {
 // Session events (`iris_core::CoreEvent`)
 // ---------------------------------------------------------------------------
 
-/** Lifecycle of one session (`iris_core::SessionState`). */
-export type SessionState = "connecting" | "connected" | "disconnected";
+/**
+ * Lifecycle of one session (`iris_core::SessionState`), tagged by `status`.
+ *
+ * - `reconnecting`: the connection dropped and the core retries it under the
+ *   same session id (backoff 1/2/4/8/16 s). Published before each wait with
+ *   `nextRetryInSecs` = the wait, and with `0` while that attempt runs.
+ * - `disconnected`: `reason` is app-owned text for a drop, a failed connect
+ *   or a reconnect that gave up; `null` when the user asked for it.
+ */
+export type SessionState =
+  | { status: "connecting" }
+  | { status: "connected" }
+  | {
+      status: "reconnecting";
+      /** 1-based. */
+      attempt: number;
+      maxAttempts: number;
+      /** Seconds until this attempt starts; 0 = it is running. */
+      nextRetryInSecs: number;
+    }
+  | { status: "disconnected"; reason: string | null };
+
+/** `SessionState["status"]`. */
+export type SessionStatus = SessionState["status"];
 
 /**
  * Payload of `session:host-key-prompt`: a connect reached a server whose key
@@ -370,11 +398,6 @@ export interface SessionStateChangedEvent {
   sessionId: SessionId;
   profileId: ProfileId;
   state: SessionState;
-  /**
-   * Set on a `disconnected` the user did not ask for (failed connect,
-   * dropped connection); app-owned text.
-   */
-  reason: string | null;
 }
 
 /**

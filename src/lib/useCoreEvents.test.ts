@@ -25,6 +25,7 @@ vi.mock("../ipc/events", () => {
 vi.mock("../ipc/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/commands")>()),
   listProfiles: vi.fn(() => Promise.resolve([])),
+  listDir: vi.fn(() => Promise.resolve([])),
   listTransfers: vi.fn(() =>
     Promise.resolve({
       jobs: [],
@@ -48,11 +49,25 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   ),
 }));
 
-import { getSettings, listProfiles, listTransfers } from "../ipc/commands";
+vi.mock("../state/toastStore", () => ({
+  toastError: vi.fn(),
+  toastSuccess: vi.fn(),
+}));
+
+import {
+  getSettings,
+  listDir,
+  listProfiles,
+  listTransfers,
+} from "../ipc/commands";
 import type { HostKeyPromptEvent, TransferJob } from "../ipc/types";
 import { useBackendSettingsStore } from "../state/backendSettingsStore";
 import { usePromptStore } from "../state/promptStore";
+import { initialPane, usePaneStore } from "../state/paneStore";
+import { useProfilesStore } from "../state/profilesStore";
 import { useSessionStore } from "../state/sessionStore";
+import { resetTabs, useTabsStore } from "../state/tabsStore";
+import { toastError, toastSuccess } from "../state/toastStore";
 import { resetTransferResync, useTransferStore } from "../state/transferStore";
 import { useCoreEvents } from "./useCoreEvents";
 
@@ -86,6 +101,7 @@ const job: TransferJob = {
   bytesDone: 0,
   state: "running",
   error: null,
+  folder: false,
 };
 
 describe("useCoreEvents", () => {
@@ -108,10 +124,11 @@ describe("useCoreEvents", () => {
       type: "sessionStateChanged",
       sessionId: "s-1",
       profileId: "p-1",
-      state: "connecting",
-      reason: null,
+      state: { status: "connecting" },
     });
-    expect(useSessionStore.getState().sessions["s-1"].state).toBe("connecting");
+    expect(useSessionStore.getState().sessions["s-1"].state).toEqual({
+      status: "connecting",
+    });
   });
 
   it("closes a host key prompt when its session disconnects", () => {
@@ -121,10 +138,110 @@ describe("useCoreEvents", () => {
       type: "sessionStateChanged",
       sessionId: "s-1",
       profileId: "p-1",
-      state: "disconnected",
-      reason: "host key prompt timed out",
+      state: { status: "disconnected", reason: "host key prompt timed out" },
     });
     expect(usePromptStore.getState().queue).toEqual([]);
+  });
+
+  describe("reconnects", () => {
+    const state = (status: unknown) =>
+      handlers.state({
+        type: "sessionStateChanged",
+        sessionId: "s-1",
+        profileId: "p-1",
+        state: status,
+      });
+    const reconnecting = {
+      status: "reconnecting",
+      attempt: 1,
+      maxAttempts: 5,
+      nextRetryInSecs: 1,
+    };
+
+    beforeEach(() => {
+      resetTabs();
+      useProfilesStore.setState({
+        profiles: [
+          {
+            id: "p-1",
+            name: "Alpha",
+            host: "alpha.example.test",
+            port: 22,
+            user: "alice",
+            auth: { kind: "agent" },
+            startDir: null,
+            jump: null,
+          },
+        ],
+        loaded: true,
+      });
+      const tabId = useTabsStore.getState().activeTabId;
+      useTabsStore
+        .getState()
+        .update(tabId, { sessionId: "s-1", profileId: "p-1" });
+      usePaneStore.setState({
+        panes: {
+          local: initialPane(),
+          remote: {
+            ...initialPane(),
+            target: { kind: "remote", sessionId: "s-1" },
+            path: "/srv",
+          },
+        },
+      });
+    });
+
+    it("toasts and re-lists the panes when the connection is back", () => {
+      renderHook(() => useCoreEvents());
+      state({ status: "connected" });
+      state(reconnecting);
+      expect(toastSuccess).not.toHaveBeenCalled();
+      state({ status: "connected" });
+      expect(toastSuccess).toHaveBeenCalledWith("Reconnected to Alpha");
+      expect(listDir).toHaveBeenCalledWith(
+        { kind: "remote", sessionId: "s-1" },
+        "/srv",
+      );
+    });
+
+    it("toasts why when the reconnect gave up", () => {
+      renderHook(() => useCoreEvents());
+      state(reconnecting);
+      state({
+        status: "disconnected",
+        reason: "could not reconnect after 5 attempts",
+      });
+      expect(toastError).toHaveBeenCalledWith(
+        "Could not reconnect to Alpha",
+        "could not reconnect after 5 attempts",
+      );
+    });
+
+    it("stays quiet for a first connect and a user disconnect", () => {
+      renderHook(() => useCoreEvents());
+      state({ status: "connecting" });
+      state({ status: "connected" });
+      state({ status: "disconnected", reason: null });
+      expect(toastSuccess).not.toHaveBeenCalled();
+      expect(toastError).not.toHaveBeenCalled();
+    });
+  });
+
+  it("turns restored tabs of deleted profiles into blank tabs", () => {
+    resetTabs();
+    const tabId = useTabsStore.getState().activeTabId;
+    useTabsStore.getState().update(tabId, {
+      profileId: "p-gone",
+      title: "Gone",
+      pendingRemotePath: "/srv",
+    });
+    renderHook(() => useCoreEvents());
+    useProfilesStore.setState({ profiles: [], loaded: true });
+    expect(useTabsStore.getState().tabs[0]).toMatchObject({
+      profileId: null,
+      title: "New tab",
+      pendingRemotePath: null,
+    });
   });
 
   it("unsubscribes on unmount", async () => {

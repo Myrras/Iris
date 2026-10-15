@@ -16,6 +16,9 @@ import { toastError } from "./toastStore";
 /** Bounds of `parallelTransfers` (`PARALLEL_TRANSFERS_RANGE` in the core). */
 export const PARALLEL_TRANSFERS_MIN = 1;
 export const PARALLEL_TRANSFERS_MAX = 16;
+/** Bounds of `reconnectAttempts` (`RECONNECT_ATTEMPTS_RANGE`; 0 = never). */
+export const RECONNECT_ATTEMPTS_MIN = 0;
+export const RECONNECT_ATTEMPTS_MAX = 20;
 
 interface BackendSettingsState {
   /** `null` until the first load arrived. */

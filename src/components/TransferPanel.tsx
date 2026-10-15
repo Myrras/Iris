@@ -5,8 +5,10 @@
  * 3.1 MB/s · ETA 0:42"), Cancel all and Clear finished, and a total progress
  * bar underneath. Body: one row per job (Podium's ProcessRow look), with
  * direction, file name (full paths in the tooltip), progress, bytes, speed,
- * a `StatusDot` + state (a failure's reason in its tooltip) and a cancel
- * button while it is unfinished. The list is virtualised, so a folder of
+ * a `StatusDot` + state (a failure's reason in its tooltip), a cancel
+ * button while it is unfinished and a retry button once it failed. A folder
+ * whose listing a dropped connection cut off is a placeholder row (folder
+ * icon) until resuming or retrying lists it into file rows. The list is virtualised, so a folder of
  * thousands of files stays cheap.
  *
  * Data comes from `transferStore` (events + throttled re-pulls); totals are
@@ -36,6 +38,8 @@ import {
   CaretIcon,
   CloseIcon,
   DownloadIcon,
+  FolderIcon,
+  RetryIcon,
   TransfersIcon,
   UploadIcon,
 } from "./icons";
@@ -64,8 +68,9 @@ const JobRow = memo(function JobRow({
   const Direction = job.direction === "upload" ? UploadIcon : DownloadIcon;
   const fraction =
     job.size > 0 ? job.bytesDone / job.size : job.state === "done" ? 1 : 0;
-  const bytes =
-    job.state === "done" || job.bytesDone === 0
+  const bytes = job.folder
+    ? "folder"
+    : job.state === "done" || job.bytesDone === 0
       ? formatSize(job.size)
       : `${formatSize(job.bytesDone)} / ${formatSize(job.size)}`;
 
@@ -83,6 +88,14 @@ const JobRow = memo(function JobRow({
         role="img"
       />
       <span className={styles.name} title={`${job.src} → ${job.dst}`}>
+        {job.folder && (
+          <FolderIcon
+            className={styles.folder}
+            aria-label="Folder, not listed yet"
+            aria-hidden={false}
+            role="img"
+          />
+        )}
         {name}
       </span>
       <ProgressBar
@@ -102,7 +115,17 @@ const JobRow = memo(function JobRow({
         />
         <span className={styles.stateText}>{label}</span>
       </span>
-      {final ? (
+      {job.state === "failed" ? (
+        <button
+          type="button"
+          className={styles.action}
+          aria-label={`Retry ${name}`}
+          title="Retry"
+          onClick={() => void useTransferStore.getState().retry(job.id)}
+        >
+          <RetryIcon size={12} />
+        </button>
+      ) : final ? (
         <span />
       ) : (
         <button

@@ -7,6 +7,7 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   cancelTransfer: vi.fn(() => Promise.resolve()),
   cancelBatch: vi.fn(() => Promise.resolve()),
   clearFinished: vi.fn(() => Promise.resolve()),
+  retryTransfer: vi.fn(() => Promise.resolve()),
   listDir: vi.fn(() => Promise.resolve([])),
 }));
 vi.mock("./toastStore", () => ({
@@ -21,6 +22,7 @@ import {
   enqueueTransfers,
   listDir,
   listTransfers,
+  retryTransfer,
 } from "../ipc/commands";
 import type { TransferJob, TransferList } from "../ipc/types";
 import { useLayoutStore } from "./layoutStore";
@@ -32,6 +34,7 @@ import {
   RESYNC_MS,
   orderedJobs,
   resetTransferResync,
+  unfinishedJobsOf,
   useTransferStore,
 } from "./transferStore";
 
@@ -47,6 +50,7 @@ function job(id: string, extra: Partial<TransferJob> = {}): TransferJob {
     bytesDone: 0,
     state: "queued",
     error: null,
+    folder: false,
     ...extra,
   };
 }
@@ -233,5 +237,29 @@ describe("transferStore", () => {
     await store().clearFinished();
     expect(clearFinished).toHaveBeenCalled();
     expect(store().order).toEqual([]);
+  });
+
+  it("retries a failed job and reports why it could not", async () => {
+    await useTransferStore.getState().retry("j-1");
+    expect(retryTransfer).toHaveBeenCalledWith("j-1");
+    expect(toastError).not.toHaveBeenCalled();
+    vi.mocked(retryTransfer).mockRejectedValueOnce({
+      kind: "notConnected",
+      message: "not connected",
+    });
+    await useTransferStore.getState().retry("j-1");
+    expect(toastError).toHaveBeenCalledWith(
+      "Could not retry the transfer",
+      "not connected",
+    );
+  });
+
+  it("lists a session's unfinished jobs", () => {
+    const jobs = {
+      a: job("a", { state: "paused" }),
+      b: job("b", { state: "done" }),
+      c: job("c", { state: "queued", sessionId: "s-other" }),
+    };
+    expect(unfinishedJobsOf(jobs, "s-1").map((j) => j.id)).toEqual(["a"]);
   });
 });

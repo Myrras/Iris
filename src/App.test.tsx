@@ -68,6 +68,11 @@ describe("App", () => {
     expect(screen.getByLabelText("Local files")).toBeInTheDocument();
     expect(screen.getByLabelText("Remote files")).toBeInTheDocument();
     expect(screen.getByLabelText("Transfers")).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "Tabs" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /New tab/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
   it("shows the welcome content in the remote pane", () => {

@@ -19,7 +19,11 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   enqueueTransfers: vi.fn(() => Promise.resolve("b-1")),
   listTransfers: vi.fn(() => new Promise(() => undefined)),
 }));
-vi.mock("../lib/connect", () => ({ connectProfile: vi.fn() }));
+vi.mock("../lib/connect", () => ({
+  connectInTab: vi.fn(),
+  retrySession: vi.fn(() => Promise.resolve(true)),
+}));
+vi.mock("../lib/tabs", () => ({ requestDisconnectSession: vi.fn() }));
 
 import {
   chmod,
@@ -29,8 +33,9 @@ import {
   mkdir,
   rename,
 } from "../ipc/commands";
-import type { ConnectionProfile, Entry } from "../ipc/types";
-import { connectProfile } from "../lib/connect";
+import type { ConnectionProfile, Entry, SessionState } from "../ipc/types";
+import { connectInTab, retrySession } from "../lib/connect";
+import { requestDisconnectSession } from "../lib/tabs";
 import { useConnectionFormStore } from "../state/connectionFormStore";
 import { useDragStore } from "../state/dragStore";
 import { useLayoutStore } from "../state/layoutStore";
@@ -38,6 +43,7 @@ import { initialPane, usePaneStore } from "../state/paneStore";
 import { useProfilesStore } from "../state/profilesStore";
 import { useSessionStore } from "../state/sessionStore";
 import { useSettingsStore } from "../state/settingsStore";
+import { resetTabs, useTabsStore } from "../state/tabsStore";
 import { stubViewport } from "../test/viewport";
 import { LocalIcon, ServerIcon } from "./icons";
 import { Pane } from "./Pane";
@@ -84,6 +90,7 @@ const rowNames = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetTabs();
   useLayoutStore.getState().setPreviewOpen(false);
   usePaneStore.setState({
     panes: { local: initialPane(), remote: initialPane() },
@@ -112,13 +119,12 @@ describe("Pane", () => {
     expect(useConnectionFormStore.getState().open).toBe(true);
   });
 
-  it("shows a dropped session with Reconnect", () => {
+  function showSession(state: SessionState) {
     useSessionStore.getState().apply({
       type: "sessionStateChanged",
       sessionId: "s-1",
       profileId: "p-1",
-      state: "disconnected",
-      reason: "connection lost",
+      state,
     });
     usePaneStore.setState((s) => ({
       panes: {
@@ -126,16 +132,88 @@ describe("Pane", () => {
         remote: {
           ...s.panes.remote,
           target: { kind: "remote", sessionId: "s-1" },
+          path: "/srv",
+          entries: [entry("/srv/report.pdf")],
         },
       },
     }));
+  }
+
+  it("shows a session the core gave up on, with Retry and Disconnect", () => {
+    showSession({ status: "disconnected", reason: "connection lost" });
     render(<Pane id="remote" title="Remote" Icon={ServerIcon} />);
     expect(screen.getByText("Disconnected from Alpha")).toBeInTheDocument();
     expect(screen.getByText("connection lost")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    // The same session comes back: no new connect.
+    expect(retrySession).toHaveBeenCalledWith("s-1");
+    expect(connectInTab).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    expect(requestDisconnectSession).toHaveBeenCalledWith("s-1");
+  });
+
+  it("keeps the listing under a reconnect banner that counts down", () => {
+    vi.useFakeTimers();
+    try {
+      showSession({
+        status: "reconnecting",
+        attempt: 2,
+        maxAttempts: 5,
+        nextRetryInSecs: 2,
+      });
+      render(<Pane id="remote" title="Remote" Icon={ServerIcon} />);
+      const banner = screen.getByRole("status");
+      expect(banner).toHaveTextContent("reconnecting (attempt 2 of 5)");
+      expect(banner).toHaveTextContent("Next try in 2s");
+      expect(screen.getByText("report.pdf")).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(1000));
+      expect(banner).toHaveTextContent("Next try in 1s");
+      act(() => vi.advanceTimersByTime(1000));
+      expect(banner).toHaveTextContent("Trying…");
+
+      // The next attempt starts a fresh countdown.
+      act(() =>
+        useSessionStore.getState().apply({
+          type: "sessionStateChanged",
+          sessionId: "s-1",
+          profileId: "p-1",
+          state: {
+            status: "reconnecting",
+            attempt: 3,
+            maxAttempts: 5,
+            nextRetryInSecs: 4,
+          },
+        }),
+      );
+      expect(screen.getByRole("status")).toHaveTextContent("attempt 3 of 5");
+      expect(screen.getByRole("status")).toHaveTextContent("Next try in 4s");
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry now" }));
+      expect(retrySession).toHaveBeenCalledWith("s-1");
+      fireEvent.click(
+        within(screen.getByRole("status")).getByRole("button", {
+          name: "Disconnect",
+        }),
+      );
+      expect(requestDisconnectSession).toHaveBeenCalledWith("s-1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("offers Reconnect in a restored tab without connecting by itself", () => {
+    const tabId = useTabsStore.getState().activeTabId;
+    useTabsStore.getState().update(tabId, {
+      profileId: "p-1",
+      title: "Alpha",
+      pendingRemotePath: "/srv/www",
+    });
+    render(<Pane id="remote" title="Remote" Icon={ServerIcon} />);
+    expect(screen.getByText("Alpha — not connected")).toBeInTheDocument();
+    expect(screen.getByText(/opens \/srv\/www again/)).toBeInTheDocument();
+    expect(connectInTab).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
-    expect(connectProfile).toHaveBeenCalledWith(alpha);
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(usePaneStore.getState().panes.remote.target).toBeNull();
+    expect(connectInTab).toHaveBeenCalledWith(tabId, alpha);
   });
 
   it("lists the folder with folders first and hidden files hidden", async () => {
@@ -385,8 +463,7 @@ describe("Pane", () => {
         type: "sessionStateChanged",
         sessionId: "s-1",
         profileId: "p-1",
-        state: "connected",
-        reason: null,
+        state: { status: "connected" },
       });
       render(<Pane id="remote" title="Remote" Icon={ServerIcon} />);
       await usePaneStore
@@ -415,8 +492,7 @@ describe("Pane", () => {
         type: "sessionStateChanged",
         sessionId: "s-1",
         profileId: "p-1",
-        state: "connected",
-        reason: null,
+        state: { status: "connected" },
       });
       vi.mocked(listDir).mockImplementation(async (_t, path) =>
         path === "/home/alice" ? HOME : path === "/srv" ? SRV : [],

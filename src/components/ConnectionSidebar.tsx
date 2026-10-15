@@ -1,8 +1,10 @@
 /**
- * The sidebar's Connections section: saved connections with their live state,
- * a context menu (connect / disconnect / edit / delete) and the delete
- * confirmation. Connecting goes through `connectProfile`, which shows the
- * session in the remote pane.
+ * The sidebar's Connections section: saved connections with their live state
+ * (summed over every tab's session of the profile), a context menu (connect,
+ * connect in a new tab, disconnect, edit, delete) and the delete
+ * confirmation. Connecting goes through `connectProfile`: in the tab on
+ * screen when it is free, else in a new tab. Disconnect acts on the tab on
+ * screen, so it is offered only on the row of that tab's profile.
  */
 
 import { useCallback, useState } from "react";
@@ -11,9 +13,9 @@ import { toIpcError } from "../ipc/commands";
 import type { ConnectionProfile } from "../ipc/types";
 import { connectProfile, disconnectSession } from "../lib/connect";
 import { useConnectionFormStore } from "../state/connectionFormStore";
-import { usePaneStore } from "../state/paneStore";
 import { useProfilesStore } from "../state/profilesStore";
-import { latestSessionFor, useSessionStore } from "../state/sessionStore";
+import { summarySessionFor, useSessionStore } from "../state/sessionStore";
+import { useTabsStore } from "../state/tabsStore";
 import { toastError } from "../state/toastStore";
 import { ConnectionRow } from "./ConnectionRow";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -26,7 +28,9 @@ export function ConnectionSidebar() {
   const profiles = useProfilesStore((s) => s.profiles);
   const loaded = useProfilesStore((s) => s.loaded);
   const sessions = useSessionStore((s) => s.sessions);
-  const remoteTarget = usePaneStore((s) => s.panes.remote.target);
+  const activeTab = useTabsStore((s) =>
+    s.tabs.find((t) => t.id === s.activeTabId),
+  );
   const openEdit = useConnectionFormStore((s) => s.openEdit);
 
   const [collapsed, setCollapsed] = useState(false);
@@ -39,8 +43,11 @@ export function ConnectionSidebar() {
   const [deleting, setDeleting] = useState<ConnectionProfile | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
-  const activeSessionId =
-    remoteTarget?.kind === "remote" ? remoteTarget.sessionId : null;
+  const activeProfileId = activeTab?.profileId ?? null;
+  // The session of the tab on screen: what Disconnect acts on.
+  const activeSession = activeTab?.sessionId
+    ? sessions[activeTab.sessionId]
+    : undefined;
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
   const closeDelete = useCallback(() => {
@@ -61,19 +68,22 @@ export function ConnectionSidebar() {
   }
 
   function menuItems(profile: ConnectionProfile): ContextMenuItem[] {
-    const session = latestSessionFor(sessions, profile.id);
-    const connected = session?.state === "connected";
+    const ownsActive =
+      activeSession !== undefined && activeSession.profileId === profile.id;
     return [
-      connected && session
+      ownsActive && activeSession.state.status !== "disconnected"
         ? {
             label: "Disconnect",
-            onSelect: () => void disconnectSession(session.sessionId),
+            onSelect: () => disconnectSession(activeSession.sessionId),
           }
         : {
             label: "Connect",
-            disabled: session?.state === "connecting",
             onSelect: () => void connectProfile(profile),
           },
+      {
+        label: "Connect in New Tab",
+        onSelect: () => void connectProfile(profile, { newTab: true }),
+      },
       { label: "Edit…", onSelect: () => openEdit(profile) },
       { label: "Delete…", danger: true, onSelect: () => setDeleting(profile) },
     ];
@@ -95,19 +105,23 @@ export function ConnectionSidebar() {
     body = (
       <div role="list" aria-label="Saved connections" className={styles.list}>
         {profiles.map((profile) => {
-          const session = latestSessionFor(sessions, profile.id);
+          const session = summarySessionFor(sessions, profile.id);
+          const active = activeProfileId === profile.id;
           return (
             <div role="listitem" key={profile.id}>
               <ConnectionRow
                 profile={profile}
                 session={session}
-                active={
-                  session !== undefined && session.sessionId === activeSessionId
+                active={active}
+                canDisconnect={
+                  active &&
+                  activeSession?.profileId === profile.id &&
+                  activeSession.state.status !== "disconnected"
                 }
                 onConnect={() => void connectProfile(profile)}
                 onEdit={() => openEdit(profile)}
                 onDisconnect={() =>
-                  session && void disconnectSession(session.sessionId)
+                  activeSession && disconnectSession(activeSession.sessionId)
                 }
                 onContextMenu={(e) => {
                   setMenu({ x: e.clientX, y: e.clientY, profile });

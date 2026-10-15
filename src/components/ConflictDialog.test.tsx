@@ -53,6 +53,7 @@ describe("ConflictDialog", () => {
           bytesDone: 0,
           state: "needsDecision",
           error: null,
+          folder: false,
         },
       },
       order: ["a"],

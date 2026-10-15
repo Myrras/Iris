@@ -4,7 +4,12 @@
  * transfer conflicts join the prompt queue, session states update
  * `sessionStore`, transfer events update `transferStore`, and settings
  * changes re-pull `backendSettingsStore`. Also does the initial profile and
- * transfer load.
+ * transfer load, and turns restored tabs of deleted profiles into blank ones.
+ *
+ * The automatic reconnect is announced here: a session going from
+ * `reconnecting` to `connected` toasts and re-lists its tab's panes; one
+ * going from `reconnecting` to `disconnected` (the core gave up, or needs a
+ * prompt) toasts why. A manual Retry reports its own outcome (`connect.ts`).
  */
 
 import { useEffect } from "react";
@@ -19,11 +24,38 @@ import {
   onTransferProgress,
   onTransfersUpdated,
 } from "../ipc/events";
+import type { SessionStateChangedEvent } from "../ipc/types";
 import { useBackendSettingsStore } from "../state/backendSettingsStore";
 import { useProfilesStore } from "../state/profilesStore";
 import { usePromptStore } from "../state/promptStore";
 import { useSessionStore } from "../state/sessionStore";
+import { useTabsStore } from "../state/tabsStore";
+import { toastError, toastSuccess } from "../state/toastStore";
 import { useTransferStore } from "../state/transferStore";
+import { refreshSessionPanes } from "./tabs";
+
+function onSessionState(event: SessionStateChangedEvent) {
+  const previous = useSessionStore.getState().apply(event);
+  const { state, sessionId } = event;
+  // The backend gave up waiting (timeout) or the connect died: a pending
+  // host key question for it can no longer be answered.
+  if (state.status === "disconnected") {
+    usePromptStore.getState().dropSession(sessionId);
+  }
+  if (previous?.status !== "reconnecting") return;
+  const name =
+    useProfilesStore.getState().profiles.find((p) => p.id === event.profileId)
+      ?.name ?? "the server";
+  if (state.status === "connected") {
+    toastSuccess(`Reconnected to ${name}`);
+    refreshSessionPanes(sessionId);
+  } else if (state.status === "disconnected") {
+    toastError(
+      `Could not reconnect to ${name}`,
+      state.reason ?? "The connection was closed.",
+    );
+  }
+}
 
 export function useCoreEvents(): void {
   useEffect(() => {
@@ -36,14 +68,7 @@ export function useCoreEvents(): void {
       onHostKeyPrompt((event) =>
         usePromptStore.getState().push({ kind: "hostKey", event }),
       ),
-      onSessionStateChanged((event) => {
-        useSessionStore.getState().apply(event);
-        // The backend gave up waiting (timeout) or the connect died: a
-        // pending host key question for it can no longer be answered.
-        if (event.state === "disconnected") {
-          usePromptStore.getState().dropSession(event.sessionId);
-        }
-      }),
+      onSessionStateChanged(onSessionState),
       onSettingsChanged(() => {
         // Only worth a re-read once something showed the settings.
         if (useBackendSettingsStore.getState().settings) {
@@ -57,7 +82,18 @@ export function useCoreEvents(): void {
         usePromptStore.getState().push({ kind: "transferConflict", event }),
       ),
     ];
+    const forgetMissing = (profiles: { id: string }[], loaded: boolean) => {
+      if (loaded) {
+        useTabsStore
+          .getState()
+          .forgetMissingProfiles(new Set(profiles.map((p) => p.id)));
+      }
+    };
+    const unsubProfiles = useProfilesStore.subscribe((s) =>
+      forgetMissing(s.profiles, s.loaded),
+    );
     return () => {
+      unsubProfiles();
       for (const sub of subs) {
         sub.then((unlisten) => unlisten()).catch(() => undefined);
       }

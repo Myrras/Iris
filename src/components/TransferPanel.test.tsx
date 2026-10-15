@@ -6,12 +6,18 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   cancelTransfer: vi.fn(() => Promise.resolve()),
   cancelBatch: vi.fn(() => Promise.resolve()),
   clearFinished: vi.fn(() => Promise.resolve()),
+  retryTransfer: vi.fn(() => Promise.resolve()),
   listTransfers: vi.fn(() =>
     Promise.resolve({ jobs: [], summary: EMPTY_SUMMARY }),
   ),
 }));
 
-import { cancelBatch, cancelTransfer, clearFinished } from "../ipc/commands";
+import {
+  cancelBatch,
+  cancelTransfer,
+  clearFinished,
+  retryTransfer,
+} from "../ipc/commands";
 import type { TransferJob } from "../ipc/types";
 import { summaryText, transferTotals } from "../lib/transferFormat";
 import { useLayoutStore } from "../state/layoutStore";
@@ -37,6 +43,7 @@ function job(id: string, extra: Partial<TransferJob> = {}): TransferJob {
     bytesDone: 0,
     state: "queued",
     error: null,
+    folder: false,
     ...extra,
   };
 }
@@ -144,6 +151,43 @@ describe("TransferPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Clear finished" }));
     expect(clearFinished).toHaveBeenCalled();
+  });
+
+  it("retries a failed job, and only a failed one", () => {
+    setJobs([
+      job("broken", {
+        state: "failed",
+        error: { kind: "permissionDenied", message: "permission denied: /srv" },
+      }),
+      job("fine", { state: "done", bytesDone: 2048 }),
+    ]);
+    render(<TransferPanel />);
+    expect(
+      screen.queryByRole("button", { name: "Retry fine.txt" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Cancel broken.txt" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry broken.txt" }));
+    expect(retryTransfer).toHaveBeenCalledWith("broken");
+  });
+
+  it("shows a folder whose listing was cut off as a folder row", () => {
+    setJobs([
+      job("photos", {
+        src: "/home/alice/photos",
+        dst: "/srv/photos",
+        size: 0,
+        state: "paused",
+        folder: true,
+      }),
+    ]);
+    render(<TransferPanel />);
+    const row = screen.getByRole("listitem", { name: "photos" });
+    expect(
+      within(row).getByRole("img", { name: "Folder, not listed yet" }),
+    ).toBeInTheDocument();
+    expect(row).toHaveTextContent("folder");
   });
 
   it("virtualises long queues", () => {

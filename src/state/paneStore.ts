@@ -10,6 +10,13 @@
  *
  * The file operations (new folder, rename, delete, chmod) live here too: each
  * calls the backend, then re-reads the folder so the pane mirrors the disk.
+ *
+ * ## Tabs
+ * This store holds the panes of the ACTIVE tab only; `tabsStore` keeps the
+ * panes of the tabs in the background as snapshots and swaps them in with
+ * `restore` on a switch. `restore` (like `open` and `close`) bumps the
+ * per-pane request tokens and epochs, so a listing or `open` still in flight
+ * for the tab that was left is dropped instead of landing in the new one.
  */
 
 import { create } from "zustand";
@@ -122,6 +129,11 @@ interface PaneStoreState {
   setSelection: (pane: PaneId, selection: SelectionState) => void;
   /** Detach the pane from its filesystem (the remote pane's welcome state). */
   close: (pane: PaneId) => void;
+  /**
+   * Show another tab's panes (a snapshot), dropping every request in flight
+   * for the ones on screen. The caller re-lists them (`tabsStore`).
+   */
+  restore: (panes: Record<PaneId, PaneState>, active: PaneId) => void;
 
   /** The pane the user last worked in (Preview follows it). */
   active: PaneId;
@@ -150,6 +162,12 @@ interface PaneStoreState {
 
 /** Latest request per pane; an older response is dropped on arrival. */
 const tokens: Record<PaneId, number> = { local: 0, remote: 0 };
+/**
+ * Bumped whenever a pane gets another location or tab (`open`, `close`,
+ * `restore`); an `open` that finds it changed after an await stops, so it
+ * never carries on into the home folder of a pane it no longer owns.
+ */
+const epochs: Record<PaneId, number> = { local: 0, remote: 0 };
 
 type LoadMode = "push" | "replace" | "refresh";
 
@@ -234,6 +252,7 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
       // Keep the view preferences; drop everything about the old location.
       const { sort, showHidden } = get().panes[pane];
       tokens[pane] += 1;
+      const epoch = ++epochs[pane];
       patch(pane, {
         ...initialPane(),
         target,
@@ -243,10 +262,13 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
       });
       try {
         if (path !== null && (await load(pane, path, "replace", []))) return;
+        if (epoch !== epochs[pane]) return;
         // No start folder, or it could not be opened: the home folder.
         const home = await homeDir(target);
+        if (epoch !== epochs[pane]) return;
         await load(pane, home, "replace", []);
       } catch (e) {
+        if (epoch !== epochs[pane]) return;
         const err = toIpcError(e);
         patch(pane, { loading: false, error: err.message });
         if (err.kind !== "notConnected") {
@@ -293,8 +315,25 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
 
     close: (pane) => {
       tokens[pane] += 1;
+      epochs[pane] += 1;
       const { sort, showHidden } = get().panes[pane];
       patch(pane, { ...initialPane(), sort, showHidden });
+    },
+
+    restore: (panes, active) => {
+      for (const id of ["local", "remote"] as const) {
+        tokens[id] += 1;
+        epochs[id] += 1;
+      }
+      // A snapshot taken mid-listing would spin forever: nothing in flight
+      // belongs to it any more.
+      set({
+        panes: {
+          local: { ...panes.local, loading: false },
+          remote: { ...panes.remote, loading: false },
+        },
+        active,
+      });
     },
 
     active: "local",

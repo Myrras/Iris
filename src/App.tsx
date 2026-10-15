@@ -4,10 +4,12 @@
  * Layout: a slim title bar on the canvas; below it the sidebar island on the
  * left and the work column on the right — the Local and Remote pane islands
  * side by side with the collapsible preview island at their right, and the
- * collapsible transfer island underneath. This
+ * collapsible transfer island underneath, with the tab strip above the
+ * panes (each tab its own pane pair and session, `tabsStore`). This
  * component also owns the app-level wiring: the backend events
  * (`useCoreEvents`), files dragged in from the OS (`useNativeDrop`), the
- * pane-drag chip (`DragGhost`), opening the local pane, settings access (native menu on
+ * pane-drag chip (`DragGhost`), opening the active tab's panes and the tab
+ * shortcuts, settings access (native menu on
  * macOS, title-bar gear elsewhere), the close-warning event, and suppressing
  * webview-only behaviour (reload shortcuts, the browser context menu).
  */
@@ -18,8 +20,9 @@ import { onMenuOpenSettings, onWindowCloseRequested } from "./ipc/events";
 import { isMac, isWindows } from "./lib/platform";
 import { useCoreEvents } from "./lib/useCoreEvents";
 import { useNativeDrop } from "./lib/useNativeDrop";
+import { useTabShortcuts } from "./lib/useTabShortcuts";
 import { useLayoutStore } from "./state/layoutStore";
-import { usePaneStore } from "./state/paneStore";
+import { useTabsStore } from "./state/tabsStore";
 import { useSettingsRequestStore } from "./state/settingsRequestStore";
 import { CloseWarningModal } from "./components/CloseWarningModal";
 import { ConnectionForm } from "./components/ConnectionForm";
@@ -30,6 +33,8 @@ import { PreviewPanel } from "./components/PreviewPanel";
 import { PromptHost } from "./components/PromptHost";
 import { SettingsModal } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
+import { TabBar } from "./components/TabBar";
+import { TabCloseModal } from "./components/TabCloseModal";
 import { Toasts } from "./components/Toasts";
 import { TransferPanel } from "./components/TransferPanel";
 import { WindowControls } from "./components/WindowControls";
@@ -39,12 +44,12 @@ import styles from "./App.module.css";
 export default function App() {
   useCoreEvents();
   useNativeDrop();
+  useTabShortcuts();
 
-  // The local pane always shows this machine, starting in the home folder.
+  // Open the active tab's panes: the local pane in its restored folder (or
+  // home), the remote pane only once the user connects (never on its own).
   useEffect(() => {
-    if (!usePaneStore.getState().panes.local.target) {
-      void usePaneStore.getState().open("local", { kind: "local" }, null);
-    }
+    useTabsStore.getState().showActive();
   }, []);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -178,6 +183,7 @@ export default function App() {
           aria-label="Resize sidebar"
         />
         <main className={styles.work}>
+          <TabBar />
           <div className={styles.panes}>
             <Pane id="local" title="Local" Icon={LocalIcon} />
             <Pane id="remote" title="Remote" Icon={ServerIcon} />
@@ -198,6 +204,7 @@ export default function App() {
           useSettingsRequestStore.getState().clear();
         }}
       />
+      <TabCloseModal />
       <CloseWarningModal
         open={closeWarnOpen}
         onClose={() => setCloseWarnOpen(false)}

@@ -74,6 +74,7 @@ describe("CloseWarningModal", () => {
       bytesDone: 0,
       state,
       error: null,
+      folder: false,
     });
     const jobs = [
       job("a", "running"),
@@ -103,7 +104,7 @@ describe("CloseWarningModal", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText(/3 transfers will be interrupted/),
+        screen.getByText(/3 transfers will be cancelled/),
       ).toBeInTheDocument(),
     );
     const list = screen.getByRole("list", { name: "Unfinished transfers" });

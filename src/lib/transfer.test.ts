@@ -27,8 +27,7 @@ beforeEach(() => {
       "s-1": {
         sessionId: "s-1",
         profileId: "p-1",
-        state: "connected",
-        reason: null,
+        state: { status: "connected" },
       },
     },
   });
@@ -60,8 +59,7 @@ describe("transfer", () => {
         "s-1": {
           sessionId: "s-1",
           profileId: "p-1",
-          state: "disconnected",
-          reason: null,
+          state: { status: "disconnected", reason: null },
         },
       },
     });

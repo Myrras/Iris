@@ -220,3 +220,40 @@
     opacity: 0;
   }
 }
+
+/* ── Reconnect banner (over the listing while the core reconnects) ─────── */
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  flex-shrink: 0;
+  animation: fadeRise var(--dur-3) var(--ease-out);
+}
+
+.banner > :global(.spinner) {
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
+.bannerText {
+  flex: 1;
+  min-width: 0;
+}
+
+.bannerMuted {
+  color: var(--text-muted);
+  /* The countdown ticks every second; keep the line from jittering. */
+  font-variant-numeric: tabular-nums;
+}
+
+.bannerActions {
+  display: flex;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+}

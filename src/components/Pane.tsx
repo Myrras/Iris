@@ -17,25 +17,32 @@
  * Files dragged in from Finder / Explorer (`lib/useNativeDrop`) show a drop
  * overlay on the Remote pane.
  *
- * The remote pane without a session shows the welcome screen; a session that
- * dropped shows why, with Reconnect.
+ * The remote pane without a session shows the welcome screen, or — in a
+ * tab about a connection (restored at start, or disconnected by the user) —
+ * "not connected" with Reconnect, which opens a new session for the tab.
+ * While the core reconnects a dropped session the listing stays visible
+ * under a banner (attempt n of max, a countdown, Retry now, Disconnect); a
+ * session the core gave up on shows why, with Retry (same session id) and
+ * Disconnect.
  */
 
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type ComponentType,
 } from "react";
 
-import type { Entry } from "../ipc/types";
-import { connectProfile } from "../lib/connect";
+import type { ConnectionProfile, Entry, SessionId } from "../ipc/types";
+import { connectInTab, retrySession } from "../lib/connect";
 import { isDirLike, visibleEntries } from "../lib/entries";
 import { startPaneDrag } from "../lib/paneDrag";
 import { baseName, parentPath } from "../lib/path";
 import { isMac } from "../lib/platform";
 import { clickSelection, moveCursor } from "../lib/selection";
+import { requestDisconnectSession } from "../lib/tabs";
 import { otherPane, startTransfer } from "../lib/transfer";
 import { useConnectionFormStore } from "../state/connectionFormStore";
 import { useDragStore } from "../state/dragStore";
@@ -44,6 +51,7 @@ import { actionTargets, usePaneStore, type PaneId } from "../state/paneStore";
 import { useProfilesStore } from "../state/profilesStore";
 import { useSessionStore } from "../state/sessionStore";
 import { useSettingsStore } from "../state/settingsStore";
+import { useTabsStore, type Tab } from "../state/tabsStore";
 import { Breadcrumb } from "./Breadcrumb";
 import { ChmodDialog, type ChmodRequest } from "./ChmodDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -91,45 +99,46 @@ export function Pane({
   const session = useSessionStore((s) =>
     sessionId ? s.sessions[sessionId] : undefined,
   );
+  const tab = useTabsStore((s) => s.tabs.find((t) => t.id === s.activeTabId));
+  const profileId =
+    session?.profileId ?? (id === "remote" ? tab?.profileId : undefined);
   const profile = useProfilesStore((s) =>
-    session ? s.profiles.find((p) => p.id === session.profileId) : undefined,
+    profileId ? s.profiles.find((p) => p.id === profileId) : undefined,
   );
   const openNew = useConnectionFormStore((s) => s.openNew);
+  const state = session?.state;
 
   let body;
   if (!target) {
-    body = <WelcomeScreen onConnect={openNew} />;
-  } else if (session?.state === "disconnected") {
+    body =
+      id === "remote" && tab && profile ? (
+        <NotConnected tab={tab} profile={profile} />
+      ) : (
+        <WelcomeScreen onConnect={openNew} />
+      );
+  } else if (sessionId && state?.status === "disconnected") {
     body = (
-      <div className={styles.notice}>
-        <DisconnectIcon size={28} className={styles.noticeIcon} />
-        <p className={styles.noticeTitle}>
-          Disconnected{profile ? ` from ${profile.name}` : ""}
-        </p>
-        {session.reason && (
-          <p className={styles.noticeText}>{session.reason}</p>
-        )}
-        <div className={styles.noticeActions}>
-          <button
-            type="button"
-            onClick={() => usePaneStore.getState().close(id)}
-          >
-            Close
-          </button>
-          {profile && (
-            <button
-              type="button"
-              className="primary"
-              onClick={() => void connectProfile(profile)}
-            >
-              Reconnect
-            </button>
-          )}
-        </div>
-      </div>
+      <ConnectionLost
+        sessionId={sessionId}
+        name={profile?.name}
+        reason={state.reason}
+      />
     );
   } else {
-    body = <PaneBrowser id={id} label={title} />;
+    body = (
+      <>
+        {sessionId && state?.status === "reconnecting" && (
+          <ReconnectBanner
+            key={`${state.attempt}:${state.nextRetryInSecs}`}
+            sessionId={sessionId}
+            attempt={state.attempt}
+            maxAttempts={state.maxAttempts}
+            nextRetryInSecs={state.nextRetryInSecs}
+          />
+        )}
+        <PaneBrowser id={id} label={title} />
+      </>
+    );
   }
 
   const setActive = () => usePaneStore.getState().setActive(id);
@@ -140,7 +149,8 @@ export function Pane({
     s.nativeDrag && s.over?.pane === id ? s.over : null,
   );
   const path = usePaneStore((s) => s.panes[id].path);
-  const connected = !!target && session?.state !== "disconnected";
+  const connected =
+    !!target && (!session || session.state.status === "connected");
 
   return (
     <section
@@ -171,6 +181,145 @@ export function Pane({
   );
 }
 
+/**
+ * The remote pane of a tab about a connection without a session: restored
+ * at start (Iris never connects on its own) or disconnected by the user.
+ */
+function NotConnected({
+  tab,
+  profile,
+}: {
+  tab: Tab;
+  profile: ConnectionProfile;
+}) {
+  return (
+    <div className={styles.notice}>
+      <DisconnectIcon size={28} className={styles.noticeIcon} />
+      <p className={styles.noticeTitle}>{profile.name} — not connected</p>
+      {tab.pendingRemotePath && (
+        <p className={styles.noticeText}>
+          Reconnecting opens {tab.pendingRemotePath} again.
+        </p>
+      )}
+      <div className={styles.noticeActions}>
+        <button
+          type="button"
+          className="primary"
+          disabled={tab.connecting}
+          onClick={() => void connectInTab(tab.id, profile)}
+        >
+          {tab.connecting ? "Connecting…" : "Reconnect"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** A dropped session the core stopped retrying (or could not retry). */
+function ConnectionLost({
+  sessionId,
+  name,
+  reason,
+}: {
+  sessionId: SessionId;
+  name: string | undefined;
+  reason: string | null;
+}) {
+  const [busy, setBusy] = useState(false);
+  const retry = async () => {
+    setBusy(true);
+    try {
+      await retrySession(sessionId);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className={styles.notice}>
+      <DisconnectIcon size={28} className={styles.noticeIcon} />
+      <p className={styles.noticeTitle}>
+        Disconnected{name ? ` from ${name}` : ""}
+      </p>
+      {reason && <p className={styles.noticeText}>{reason}</p>}
+      <div className={styles.noticeActions}>
+        <button
+          type="button"
+          onClick={() => requestDisconnectSession(sessionId)}
+        >
+          Disconnect
+        </button>
+        <button
+          type="button"
+          className="primary"
+          disabled={busy}
+          onClick={() => void retry()}
+        >
+          {busy ? "Retrying…" : "Retry"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Seconds left of `from` (as of the event), counted down locally once a
+ * second. The banner is keyed by attempt and wait, so every new event
+ * starts a fresh countdown.
+ */
+function useCountdown(from: number): number {
+  const [left, setLeft] = useState(from);
+  useEffect(() => {
+    if (from <= 0) return;
+    const timer = setInterval(() => {
+      setLeft((n) => Math.max(0, n - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [from]);
+  return left;
+}
+
+/** Over the listing while the core reconnects a dropped session. */
+function ReconnectBanner({
+  sessionId,
+  attempt,
+  maxAttempts,
+  nextRetryInSecs,
+}: {
+  sessionId: SessionId;
+  attempt: number;
+  maxAttempts: number;
+  nextRetryInSecs: number;
+}) {
+  const left = useCountdown(nextRetryInSecs);
+  return (
+    <div className={styles.banner} role="status">
+      <span className="spinner" aria-hidden />
+      <span className={styles.bannerText}>
+        <strong>Connection lost</strong> — reconnecting (attempt {attempt} of{" "}
+        {maxAttempts}).{" "}
+        <span className={styles.bannerMuted}>
+          {left > 0 ? `Next try in ${left}s` : "Trying…"}
+        </span>
+      </span>
+      <span className={styles.bannerActions}>
+        <button
+          type="button"
+          onClick={() => requestDisconnectSession(sessionId)}
+        >
+          Disconnect
+        </button>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => void retrySession(sessionId)}
+        >
+          Retry now
+        </button>
+      </span>
+    </div>
+  );
+}
+
 /** Toolbar + table for a pane that has a filesystem. */
 function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   const pane = usePaneStore((s) => s.panes[id]);
@@ -183,14 +332,16 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   // Copying to the other pane needs a live session and both folders.
   const otherPath = usePaneStore((s) => s.panes[otherPane(id)].path);
   const remoteTarget = usePaneStore((s) => s.panes.remote.target);
-  const remoteState = useSessionStore((s) =>
+  const remoteStatus = useSessionStore((s) =>
     remoteTarget?.kind === "remote"
-      ? s.sessions[remoteTarget.sessionId]?.state
+      ? s.sessions[remoteTarget.sessionId]?.state.status
       : undefined,
   );
+  // Only a connected session can take a transfer (none heard yet = the
+  // connect just resolved, so it is up).
   const canCopy =
     remoteTarget?.kind === "remote" &&
-    remoteState !== "disconnected" &&
+    (remoteStatus === undefined || remoteStatus === "connected") &&
     pane.path !== null &&
     otherPath !== null;
   const hasTargets = pane.selection.length > 0 || pane.cursor !== null;

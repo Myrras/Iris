@@ -12,12 +12,14 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import {
+  onSessionStateChanged,
   onTransferConflict,
   onTransferJobChanged,
   onTransferProgress,
   onTransfersUpdated,
 } from "./events";
 import type {
+  SessionStateChangedEvent,
   TransferConflictEvent,
   TransferJobChangedEvent,
   TransferProgressEvent,
@@ -70,6 +72,7 @@ describe("transfer events", () => {
         bytesDone: 0,
         state: "needsDecision",
         error: null,
+        folder: false,
       },
     };
     const onProgress = vi.fn();
@@ -88,5 +91,25 @@ describe("transfer events", () => {
     expect(onConflict).toHaveBeenCalledWith(conflict);
     expect(onChanged).toHaveBeenCalledWith(changed);
     expect(onUpdated).toHaveBeenCalledWith();
+  });
+});
+
+describe("session events", () => {
+  it("hands over the tagged session state as is", async () => {
+    const event: SessionStateChangedEvent = {
+      type: "sessionStateChanged",
+      sessionId: "s-1",
+      profileId: "p-1",
+      state: {
+        status: "reconnecting",
+        attempt: 2,
+        maxAttempts: 5,
+        nextRetryInSecs: 2,
+      },
+    };
+    const handler = vi.fn();
+    await onSessionStateChanged(handler);
+    listeners["session:state-changed"]({ payload: event });
+    expect(handler).toHaveBeenCalledWith(event);
   });
 });
