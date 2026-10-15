@@ -1,6 +1,26 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../ipc/commands", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc/commands")>()),
+  getSettings: vi.fn(() =>
+    Promise.resolve({
+      parallelTransfers: 15,
+      reconnectAttempts: 3,
+      editorOverrides: {},
+    }),
+  ),
+  saveSettings: vi.fn((s: unknown) => Promise.resolve(s)),
+}));
+
+import { saveSettings } from "../ipc/commands";
+import { useBackendSettingsStore } from "../state/backendSettingsStore";
 import { useSettingsRequestStore } from "../state/settingsRequestStore";
 import { DEFAULTS, useSettingsStore } from "../state/settingsStore";
 import { useThemeStore } from "../state/themeStore";
@@ -72,5 +92,49 @@ describe("SettingsModal — General tab", () => {
     expect(
       screen.getByRole("button", { name: "Decrease preview size limit" }),
     ).toBeDisabled();
+  });
+});
+
+describe("SettingsModal — Transfers tab", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useBackendSettingsStore.setState({ settings: null });
+    useSettingsRequestStore.getState().clear();
+  });
+
+  it("loads and steps parallel transfers up to 16", async () => {
+    render(<SettingsModal open onClose={() => undefined} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Transfers" }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Parallel transfers")).toHaveTextContent(
+        "15",
+      ),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Increase parallel transfers" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("Parallel transfers")).toHaveTextContent(
+        "16",
+      ),
+    );
+    expect(saveSettings).toHaveBeenCalledWith({
+      parallelTransfers: 16,
+      reconnectAttempts: 3,
+      editorOverrides: {},
+    });
+    expect(
+      screen.getByRole("button", { name: "Increase parallel transfers" }),
+    ).toBeDisabled();
+  });
+
+  it("opens on the Transfers tab when asked to", () => {
+    useSettingsRequestStore.getState().open("transfers");
+    render(<SettingsModal open onClose={() => undefined} />);
+    expect(screen.getByRole("tab", { name: "Transfers" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 });

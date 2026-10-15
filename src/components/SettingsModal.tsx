@@ -1,14 +1,23 @@
 /**
- * App settings dialog, tabbed like Podium's. Phase 0 ships the General tab
- * (theme, reduced motion, hidden files, preview size cap — all UI prefs from
- * `themeStore` / `settingsStore`). Transfers and Editors tabs, backed by the
- * core's `settings.json` (`getSettings` / `saveSettings`), join it later: add
- * the id to `SettingsTabId`, an entry to `TABS` and a branch in `TabBody`.
+ * App settings dialog, tabbed like Podium's.
+ *
+ * - General: theme, reduced motion, hidden files, preview size cap — UI
+ *   prefs from `themeStore` / `settingsStore`.
+ * - Transfers: parallel transfers, from the core's `settings.json` via
+ *   `backendSettingsStore` (`getSettings` / `saveSettings`).
+ *
+ * A new tab: add the id to `SettingsTabId`, an entry to `TABS` and a branch
+ * in `TabBody`.
  */
 
 import { useEffect, useState } from "react";
 
 import { Modal } from "./Modal";
+import {
+  PARALLEL_TRANSFERS_MAX,
+  PARALLEL_TRANSFERS_MIN,
+  useBackendSettingsStore,
+} from "../state/backendSettingsStore";
 import { useThemeStore, type ThemeMode } from "../state/themeStore";
 import {
   PREVIEW_MAX_SIZE_MAX_MB,
@@ -27,7 +36,10 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-const TABS: [SettingsTabId, string][] = [["general", "General"]];
+const TABS: [SettingsTabId, string][] = [
+  ["general", "General"],
+  ["transfers", "Transfers"],
+];
 
 /**
  * Each theme's background / accent / text, as fixed preview tokens
@@ -134,7 +146,60 @@ function TabBody({ tab }: { tab: SettingsTabId }) {
   switch (tab) {
     case "general":
       return <GeneralTab />;
+    case "transfers":
+      return <TransfersTab />;
   }
+}
+
+function TransfersTab() {
+  const settings = useBackendSettingsStore((s) => s.settings);
+  const save = useBackendSettingsStore((s) => s.save);
+  useEffect(() => {
+    void useBackendSettingsStore.getState().load();
+  }, []);
+
+  const parallel = settings?.parallelTransfers ?? null;
+  return (
+    <section className={styles.section}>
+      <h3 className={styles.sectionLabel}>Transfers</h3>
+      <div className={styles.row}>
+        <span className={styles.rowLabel}>
+          Parallel transfers
+          <small className={styles.rowHelp}>
+            How many files copy at once. A change applies to the next file that
+            starts.
+          </small>
+        </span>
+        <div className={styles.stepper}>
+          <button
+            type="button"
+            aria-label="Decrease parallel transfers"
+            disabled={parallel === null || parallel <= PARALLEL_TRANSFERS_MIN}
+            onClick={() =>
+              parallel !== null &&
+              void save({ parallelTransfers: parallel - 1 })
+            }
+          >
+            <MinusIcon size={14} />
+          </button>
+          <span className={styles.stepperValue} aria-label="Parallel transfers">
+            {parallel ?? "–"}
+          </span>
+          <button
+            type="button"
+            aria-label="Increase parallel transfers"
+            disabled={parallel === null || parallel >= PARALLEL_TRANSFERS_MAX}
+            onClick={() =>
+              parallel !== null &&
+              void save({ parallelTransfers: parallel + 1 })
+            }
+          >
+            <AddIcon size={14} />
+          </button>
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function GeneralTab() {

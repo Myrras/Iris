@@ -9,6 +9,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 import { invoke } from "@tauri-apps/api/core";
 
 import { useToastStore } from "../state/toastStore";
+import { resetTransferResync, useTransferStore } from "../state/transferStore";
 import { CloseWarningModal } from "./CloseWarningModal";
 
 describe("CloseWarningModal", () => {
@@ -16,6 +17,8 @@ describe("CloseWarningModal", () => {
     vi.mocked(invoke).mockReset();
     vi.mocked(invoke).mockResolvedValue(undefined);
     useToastStore.setState({ toasts: [] });
+    resetTransferResync();
+    useTransferStore.setState({ jobs: {}, order: [], speeds: {} });
   });
 
   it("warns that closing interrupts work in progress", () => {
@@ -57,5 +60,54 @@ describe("CloseWarningModal", () => {
       ).toBe(true),
     );
     expect(screen.getByRole("button", { name: "Close anyway" })).toBeEnabled();
+  });
+
+  it("lists the unfinished transfers it would interrupt", async () => {
+    const job = (id: string, state: "running" | "queued" | "done") => ({
+      id,
+      batchId: "b-1",
+      sessionId: "s-1",
+      direction: "upload" as const,
+      src: `/home/alice/${id}`,
+      dst: `/srv/${id}`,
+      size: 10,
+      bytesDone: 0,
+      state,
+      error: null,
+    });
+    const jobs = [
+      job("a", "running"),
+      job("b", "queued"),
+      job("c", "queued"),
+      job("d", "done"),
+    ];
+    vi.mocked(invoke).mockImplementation((cmd: string) =>
+      Promise.resolve(
+        cmd === "list_transfers"
+          ? {
+              jobs,
+              summary: {
+                totalBytes: 40,
+                doneBytes: 0,
+                bytesPerSec: 0,
+                active: 1,
+                queued: 2,
+                needsDecision: 0,
+                paused: 0,
+              },
+            }
+          : undefined,
+      ),
+    );
+    render(<CloseWarningModal open onClose={() => undefined} />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/3 transfers will be interrupted/),
+      ).toBeInTheDocument(),
+    );
+    const list = screen.getByRole("list", { name: "Unfinished transfers" });
+    expect(list).toHaveTextContent("1 copying");
+    expect(list).toHaveTextContent("2 queued");
   });
 });

@@ -3,3 +3,25 @@
   font-size: var(--fs-sm);
   color: var(--text-muted);
 }
+
+/* What would be interrupted, one line per transfer state (Podium lists its
+   running processes the same way). */
+.list {
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}

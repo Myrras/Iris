@@ -2,17 +2,21 @@
  * Warns before Iris quits while work is still in flight.
  *
  * Raised by the backend's close/exit guard (via the `window:close-requested`
- * event, see `Core::has_active_work`); "Close anyway" confirms via
- * `windowConfirmClose` (which arms the backend force-close flag and exits).
- * Phase 0 has no work to interrupt, so the guard never fires yet; Phase 5
- * lists the running transfers here, as Podium lists its processes.
+ * event, see `Core::has_active_work` — unfinished transfers); "Close anyway"
+ * confirms via `windowConfirmClose` (which arms the backend force-close flag
+ * and exits). Lists what would be interrupted, as Podium lists its
+ * processes: the running, queued, waiting and paused transfers (re-pulled
+ * when the dialog opens).
  */
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { toIpcError, windowConfirmClose } from "../ipc/commands";
+import { transferCount, transferTotals } from "../lib/transferFormat";
 import { toastError } from "../state/toastStore";
+import { useTransferStore } from "../state/transferStore";
 import { Modal } from "./Modal";
+import { StatusDot } from "./StatusDot";
 import styles from "./CloseWarningModal.module.css";
 
 export function CloseWarningModal({
@@ -23,6 +27,12 @@ export function CloseWarningModal({
   onClose: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const jobs = useTransferStore((s) => s.jobs);
+  const totals = useMemo(() => transferTotals(Object.values(jobs), {}), [jobs]);
+
+  useEffect(() => {
+    if (open) void useTransferStore.getState().resync();
+  }, [open]);
 
   const confirm = async () => {
     setBusy(true);
@@ -35,6 +45,19 @@ export function CloseWarningModal({
       toastError("Could not close Iris", toIpcError(e).message);
     }
   };
+
+  const unfinished =
+    totals.active + totals.queued + totals.needsDecision + totals.paused;
+  const lines = [
+    { n: totals.active, text: "copying", tone: "busy" as const },
+    { n: totals.queued, text: "queued", tone: "idle" as const },
+    {
+      n: totals.needsDecision,
+      text: "waiting for your answer",
+      tone: "warning" as const,
+    },
+    { n: totals.paused, text: "paused", tone: "warning" as const },
+  ].filter((l) => l.n > 0);
 
   return (
     <Modal
@@ -59,9 +82,22 @@ export function CloseWarningModal({
       }
     >
       <p className={styles.intro}>
-        Iris is still busy. Closing now will interrupt any transfers in
-        progress.
+        {unfinished > 0
+          ? `${transferCount(unfinished)} will be interrupted if you close Iris now. Partly copied files stay where they are.`
+          : "Iris is still busy. Closing now will interrupt any transfers in progress."}
       </p>
+      {lines.length > 0 && (
+        <ul className={styles.list} aria-label="Unfinished transfers">
+          {lines.map((l) => (
+            <li key={l.text} className={styles.item}>
+              <StatusDot tone={l.tone} label={l.text} />
+              <span>
+                {l.n} {l.text}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </Modal>
   );
 }
