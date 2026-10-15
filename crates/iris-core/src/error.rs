@@ -43,6 +43,11 @@ pub enum CoreError {
     #[error("authentication failed")]
     AuthFailed,
 
+    /// A password profile was connected without a password, and none is
+    /// remembered in the keychain; the UI prompts for one and retries.
+    #[error("a password is required")]
+    PasswordRequired,
+
     /// The key file is encrypted and no passphrase was given; the UI prompts
     /// for one and retries.
     #[error("the key file is encrypted; a passphrase is required")]
@@ -52,6 +57,22 @@ pub enum CoreError {
     /// format, wrong passphrase). Iris-owned text, never key material.
     #[error("key file: {0}")]
     KeyFile(String),
+
+    /// The SSH agent could not be used (none running, no keys, refused to
+    /// sign). Iris-owned text.
+    #[error("ssh agent: {0}")]
+    Agent(String),
+
+    /// The OS keychain could not store, read or delete a remembered secret.
+    /// Iris-owned text; never the secret.
+    #[error("keychain: {0}")]
+    Keychain(String),
+
+    /// Reaching the target through its jump host failed (the jump host
+    /// refused the login, or could not reach the target). Iris-owned text
+    /// that names the jump host.
+    #[error("jump host: {0}")]
+    JumpHost(String),
 
     /// The server presented a different key than `known_hosts` records for
     /// it. A hard stop: there is deliberately no override path.
@@ -87,8 +108,12 @@ impl CoreError {
             Self::PermissionDenied(_) => "permissionDenied",
             Self::ConnectFailed(_) => "connectFailed",
             Self::AuthFailed => "authFailed",
+            Self::PasswordRequired => "passwordRequired",
             Self::PassphraseRequired => "passphraseRequired",
             Self::KeyFile(_) => "keyFile",
+            Self::Agent(_) => "agent",
+            Self::Keychain(_) => "keychain",
+            Self::JumpHost(_) => "jumpHost",
             Self::HostKeyChanged { .. } => "hostKeyChanged",
             Self::HostKeyRejected => "hostKeyRejected",
             Self::NotConnected => "notConnected",
@@ -128,8 +153,12 @@ mod tests {
             (CoreError::PermissionDenied("/x".into()), "permissionDenied"),
             (CoreError::ConnectFailed("x".into()), "connectFailed"),
             (CoreError::AuthFailed, "authFailed"),
+            (CoreError::PasswordRequired, "passwordRequired"),
             (CoreError::PassphraseRequired, "passphraseRequired"),
             (CoreError::KeyFile("x".into()), "keyFile"),
+            (CoreError::Agent("x".into()), "agent"),
+            (CoreError::Keychain("x".into()), "keychain"),
+            (CoreError::JumpHost("x".into()), "jumpHost"),
             (
                 CoreError::HostKeyChanged {
                     host: "example.test".into(),

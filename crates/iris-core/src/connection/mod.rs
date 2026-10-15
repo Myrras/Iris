@@ -1,10 +1,14 @@
 //! Saved connections: what a profile holds and where profiles are stored.
 //!
 //! A [`ConnectionProfile`] never carries a secret. Passwords and key
-//! passphrases are prompted per connect (Phase 1) and handed to
-//! [`crate::Core::connect`] as [`crate::Secret`]s; the keychain arrives in
-//! Phase 2.
+//! passphrases are prompted per connect and handed to
+//! [`crate::Core::connect`] as [`crate::Secret`]s, or remembered in the OS
+//! keychain ([`crate::secrets`]) — never in the profile.
+//!
+//! [`route`] turns a profile (plus `~/.ssh/config` and its jump hosts) into
+//! the hops a connect walks.
 
+pub mod route;
 mod store;
 
 use serde::{Deserialize, Serialize};
@@ -20,7 +24,8 @@ pub const DEFAULT_PORT: u16 = 22;
 /// One saved connection.
 ///
 /// On the wire and on disk:
-/// `{ "id", "name", "host", "port", "user", "auth": { "kind": … }, "startDir" }`.
+/// `{ "id", "name", "host", "port", "user", "auth": { "kind": … }, "startDir",
+/// "jump" }`.
 /// `id` may be omitted when saving a new profile (a fresh one is generated)
 /// and `port` defaults to 22.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,17 +44,20 @@ pub struct ConnectionProfile {
     /// Remote folder to open after connecting; `None` = the login folder.
     #[serde(default)]
     pub start_dir: Option<String>,
+    /// Reach the host through this jump host (`ProxyJump`); `None` = connect
+    /// directly (or as `~/.ssh/config` says, for an `sshConfigHost`).
+    #[serde(default)]
+    pub jump: Option<JumpHost>,
 }
 
 fn default_port() -> u16 {
     DEFAULT_PORT
 }
 
-/// How a profile authenticates. Tagged by `kind` so later phases can add
-/// methods (`agent`, `sshConfigHost { alias }`) without breaking stored files.
+/// How a profile authenticates, tagged by `kind`.
 ///
 /// No variant holds a secret: the password / passphrase is supplied per
-/// connect.
+/// connect or read from the keychain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -62,6 +70,41 @@ pub enum AuthMethod {
     /// Public-key authentication with a private key file on disk. The key is
     /// read at connect time only; an encrypted key needs a passphrase.
     KeyFile { path: String },
+    /// Public-key authentication with each identity of the running SSH agent
+    /// in turn.
+    Agent,
+    /// Everything as `~/.ssh/config` says for `alias`, resolved at connect
+    /// time: its HostName/User/Port win over the profile's fields, its
+    /// IdentityFiles are tried in order and then the agent, and its
+    /// ProxyJump applies unless the profile names a jump host.
+    SshConfigHost { alias: String },
+}
+
+/// The jump host a profile is reached through, tagged by `kind`:
+/// `{ "kind": "profile", "profileId" }` (another saved connection, with its
+/// own auth and remembered secrets) or `{ "kind": "alias", "alias" }` (a
+/// `~/.ssh/config` host or `[user@]host[:port]`, authenticated with its
+/// identity files and the agent).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum JumpHost {
+    Profile { profile_id: ProfileId },
+    Alias { alias: String },
+}
+
+/// A non-empty name without whitespace (aliases, jump host specs).
+fn single_word(value: String, what: &str) -> CoreResult<String> {
+    let value = value.trim().to_string();
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        return Err(CoreError::InvalidInput(format!(
+            "{what} must be a non-empty name without spaces"
+        )));
+    }
+    Ok(value)
 }
 
 impl ConnectionProfile {
@@ -95,6 +138,22 @@ impl ConnectionProfile {
                 }
                 AuthMethod::KeyFile { path }
             }
+            AuthMethod::Agent => AuthMethod::Agent,
+            AuthMethod::SshConfigHost { alias } => AuthMethod::SshConfigHost {
+                alias: single_word(alias, "the SSH config host")?,
+            },
+        };
+        let jump = match self.jump {
+            None => None,
+            Some(JumpHost::Profile { profile_id }) if profile_id == self.id => {
+                return Err(CoreError::InvalidInput(
+                    "a connection cannot be its own jump host".into(),
+                ))
+            }
+            Some(JumpHost::Profile { profile_id }) => Some(JumpHost::Profile { profile_id }),
+            Some(JumpHost::Alias { alias }) => Some(JumpHost::Alias {
+                alias: single_word(alias, "the jump host")?,
+            }),
         };
         let name = match self.name.trim() {
             "" => format!("{user}@{host}"),
@@ -112,6 +171,7 @@ impl ConnectionProfile {
             user,
             auth,
             start_dir,
+            jump,
         })
     }
 }
@@ -129,6 +189,7 @@ mod tests {
             user: "demo".into(),
             auth: AuthMethod::Password,
             start_dir: None,
+            jump: None,
         }
     }
 
@@ -153,8 +214,18 @@ mod tests {
             AuthMethod::KeyFile {
                 path: "/home/demo/.ssh/id_ed25519".into(),
             },
+            AuthMethod::Agent,
+            AuthMethod::SshConfigHost {
+                alias: "bastion".into(),
+            },
         ] {
-            let profile = ConnectionProfile { auth, ..sample() };
+            let profile = ConnectionProfile {
+                auth,
+                jump: Some(JumpHost::Alias {
+                    alias: "bastion".into(),
+                }),
+                ..sample()
+            };
             let json = serde_json::to_value(&profile).unwrap();
             let mut all = Vec::new();
             keys(&json, &mut all);
@@ -182,6 +253,49 @@ mod tests {
         let json = serde_json::to_value(sample()).unwrap();
         assert_eq!(json["auth"], serde_json::json!({ "kind": "password" }));
         assert!(json["startDir"].is_null());
+        assert!(json["jump"].is_null());
+
+        let jump_id = ProfileId::new();
+        let profile = ConnectionProfile {
+            auth: AuthMethod::SshConfigHost {
+                alias: "web".into(),
+            },
+            jump: Some(JumpHost::Profile {
+                profile_id: jump_id,
+            }),
+            ..sample()
+        };
+        let json = serde_json::to_value(&profile).unwrap();
+        assert_eq!(
+            json["auth"],
+            serde_json::json!({ "kind": "sshConfigHost", "alias": "web" })
+        );
+        assert_eq!(
+            json["jump"],
+            serde_json::json!({ "kind": "profile", "profileId": jump_id.to_string() })
+        );
+        let json = serde_json::to_value(ConnectionProfile {
+            auth: AuthMethod::Agent,
+            jump: Some(JumpHost::Alias {
+                alias: "ops@bastion:2222".into(),
+            }),
+            ..sample()
+        })
+        .unwrap();
+        assert_eq!(json["auth"], serde_json::json!({ "kind": "agent" }));
+        assert_eq!(
+            json["jump"],
+            serde_json::json!({ "kind": "alias", "alias": "ops@bastion:2222" })
+        );
+    }
+
+    #[test]
+    fn phase_one_profiles_without_a_jump_still_load() {
+        let profile: ConnectionProfile = serde_json::from_str(
+            r#"{"host":"h.example.test","user":"u","auth":{"kind":"keyFile","path":"/k"}}"#,
+        )
+        .unwrap();
+        assert_eq!(profile.jump, None);
     }
 
     #[test]
@@ -222,6 +336,48 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_cannot_jump_through_itself() {
+        let profile = sample();
+        let looped = ConnectionProfile {
+            jump: Some(JumpHost::Profile {
+                profile_id: profile.id,
+            }),
+            ..profile
+        };
+        assert!(matches!(
+            looped.normalized(),
+            Err(CoreError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn normalized_trims_aliases() {
+        let profile = ConnectionProfile {
+            auth: AuthMethod::SshConfigHost {
+                alias: " web ".into(),
+            },
+            jump: Some(JumpHost::Alias {
+                alias: " bastion ".into(),
+            }),
+            ..sample()
+        }
+        .normalized()
+        .unwrap();
+        assert_eq!(
+            profile.auth,
+            AuthMethod::SshConfigHost {
+                alias: "web".into()
+            }
+        );
+        assert_eq!(
+            profile.jump,
+            Some(JumpHost::Alias {
+                alias: "bastion".into()
+            })
+        );
+    }
+
+    #[test]
     fn normalized_rejects_bad_input() {
         let bad = [
             ConnectionProfile {
@@ -242,6 +398,16 @@ mod tests {
             },
             ConnectionProfile {
                 auth: AuthMethod::KeyFile { path: " ".into() },
+                ..sample()
+            },
+            ConnectionProfile {
+                auth: AuthMethod::SshConfigHost { alias: " ".into() },
+                ..sample()
+            },
+            ConnectionProfile {
+                jump: Some(JumpHost::Alias {
+                    alias: "two words".into(),
+                }),
                 ..sample()
             },
         ];

@@ -51,6 +51,7 @@ fn save_profile(core: &Core, port: u16, auth: AuthMethod) -> ProfileId {
         user: USER.into(),
         auth,
         start_dir: None,
+        jump: None,
     })
     .unwrap()
     .id
@@ -201,12 +202,12 @@ async fn a_wrong_password_is_auth_failed() {
 }
 
 #[tokio::test]
-async fn a_missing_password_is_invalid_input() {
+async fn a_missing_password_is_password_required() {
     let server = TestServer::start(None).await;
     let f = fixture(&server, true);
     let id = save_profile(&f.core, server.port, AuthMethod::Password);
     let err = f.core.connect(id, None, None).await.unwrap_err();
-    assert!(matches!(err, CoreError::InvalidInput(_)), "{err:?}");
+    assert!(matches!(err, CoreError::PasswordRequired), "{err:?}");
 }
 
 #[tokio::test]

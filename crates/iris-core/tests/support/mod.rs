@@ -1,10 +1,15 @@
-//! A hermetic, in-process SSH + SFTP server for the integration tests.
+//! A hermetic, in-process SSH + SFTP server (and ssh-agent) for the
+//! integration tests.
 //!
 //! russh's server side plus a small russh-sftp handler serve a `tempfile`
 //! folder (the virtual root `/`, also the login folder) on 127.0.0.1 with an
 //! ephemeral port. It accepts one user with a password and, optionally, one
 //! public key. The host key is generated per server, so two servers on the
 //! same address present different keys (used for the "changed key" case).
+//!
+//! For jump host tests a server can be started *hidden* (no TCP listener at
+//! all) and routed to from a jump server's `direct-tcpip` handler over an
+//! in-memory pipe, so the only way to reach it is through the jump.
 //!
 //! Only the SFTP requests the browsing code needs are implemented. All data
 //! is fictitious.
@@ -19,11 +24,12 @@ use std::time::Duration;
 use russh::keys::ssh_key::LineEnding;
 use russh::keys::{Algorithm, PrivateKey, PublicKey};
 use russh::server::{Auth, Msg, Session};
-use russh::{Channel, ChannelId};
+use russh::{Channel, ChannelId, ChannelOpenFailure};
 use russh_sftp::protocol::{
     Attrs, File, FileAttributes, Handle, Name, Status, StatusCode, Version,
 };
 use tempfile::TempDir;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
@@ -34,18 +40,49 @@ pub const HOST: &str = "127.0.0.1";
 /// How many names one READDIR reply carries (OpenSSH sends ~100 too).
 const READDIR_BATCH: usize = 100;
 
+/// The SSH side of one server: what every accepted connection shares.
+struct Endpoint {
+    config: Arc<russh::server::Config>,
+    shared: Arc<Shared>,
+    sessions: Arc<std::sync::Mutex<Vec<russh::server::Handle>>>,
+}
+
+impl Endpoint {
+    /// Run one SSH connection over `socket` in the background.
+    fn serve<S>(&self, socket: S)
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let handler = SshHandler {
+            shared: Arc::clone(&self.shared),
+            channels: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let config = Arc::clone(&self.config);
+        let accepted = Arc::clone(&self.sessions);
+        tokio::spawn(async move {
+            if let Ok(running) = russh::server::run_stream(config, socket, handler).await {
+                accepted.lock().unwrap().push(running.handle());
+                let _ = running.await;
+            }
+        });
+    }
+}
+
 /// A running test server. Dropping it stops accepting connections.
 pub struct TestServer {
+    /// The TCP port; 0 for a hidden server.
     pub port: u16,
     root: TempDir,
     host_key: PrivateKey,
-    task: tokio::task::JoinHandle<()>,
-    sessions: Arc<std::sync::Mutex<Vec<russh::server::Handle>>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+    endpoint: Arc<Endpoint>,
 }
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        self.task.abort();
+        if let Some(task) = &self.task {
+            task.abort();
+        }
     }
 }
 
@@ -53,6 +90,34 @@ impl TestServer {
     /// Start a server that accepts [`USER`] with [`PASSWORD`] and, when
     /// given, `authorized_key`.
     pub async fn start(authorized_key: Option<PublicKey>) -> Self {
+        Self::launch(authorized_key, true, Vec::new()).await
+    }
+
+    /// Like [`TestServer::start`], but without a TCP listener: reachable
+    /// only through a jump server that routes to it.
+    pub async fn start_hidden(authorized_key: Option<PublicKey>) -> Self {
+        Self::launch(authorized_key, false, Vec::new()).await
+    }
+
+    /// A listening jump server whose `direct-tcpip` channels to
+    /// `(host, port)` reach the given (hidden) server; anything else is
+    /// refused.
+    pub async fn start_jump(
+        authorized_key: Option<PublicKey>,
+        routes: &[(&str, u16, &TestServer)],
+    ) -> Self {
+        let routes = routes
+            .iter()
+            .map(|(host, port, server)| ((host.to_string(), *port), Arc::clone(&server.endpoint)))
+            .collect();
+        Self::launch(authorized_key, true, routes).await
+    }
+
+    async fn launch(
+        authorized_key: Option<PublicKey>,
+        listen: bool,
+        routes: Vec<((String, u16), Arc<Endpoint>)>,
+    ) -> Self {
         let host_key = random_key();
         let config = Arc::new(russh::server::Config {
             keys: vec![host_key.clone()],
@@ -63,48 +128,47 @@ impl TestServer {
             ..Default::default()
         });
         let root = tempfile::tempdir().unwrap();
-        let listener = TcpListener::bind((HOST, 0)).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
         let shared = Arc::new(Shared {
             root: root.path().canonicalize().unwrap(),
             authorized_key,
+            routes: routes.into_iter().collect(),
+        });
+        let endpoint = Arc::new(Endpoint {
+            config,
+            shared,
+            sessions: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
 
-        let sessions = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let accepted = Arc::clone(&sessions);
-        let task = tokio::spawn(async move {
-            loop {
-                let Ok((socket, _)) = listener.accept().await else {
-                    return;
-                };
-                let handler = SshHandler {
-                    shared: Arc::clone(&shared),
-                    channels: Arc::new(Mutex::new(HashMap::new())),
-                };
-                let config = Arc::clone(&config);
-                let accepted = Arc::clone(&accepted);
-                tokio::spawn(async move {
-                    if let Ok(running) = russh::server::run_stream(config, socket, handler).await {
-                        accepted.lock().unwrap().push(running.handle());
-                        let _ = running.await;
-                    }
-                });
-            }
-        });
+        let (port, task) = if listen {
+            let listener = TcpListener::bind((HOST, 0)).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let endpoint = Arc::clone(&endpoint);
+            let task = tokio::spawn(async move {
+                loop {
+                    let Ok((socket, _)) = listener.accept().await else {
+                        return;
+                    };
+                    endpoint.serve(socket);
+                }
+            });
+            (port, Some(task))
+        } else {
+            (0, None)
+        };
 
         Self {
             port,
             root,
             host_key,
             task,
-            sessions,
+            endpoint,
         }
     }
 
     /// Close every accepted connection from the server side, as a server
     /// restart or an idle timeout would.
     pub async fn disconnect_all(&self) {
-        let handles: Vec<_> = self.sessions.lock().unwrap().drain(..).collect();
+        let handles: Vec<_> = self.endpoint.sessions.lock().unwrap().drain(..).collect();
         for handle in handles {
             let _ = handle
                 .disconnect(
@@ -127,11 +191,53 @@ impl TestServer {
 
     /// A `known_hosts` line that trusts this server.
     pub fn known_hosts_line(&self) -> String {
-        format!(
-            "[{HOST}]:{} {}\n",
-            self.port,
-            self.host_public_key().to_openssh().unwrap()
-        )
+        self.known_hosts_line_as(HOST, self.port)
+    }
+
+    /// A `known_hosts` line that trusts this server under another name
+    /// (how a hidden server is known behind its jump host).
+    pub fn known_hosts_line_as(&self, host: &str, port: u16) -> String {
+        let name = if port == 22 {
+            host.to_string()
+        } else {
+            format!("[{host}]:{port}")
+        };
+        format!("{name} {}\n", self.host_public_key().to_openssh().unwrap())
+    }
+}
+
+/// An in-process ssh-agent on a temp Unix socket holding `keys`.
+pub struct TestAgent {
+    pub socket: PathBuf,
+    _dir: TempDir,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for TestAgent {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+#[cfg(unix)]
+pub async fn start_agent(keys: &[PrivateKey]) -> TestAgent {
+    use russh::keys::agent::client::AgentClient;
+
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("agent.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let task = tokio::spawn(async move {
+        let incoming = tokio_stream::wrappers::UnixListenerStream::new(listener);
+        let _ = russh::keys::agent::server::serve(incoming, ()).await;
+    });
+    let mut client = AgentClient::connect_uds(&socket).await.unwrap();
+    for key in keys {
+        client.add_identity(key, &[]).await.unwrap();
+    }
+    TestAgent {
+        socket,
+        _dir: dir,
+        task,
     }
 }
 
@@ -153,6 +259,8 @@ pub fn write_key_file(path: &Path, key: &PrivateKey, passphrase: Option<&str>) {
 struct Shared {
     root: PathBuf,
     authorized_key: Option<PublicKey>,
+    /// `direct-tcpip` destinations this server can reach.
+    routes: HashMap<(String, u16), Arc<Endpoint>>,
 }
 
 struct SshHandler {
@@ -196,6 +304,36 @@ impl russh::server::Handler for SshHandler {
     ) -> Result<(), Self::Error> {
         self.channels.lock().await.insert(channel.id(), channel);
         reply.accept().await;
+        Ok(())
+    }
+
+    async fn channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let route = u16::try_from(port_to_connect)
+            .ok()
+            .and_then(|port| self.shared.routes.get(&(host_to_connect.to_string(), port)));
+        let Some(target) = route else {
+            reply.reject(ChannelOpenFailure::ConnectFailed).await;
+            return Ok(());
+        };
+        reply.accept().await;
+        // The target's SSH runs on one end of an in-memory pipe; the
+        // channel is spliced onto the other.
+        let (near, far) = tokio::io::duplex(64 * 1024);
+        target.serve(far);
+        tokio::spawn(async move {
+            let mut stream = channel.into_stream();
+            let mut near = near;
+            let _ = tokio::io::copy_bidirectional(&mut stream, &mut near).await;
+        });
         Ok(())
     }
 

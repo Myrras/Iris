@@ -83,8 +83,12 @@ mod tests {
             (CoreError::PermissionDenied("/x".into()), "permissionDenied"),
             (CoreError::ConnectFailed("x".into()), "connectFailed"),
             (CoreError::AuthFailed, "authFailed"),
+            (CoreError::PasswordRequired, "passwordRequired"),
             (CoreError::PassphraseRequired, "passphraseRequired"),
             (CoreError::KeyFile("x".into()), "keyFile"),
+            (CoreError::Agent("x".into()), "agent"),
+            (CoreError::Keychain("x".into()), "keychain"),
+            (CoreError::JumpHost("x".into()), "jumpHost"),
             (
                 CoreError::HostKeyChanged {
                     host: "sftp.example.test".into(),

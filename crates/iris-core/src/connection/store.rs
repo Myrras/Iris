@@ -165,6 +165,7 @@ mod tests {
                 path: "/home/demo/.ssh/id_ed25519".into(),
             },
             start_dir: Some("/srv/www".into()),
+            jump: None,
         }
     }
 
