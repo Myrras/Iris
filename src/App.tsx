@@ -4,7 +4,8 @@
  * Layout: a slim title bar on the canvas; below it the sidebar island on the
  * left and the work column on the right — the Local and Remote pane islands
  * side by side, with the collapsible transfer island underneath. This
- * component also owns the app-level wiring: settings access (native menu on
+ * component also owns the app-level wiring: the backend connection events
+ * (`useCoreEvents`), opening the local pane, settings access (native menu on
  * macOS, title-bar gear elsewhere), the close-warning event, and suppressing
  * webview-only behaviour (reload shortcuts, the browser context menu).
  */
@@ -13,21 +14,33 @@ import { useCallback, useEffect, useState } from "react";
 
 import { onMenuOpenSettings, onWindowCloseRequested } from "./ipc/events";
 import { isMac, isWindows } from "./lib/platform";
+import { useCoreEvents } from "./lib/useCoreEvents";
 import { useLayoutStore } from "./state/layoutStore";
+import { usePaneStore } from "./state/paneStore";
 import { useSettingsRequestStore } from "./state/settingsRequestStore";
 import { CloseWarningModal } from "./components/CloseWarningModal";
+import { ConnectionForm } from "./components/ConnectionForm";
 import { LogoMark } from "./components/LogoMark";
-import { PaneIsland } from "./components/PaneIsland";
+import { Pane } from "./components/Pane";
+import { PromptHost } from "./components/PromptHost";
 import { SettingsModal } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
 import { TransferPanel } from "./components/TransferPanel";
-import { WelcomeScreen } from "./components/WelcomeScreen";
 import { WindowControls } from "./components/WindowControls";
 import { LocalIcon, ServerIcon, SettingsIcon } from "./components/icons";
 import styles from "./App.module.css";
 
 export default function App() {
+  useCoreEvents();
+
+  // The local pane always shows this machine, starting in the home folder.
+  useEffect(() => {
+    if (!usePaneStore.getState().panes.local.target) {
+      void usePaneStore.getState().open("local", { kind: "local" }, null);
+    }
+  }, []);
+
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsRequest = useSettingsRequestStore((s) => s.request);
   useEffect(() => {
@@ -160,20 +173,16 @@ export default function App() {
         />
         <main className={styles.work}>
           <div className={styles.panes}>
-            <PaneIsland title="Local" Icon={LocalIcon}>
-              <p className={styles.panePlaceholder}>
-                Your local files will appear here.
-              </p>
-            </PaneIsland>
-            <PaneIsland title="Remote" Icon={ServerIcon}>
-              <WelcomeScreen />
-            </PaneIsland>
+            <Pane id="local" title="Local" Icon={LocalIcon} />
+            <Pane id="remote" title="Remote" Icon={ServerIcon} />
           </div>
           <TransferPanel />
         </main>
       </div>
 
       <Toasts />
+      <ConnectionForm />
+      <PromptHost />
       <SettingsModal
         open={settingsOpen}
         onClose={() => {

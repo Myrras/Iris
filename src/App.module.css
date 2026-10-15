@@ -184,11 +184,3 @@
   display: flex;
   gap: var(--gap-island);
 }
-
-.panePlaceholder {
-  margin: auto;
-  padding: var(--sp-4);
-  color: var(--text-faint);
-  font-size: var(--fs-sm);
-  text-align: center;
-}

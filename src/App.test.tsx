@@ -14,9 +14,18 @@ vi.mock("./lib/platform", () => ({
   },
 }));
 
-// App wires up IPC on mount; jsdom has no Tauri bridge, so stub it out.
+// App wires up IPC on mount (profiles, the local pane); jsdom has no Tauri
+// bridge, so stub it with an empty machine.
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(() => Promise.resolve(undefined)),
+  invoke: vi.fn((cmd: string) =>
+    Promise.resolve(
+      cmd === "list_profiles" || cmd === "list_dir"
+        ? []
+        : cmd === "home_dir"
+          ? "/home/alice"
+          : undefined,
+    ),
+  ),
 }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => undefined)),
@@ -51,11 +60,11 @@ beforeEach(() => {
 });
 
 describe("App", () => {
-  it("renders the island shell: brand, sidebar, both panes and transfers", () => {
+  it("renders the island shell: brand, sidebar, both panes and transfers", async () => {
     render(<App />);
 
     expect(screen.getByText("Iris")).toBeInTheDocument();
-    expect(screen.getByText("No connections yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No connections yet.")).toBeInTheDocument();
     expect(screen.getByLabelText("Local files")).toBeInTheDocument();
     expect(screen.getByLabelText("Remote files")).toBeInTheDocument();
     expect(screen.getByLabelText("Transfers")).toBeInTheDocument();
@@ -67,6 +76,37 @@ describe("App", () => {
     const remote = screen.getByLabelText("Remote files");
     expect(remote).toHaveTextContent("Welcome to Iris");
     expect(remote).toHaveTextContent("Connect to a server…");
+  });
+
+  it("opens the local pane in the home folder", async () => {
+    render(<App />);
+
+    expect(
+      await screen.findByRole("navigation", { name: "Path" }),
+    ).toHaveTextContent("/homealice");
+    expect(screen.getByText("This folder is empty.")).toBeInTheDocument();
+  });
+
+  it("opens the connection form from the welcome screen", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Connect to a server…" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "New connection" }),
+    ).toBeInTheDocument();
+  });
+
+  it("subscribes to the connection events", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(handlerFor("profiles:changed")).toBeDefined();
+      expect(handlerFor("session:host-key-prompt")).toBeDefined();
+      expect(handlerFor("session:state-changed")).toBeDefined();
+    });
   });
 
   it("opens Settings from the title-bar gear", async () => {

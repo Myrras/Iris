@@ -7,10 +7,8 @@ import styles from "./WelcomeScreen.module.css";
 export function WelcomeScreen({
   onConnect,
 }: {
-  /**
-   * Opens the connect flow. Absent until connections exist (Phase 1): the
-   * button is then shown disabled, so the next step is still visible.
-   */
+  /** Opens the connect flow (the new-connection form); without it the
+   *  button is shown disabled. */
   onConnect?: () => void;
 }) {
   return (
@@ -25,7 +23,6 @@ export function WelcomeScreen({
         type="button"
         className={styles.openBtn}
         disabled={!onConnect}
-        title={onConnect ? undefined : "Connections arrive in a later version"}
         onClick={onConnect}
       >
         <ConnectIcon size={15} />

@@ -13,7 +13,7 @@ describe("WelcomeScreen", () => {
     ).toBeInTheDocument();
   });
 
-  it("disables the connect button until there is a connect flow", () => {
+  it("disables the connect button without a connect flow", () => {
     render(<WelcomeScreen />);
 
     expect(
