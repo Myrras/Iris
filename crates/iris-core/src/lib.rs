@@ -7,40 +7,38 @@
 //!
 //! ## The core contract
 //! All mutation flows through [`Core`]. Keep orchestration/domain logic here;
-//! the shell should only (de)serialize arguments and forward calls. This keeps
-//! the core compiling — and testable — without the UI.
+//! the shell should only (de)serialize arguments and forward calls. Changes the
+//! UI must hear about are published as [`CoreEvent`]s on the core's event bus
+//! ([`Core::subscribe_events`]).
 //!
-//! The `Core` here manages a trivial list of notes purely to demonstrate the
-//! shape (a shared, `Send + Sync` entry point with fallible methods). Replace it
-//! with your own domain.
+//! Phase 0 holds only the app plumbing: persisted [`IrisSettings`], the event
+//! bus, and the close guard's [`Core::has_active_work`]. Connections, remote
+//! browsing and transfers arrive in later phases.
 
 #![forbid(unsafe_code)]
 
 pub mod error;
+pub mod events;
 pub mod ids;
+pub mod settings;
 
-use std::sync::Mutex;
+use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 
 pub use error::{CoreError, CoreResult};
-pub use ids::NoteId;
-
-/// One note. Serializable so it can cross the IPC boundary unchanged.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Note {
-    pub id: NoteId,
-    pub text: String,
-}
+pub use events::{CoreEvent, EventBus};
+pub use settings::{IrisSettings, IrisSettingsStore};
 
 /// The application's single entry point.
 ///
 /// Cheap to share: hold it behind an `Arc` in the shell and clone the handle
-/// into any detached task. Interior mutability ([`Mutex`]) keeps the public API
-/// `&self`, so callers never need a mutable borrow.
+/// into any detached task. Interior mutability keeps the public API `&self`,
+/// so callers never need a mutable borrow.
 #[derive(Default)]
 pub struct Core {
-    notes: Mutex<Vec<Note>>,
+    events: EventBus,
+    settings: IrisSettingsStore,
 }
 
 impl Core {
@@ -48,51 +46,38 @@ impl Core {
         Self::default()
     }
 
-    /// A pure, fallible sample command: greet `name`, rejecting blank input.
+    /// Subscribe to the core's lifecycle events. Each receiver sees every
+    /// event published after it subscribed.
+    pub fn subscribe_events(&self) -> broadcast::Receiver<CoreEvent> {
+        self.events.subscribe()
+    }
+
+    /// Back the settings with `path` (normally `{app_data_dir}/settings.json`)
+    /// and load it. Until this is called the settings are in-memory only.
+    pub fn set_settings_path(&self, path: PathBuf) {
+        self.settings.set_path(path);
+    }
+
+    /// The current settings.
+    pub fn settings(&self) -> IrisSettings {
+        self.settings.get()
+    }
+
+    /// Validate and persist `settings`, then announce
+    /// [`CoreEvent::SettingsChanged`]. Returns what was stored (normalized).
+    pub fn save_settings(&self, settings: IrisSettings) -> CoreResult<IrisSettings> {
+        let saved = self.settings.save(settings)?;
+        self.events.publish(CoreEvent::SettingsChanged);
+        Ok(saved)
+    }
+
+    /// Whether quitting now would interrupt work the user cares about. The
+    /// shell's close/exit guard asks this before letting the window close.
     ///
-    /// Demonstrates input validation returning [`CoreError::InvalidInput`],
-    /// which the shell maps to a stable IPC error `kind`.
-    pub fn greet(&self, name: &str) -> CoreResult<String> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(CoreError::InvalidInput("name must not be empty".into()));
-        }
-        Ok(format!("Hello, {name}! Welcome to your new app."))
-    }
-
-    /// Add a note and return it.
-    pub fn add_note(&self, text: &str) -> CoreResult<Note> {
-        let text = text.trim();
-        if text.is_empty() {
-            return Err(CoreError::InvalidInput(
-                "note text must not be empty".into(),
-            ));
-        }
-        let note = Note {
-            id: NoteId::new(),
-            text: text.to_owned(),
-        };
-        self.notes
-            .lock()
-            .expect("notes lock poisoned")
-            .push(note.clone());
-        Ok(note)
-    }
-
-    /// All notes, in insertion order.
-    pub fn list_notes(&self) -> Vec<Note> {
-        self.notes.lock().expect("notes lock poisoned").clone()
-    }
-
-    /// Remove a note by id, erroring if it does not exist.
-    pub fn remove_note(&self, id: NoteId) -> CoreResult<()> {
-        let mut notes = self.notes.lock().expect("notes lock poisoned");
-        let before = notes.len();
-        notes.retain(|n| n.id != id);
-        if notes.len() == before {
-            return Err(CoreError::NotFound);
-        }
-        Ok(())
+    /// Always `false` in Phase 0: there is nothing to interrupt yet. Phase 5
+    /// wires it to the transfer queue (any queued or running transfer).
+    pub fn has_active_work(&self) -> bool {
+        false
     }
 }
 
@@ -101,26 +86,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn greet_rejects_blank_names() {
+    fn saving_settings_announces_the_change() {
         let core = Core::new();
-        assert!(core.greet("   ").is_err());
-        assert_eq!(
-            core.greet("Ada").unwrap(),
-            "Hello, Ada! Welcome to your new app."
-        );
+        let mut rx = core.subscribe_events();
+        core.save_settings(IrisSettings::default()).unwrap();
+        assert_eq!(rx.try_recv().unwrap(), CoreEvent::SettingsChanged);
     }
 
     #[test]
-    fn add_then_remove_note() {
+    fn a_rejected_save_announces_nothing() {
         let core = Core::new();
-        let note = core.add_note("first").unwrap();
-        assert_eq!(core.list_notes().len(), 1);
-        core.remove_note(note.id).unwrap();
-        assert!(core.list_notes().is_empty());
-        // Removing a missing id is an error, not a silent no-op.
-        assert!(matches!(
-            core.remove_note(note.id),
-            Err(CoreError::NotFound)
-        ));
+        let mut rx = core.subscribe_events();
+        let bad = IrisSettings {
+            parallel_transfers: 0,
+            ..IrisSettings::default()
+        };
+        assert!(core.save_settings(bad).is_err());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn nothing_is_active_in_phase_0() {
+        assert!(!Core::new().has_active_work());
     }
 }

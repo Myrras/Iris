@@ -1,34 +1,41 @@
 //! Integration tests: exercise the public `iris-core` API exactly as the Tauri
 //! shell (or any other adapter) would — no UI required.
 
-use iris_core::{Core, CoreError};
+use iris_core::{Core, CoreError, CoreEvent, IrisSettings};
 
 #[test]
-fn notes_round_trip_through_the_public_api() {
+fn settings_persist_through_the_public_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("settings.json");
+
     let core = Core::new();
-    assert!(core.list_notes().is_empty());
+    core.set_settings_path(file.clone());
+    assert_eq!(core.settings(), IrisSettings::default());
 
-    let a = core.add_note("buy milk").unwrap();
-    let b = core.add_note("write tests").unwrap();
+    let mut rx = core.subscribe_events();
+    let mut next = core.settings();
+    next.parallel_transfers = 8;
+    next.editor_overrides
+        .insert(".Log".into(), "/usr/bin/less".into());
+    let saved = core.save_settings(next).unwrap();
+    assert_eq!(saved.editor_overrides.get("log").unwrap(), "/usr/bin/less");
+    assert_eq!(rx.try_recv().unwrap(), CoreEvent::SettingsChanged);
 
-    let notes = core.list_notes();
-    assert_eq!(notes.len(), 2);
-    // Insertion order is preserved.
-    assert_eq!(notes[0].id, a.id);
-    assert_eq!(notes[1].id, b.id);
-
-    core.remove_note(a.id).unwrap();
-    let notes = core.list_notes();
-    assert_eq!(notes.len(), 1);
-    assert_eq!(notes[0].id, b.id);
+    // A fresh core on the same file sees the saved document.
+    let restarted = Core::new();
+    restarted.set_settings_path(file);
+    assert_eq!(restarted.settings(), saved);
 }
 
 #[test]
-fn invalid_input_is_rejected() {
+fn invalid_settings_are_rejected() {
     let core = Core::new();
+    let bad = IrisSettings {
+        reconnect_attempts: 1000,
+        ..IrisSettings::default()
+    };
     assert!(matches!(
-        core.add_note("   "),
+        core.save_settings(bad),
         Err(CoreError::InvalidInput(_))
     ));
-    assert!(matches!(core.greet(""), Err(CoreError::InvalidInput(_))));
 }

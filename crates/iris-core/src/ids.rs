@@ -1,26 +1,36 @@
 //! Strongly-typed UUID newtypes.
 //!
 //! A `uuid_newtype!` macro keeps ids distinct at the type level (you cannot pass
-//! a `NoteId` where some other id is expected) while serializing transparently
+//! one kind of id where another is expected) while serializing transparently
 //! as a plain UUID string across the IPC boundary.
+//!
+//! Phase 0 has no domain entities yet; the first ids (saved connections)
+//! arrive in Phase 1 and are declared here with the macro.
 
-use std::fmt;
-use std::str::FromStr;
-
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
+// Unused until Phase 1 declares the first id; the tests below exercise it.
+// Paths inside are fully qualified so the module needs no imports of its own
+// while no id exists yet.
+#[allow(unused_macros)]
 macro_rules! uuid_newtype {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(
+            Debug,
+            Clone,
+            Copy,
+            PartialEq,
+            Eq,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
         #[serde(transparent)]
-        pub struct $name(Uuid);
+        pub struct $name(::uuid::Uuid);
 
         impl $name {
             /// Generate a fresh random (v4) id.
             pub fn new() -> Self {
-                Self(Uuid::new_v4())
+                Self(::uuid::Uuid::new_v4())
             }
         }
 
@@ -30,42 +40,41 @@ macro_rules! uuid_newtype {
             }
         }
 
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 self.0.fmt(f)
             }
         }
 
-        impl FromStr for $name {
-            type Err = uuid::Error;
+        impl ::std::str::FromStr for $name {
+            type Err = ::uuid::Error;
 
             fn from_str(s: &str) -> Result<Self, Self::Err> {
-                Ok(Self(Uuid::from_str(s)?))
+                Ok(Self(<::uuid::Uuid as ::std::str::FromStr>::from_str(s)?))
             }
         }
     };
 }
 
-uuid_newtype!(
-    /// Identifies a note owned by the [`Core`](crate::Core).
-    NoteId
-);
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+
+    uuid_newtype!(
+        /// A test-only id, standing in for the real ones.
+        SampleId
+    );
 
     #[test]
     fn serializes_as_plain_uuid_string() {
-        let id = NoteId::new();
+        let id = SampleId::new();
         let json = serde_json::to_string(&id).unwrap();
         assert_eq!(json, format!("\"{id}\""));
     }
 
     #[test]
     fn round_trips_through_from_str() {
-        let id = NoteId::new();
-        let parsed: NoteId = id.to_string().parse().unwrap();
+        let id = SampleId::new();
+        let parsed: SampleId = id.to_string().parse().unwrap();
         assert_eq!(parsed, id);
     }
 }

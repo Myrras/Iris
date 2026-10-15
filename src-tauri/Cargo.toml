@@ -24,6 +24,8 @@ tauri-plugin-log = "2"
 tauri-plugin-window-state = "2"
 serde.workspace = true
 serde_json.workspace = true
+# `broadcast::error::RecvError` for the core-event forwarder (`events.rs`).
+tokio.workspace = true
 # Structured instrumentation. The `log` feature makes `tracing` events fall
 # through to the global `log` logger that `tauri-plugin-log` installs.
 tracing = { workspace = true, features = ["log"] }
