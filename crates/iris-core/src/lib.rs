@@ -18,8 +18,9 @@
 //! against either side ([`FsTarget`]): browsing, the file operations (new
 //! folder, rename, delete — to the Trash locally, permanently remotely —
 //! and chmod) and [`Preview`]s. Connecting understands password, key file,
-//! ssh-agent and `~/.ssh/config` logins and jump hosts. Transfers arrive in
-//! a later phase.
+//! ssh-agent and `~/.ssh/config` logins and jump hosts. Uploads and
+//! downloads run through the [`transfer`] engine (a queue of per-file jobs
+//! with conflict handling and resume).
 
 #![forbid(unsafe_code)]
 
@@ -36,6 +37,7 @@ pub mod session_manager;
 pub mod settings;
 pub mod ssh;
 pub mod ssh_config;
+pub mod transfer;
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -50,13 +52,17 @@ pub use fs::{
     BatchFailure, BatchReport, Entry, EntryKind, FileSystem, FsTarget, LinkTargetKind, LocalFs,
     SystemTrash, Trash,
 };
-pub use ids::{HostKeyRequestId, ProfileId, SessionId};
+pub use ids::{BatchId, HostKeyRequestId, ProfileId, SessionId, TransferId};
 pub use preview::Preview;
 pub use secret::Secret;
 pub use secrets::{KeychainStore, MemorySecretStore, SecretKind, SecretStore};
 pub use settings::{IrisSettings, IrisSettingsStore};
 pub use ssh::AgentLocation;
 pub use ssh_config::SshConfigHost;
+pub use transfer::{
+    ConflictResolution, ConflictSide, TransferDirection, TransferError, TransferItem, TransferJob,
+    TransferList, TransferManager, TransferRequest, TransferState, TransferSummary,
+};
 
 use connection::route::{HopAuth, Resolver};
 use session_manager::SessionManager;
@@ -103,15 +109,25 @@ pub struct Core {
     secrets: Mutex<Arc<dyn SecretStore>>,
     /// The local disk; its [`Trash`] is swappable ([`Core::set_trash`]).
     local: Mutex<LocalFs>,
+    transfers: TransferManager,
 }
 
 impl Default for Core {
     fn default() -> Self {
+        let events = EventBus::default();
+        let settings = IrisSettingsStore::default();
+        let sessions = SessionManager::default();
+        let transfers = TransferManager::new(
+            events.clone(),
+            sessions.clone(),
+            parallelism(&settings.get()),
+        );
         Self {
-            events: EventBus::default(),
-            settings: IrisSettingsStore::default(),
+            events,
+            settings,
             profiles: ProfileStore::default(),
-            sessions: SessionManager::default(),
+            sessions,
+            transfers,
             host_key_prompts: Arc::default(),
             known_hosts: Mutex::default(),
             ssh_config: Mutex::default(),
@@ -160,6 +176,8 @@ impl Core {
     /// and load it. Until this is called the settings are in-memory only.
     pub fn set_settings_path(&self, path: PathBuf) {
         self.settings.set_path(path);
+        self.transfers
+            .set_parallelism(parallelism(&self.settings.get()));
     }
 
     /// The current settings.
@@ -171,6 +189,7 @@ impl Core {
     /// [`CoreEvent::SettingsChanged`]. Returns what was stored (normalized).
     pub fn save_settings(&self, settings: IrisSettings) -> CoreResult<IrisSettings> {
         let saved = self.settings.save(settings)?;
+        self.transfers.set_parallelism(parallelism(&saved));
         self.events.publish(CoreEvent::SettingsChanged);
         Ok(saved)
     }
@@ -454,6 +473,7 @@ impl Core {
     /// Close a session. Idempotent: an unknown or already closed session is
     /// not an error.
     pub async fn disconnect(&self, session_id: SessionId) -> CoreResult<()> {
+        self.transfers.forget_session(session_id);
         if let Some(live) = self.sessions.remove(session_id) {
             live.ssh.disconnect().await;
             self.publish_state(
@@ -600,17 +620,83 @@ impl Core {
         result
     }
 
+    // -- Transfers ----------------------------------------------------------------
+
+    /// Queue an upload or download of `request.items` into
+    /// `request.dst_dir`; returns the batch id at once (folders are expanded
+    /// in the background, announced with [`CoreEvent::TransfersUpdated`]).
+    /// `NotConnected` for an unknown session, `InvalidInput` for an empty
+    /// request. Must be called within a Tokio runtime.
+    pub fn enqueue_transfers(&self, request: TransferRequest) -> CoreResult<BatchId> {
+        self.transfers.enqueue(request)
+    }
+
+    /// Cancel one job (a running one leaves its partial file). `NotFound`
+    /// for an unknown job; a finished job is left alone.
+    pub fn cancel_transfer(&self, job_id: TransferId) -> CoreResult<()> {
+        self.transfers.cancel(job_id)
+    }
+
+    /// Cancel every unfinished job of a batch. `NotFound` for an unknown
+    /// batch.
+    pub fn cancel_batch(&self, batch_id: BatchId) -> CoreResult<()> {
+        self.transfers.cancel_batch(batch_id)
+    }
+
+    /// Answer a [`CoreEvent::TransferConflict`]; with `apply_to_all` the
+    /// answer decides the rest of the batch's conflicts too.
+    pub fn resolve_conflict(
+        &self,
+        job_id: TransferId,
+        resolution: ConflictResolution,
+        apply_to_all: bool,
+    ) -> CoreResult<()> {
+        self.transfers
+            .resolve_conflict(job_id, resolution, apply_to_all)
+    }
+
+    /// Every transfer job and the totals.
+    pub fn list_transfers(&self) -> TransferList {
+        self.transfers.list()
+    }
+
+    /// Drop finished jobs from the list.
+    pub fn clear_finished_transfers(&self) {
+        self.transfers.clear_finished();
+    }
+
+    /// Whether any transfer is queued, running, waiting for a conflict
+    /// answer or paused.
+    pub fn has_active_transfers(&self) -> bool {
+        self.transfers.has_active()
+    }
+
+    /// Continue the jobs that paused when `session_id`'s connection
+    /// dropped (appending to their partial files). Returns how many.
+    pub fn resume_paused(&self, session_id: SessionId) -> usize {
+        self.transfers.resume_paused(session_id)
+    }
+
+    /// Continue the jobs paused on `paused_on` over `resume_on`, the
+    /// session a reconnect opened. Returns how many.
+    pub fn resume_paused_on(&self, paused_on: SessionId, resume_on: SessionId) -> usize {
+        self.transfers.resume_paused_on(paused_on, resume_on)
+    }
+
     // -- App lifecycle ----------------------------------------------------------
 
     /// Whether quitting now would interrupt work the user cares about. The
-    /// shell's close/exit guard asks this before letting the window close.
-    ///
-    /// Always `false` for now: open sessions are not work in progress.
-    /// Phase 5 wires it to the transfer queue (any queued or running
-    /// transfer).
+    /// shell's close/exit guard asks this before letting the window close:
+    /// any transfer that is queued, running, waiting for a conflict answer
+    /// or paused. Open sessions alone are not work in progress.
     pub fn has_active_work(&self) -> bool {
-        false
+        self.has_active_transfers()
     }
+}
+
+/// The transfer slots the settings ask for.
+fn parallelism(settings: &IrisSettings) -> usize {
+    usize::try_from(settings.parallel_transfers).unwrap_or(1)
 }
 
 /// Apply `op` to each path in turn, collecting failures instead of
@@ -669,7 +755,42 @@ mod tests {
 
     #[test]
     fn nothing_is_active_without_transfers() {
-        assert!(!Core::new().has_active_work());
+        let core = Core::new();
+        assert!(!core.has_active_work());
+        assert!(!core.has_active_transfers());
+        assert!(core.list_transfers().jobs.is_empty());
+    }
+
+    #[test]
+    fn transfer_calls_on_unknown_jobs_are_not_found() {
+        let core = Core::new();
+        assert_eq!(
+            core.cancel_transfer(TransferId::new()).unwrap_err().kind(),
+            "notFound"
+        );
+        assert_eq!(
+            core.cancel_batch(BatchId::new()).unwrap_err().kind(),
+            "notFound"
+        );
+        let err = core
+            .resolve_conflict(TransferId::new(), ConflictResolution::Skip, true)
+            .unwrap_err();
+        assert_eq!(err.kind(), "notFound");
+        assert_eq!(core.resume_paused(SessionId::new()), 0);
+    }
+
+    #[tokio::test]
+    async fn transfers_need_a_live_session() {
+        let core = Core::new();
+        let err = core
+            .enqueue_transfers(TransferRequest {
+                session_id: SessionId::new(),
+                direction: TransferDirection::Download,
+                items: vec![TransferItem { src: "/a".into() }],
+                dst_dir: "/tmp".into(),
+            })
+            .unwrap_err();
+        assert_eq!(err.kind(), "notConnected");
     }
 
     fn profile() -> ConnectionProfile {

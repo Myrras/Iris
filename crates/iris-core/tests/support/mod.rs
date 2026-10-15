@@ -11,14 +11,17 @@
 //! all) and routed to from a jump server's `direct-tcpip` handler over an
 //! in-memory pipe, so the only way to reach it is through the jump.
 //!
-//! Only the SFTP requests Iris uses are implemented: browsing, reading
-//! files, and the file operations (mkdir, rename, remove, rmdir, setstat).
-//! All data is fictitious.
+//! Only the SFTP requests Iris uses are implemented: browsing, reading and
+//! writing files, and the file operations (mkdir, rename, remove, rmdir,
+//! setstat). For the transfer tests the server counts how many files are
+//! open at once (across all channels and connections) and can slow every
+//! read and write down. All data is fictitious.
 
 #![allow(dead_code)] // Each test binary uses a different subset.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -133,6 +136,7 @@ impl TestServer {
             root: root.path().canonicalize().unwrap(),
             authorized_key,
             routes: routes.into_iter().collect(),
+            stats: Arc::default(),
         });
         let endpoint = Arc::new(Endpoint {
             config,
@@ -179,6 +183,29 @@ impl TestServer {
                 )
                 .await;
         }
+    }
+
+    /// The most files that were open at the same time since the last
+    /// [`TestServer::reset_max_open_files`].
+    pub fn max_open_files(&self) -> usize {
+        self.endpoint.shared.stats.max_open.load(Ordering::SeqCst)
+    }
+
+    pub fn reset_max_open_files(&self) {
+        let stats = &self.endpoint.shared.stats;
+        stats
+            .max_open
+            .store(stats.open.load(Ordering::SeqCst), Ordering::SeqCst);
+    }
+
+    /// Delay every READ and WRITE by `delay` (zero turns it off), so a
+    /// transfer takes long enough to watch, cancel or cut off.
+    pub fn set_io_delay(&self, delay: Duration) {
+        self.endpoint
+            .shared
+            .stats
+            .delay_us
+            .store(delay.as_micros() as u64, Ordering::SeqCst);
     }
 
     /// The real folder behind the virtual `/`.
@@ -262,6 +289,35 @@ struct Shared {
     authorized_key: Option<PublicKey>,
     /// `direct-tcpip` destinations this server can reach.
     routes: HashMap<(String, u16), Arc<Endpoint>>,
+    stats: Arc<Stats>,
+}
+
+/// Instrumentation shared by every SFTP channel of a server.
+#[derive(Default)]
+struct Stats {
+    /// Files open right now.
+    open: AtomicUsize,
+    max_open: AtomicUsize,
+    /// Delay per READ / WRITE, in microseconds.
+    delay_us: AtomicU64,
+}
+
+impl Stats {
+    fn opened(&self) {
+        let now = self.open.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_open.fetch_max(now, Ordering::SeqCst);
+    }
+
+    fn closed(&self) {
+        self.open.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    async fn delay(&self) {
+        let us = self.delay_us.load(Ordering::SeqCst);
+        if us > 0 {
+            tokio::time::sleep(Duration::from_micros(us)).await;
+        }
+    }
 }
 
 struct SshHandler {
@@ -362,6 +418,7 @@ impl russh::server::Handler for SshHandler {
                     dirs: HashMap::new(),
                     files: HashMap::new(),
                     next_handle: 0,
+                    stats: Arc::clone(&self.shared.stats),
                 };
                 russh_sftp::server::run(channel.into_stream(), sftp).await;
             }
@@ -372,13 +429,13 @@ impl russh::server::Handler for SshHandler {
 }
 
 /// Serves the folder under `root`. Virtual paths are POSIX paths rooted at
-/// `/`; `..` is refused so nothing outside `root` is reachable. Files open
-/// read-only.
+/// `/`; `..` is refused so nothing outside `root` is reachable.
 struct SftpHandler {
     root: PathBuf,
     dirs: HashMap<String, VecDeque<File>>,
     files: HashMap<String, std::fs::File>,
     next_handle: u64,
+    stats: Arc<Stats>,
 }
 
 fn ok(id: u32) -> Status {
@@ -486,12 +543,19 @@ impl russh_sftp::server::Handler for SftpHandler {
         pflags: OpenFlags,
         _attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
-        if pflags.bits() != OpenFlags::READ.bits() {
+        if pflags.contains(OpenFlags::APPEND) || pflags.contains(OpenFlags::EXCLUDE) {
             return Err(StatusCode::OpUnsupported);
         }
-        let file = std::fs::File::open(self.real(&filename)?).map_err(status_of)?;
+        let file = std::fs::OpenOptions::new()
+            .read(pflags.contains(OpenFlags::READ))
+            .write(pflags.contains(OpenFlags::WRITE))
+            .create(pflags.contains(OpenFlags::CREATE))
+            .truncate(pflags.contains(OpenFlags::TRUNCATE))
+            .open(self.real(&filename)?)
+            .map_err(status_of)?;
         let handle = self.next_handle();
         self.files.insert(handle.clone(), file);
+        self.stats.opened();
         Ok(Handle { id, handle })
     }
 
@@ -503,6 +567,7 @@ impl russh_sftp::server::Handler for SftpHandler {
         len: u32,
     ) -> Result<Data, Self::Error> {
         use std::io::{Read, Seek, SeekFrom};
+        self.stats.delay().await;
         let file = self.files.get_mut(&handle).ok_or(StatusCode::Failure)?;
         file.seek(SeekFrom::Start(offset)).map_err(status_of)?;
         let mut data = Vec::new();
@@ -513,6 +578,21 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Err(StatusCode::Eof);
         }
         Ok(Data { id, data })
+    }
+
+    async fn write(
+        &mut self,
+        id: u32,
+        handle: String,
+        offset: u64,
+        data: Vec<u8>,
+    ) -> Result<Status, Self::Error> {
+        use std::io::{Seek, SeekFrom, Write};
+        self.stats.delay().await;
+        let file = self.files.get_mut(&handle).ok_or(StatusCode::Failure)?;
+        file.seek(SeekFrom::Start(offset)).map_err(status_of)?;
+        file.write_all(&data).map_err(status_of)?;
+        Ok(ok(id))
     }
 
     async fn fstat(&mut self, id: u32, handle: String) -> Result<Attrs, Self::Error> {
@@ -566,13 +646,17 @@ impl russh_sftp::server::Handler for SftpHandler {
         attrs: FileAttributes,
     ) -> Result<Status, Self::Error> {
         use std::os::unix::fs::PermissionsExt;
+        let real = self.real(&path)?;
+        if let Some(mtime) = attrs.mtime {
+            let time = std::time::UNIX_EPOCH + Duration::from_secs(u64::from(mtime));
+            std::fs::File::open(&real)
+                .and_then(|f| f.set_modified(time))
+                .map_err(status_of)?;
+        }
         if let Some(mode) = attrs.permissions {
             // chmod(2) follows links, as OpenSSH's SETSTAT does.
-            std::fs::set_permissions(
-                self.real(&path)?,
-                std::fs::Permissions::from_mode(mode & 0o7777),
-            )
-            .map_err(status_of)?;
+            std::fs::set_permissions(&real, std::fs::Permissions::from_mode(mode & 0o7777))
+                .map_err(status_of)?;
         }
         Ok(ok(id))
     }
@@ -591,7 +675,9 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn close(&mut self, id: u32, handle: String) -> Result<Status, Self::Error> {
         self.dirs.remove(&handle);
-        self.files.remove(&handle);
+        if self.files.remove(&handle).is_some() {
+            self.stats.closed();
+        }
         Ok(ok(id))
     }
 

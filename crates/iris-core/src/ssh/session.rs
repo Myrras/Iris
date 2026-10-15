@@ -171,6 +171,26 @@ impl SshSession {
         &self.fs
     }
 
+    /// Open another SFTP channel on this connection. Transfers give each
+    /// worker its own, so one copy never queues behind another's requests
+    /// (or behind the panes' browsing on [`SshSession::fs`]).
+    /// `NotConnected` once the connection is gone.
+    pub async fn open_sftp_channel(&self) -> CoreResult<SftpFs> {
+        if self.is_closed() {
+            return Err(CoreError::NotConnected);
+        }
+        match open_sftp(&self.handle).await {
+            Ok(sftp) => Ok(SftpFs::new(sftp)),
+            Err(_) if self.is_closed() => Err(CoreError::NotConnected),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Whether the SSH connection has ended.
+    pub fn is_closed(&self) -> bool {
+        self.handle.is_closed()
+    }
+
     /// Close SFTP and the SSH connection, then its jump connections (best
     /// effort).
     pub async fn disconnect(&self) {

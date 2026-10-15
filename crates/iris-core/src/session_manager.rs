@@ -25,7 +25,8 @@ pub struct LiveSession {
 
 type SessionMap = HashMap<SessionId, Arc<LiveSession>>;
 
-#[derive(Default)]
+/// Cloning shares the same map (the transfer engine holds a clone).
+#[derive(Default, Clone)]
 pub struct SessionManager {
     sessions: Arc<Mutex<SessionMap>>,
 }

@@ -66,6 +66,16 @@ uuid_newtype!(
     HostKeyRequestId
 );
 
+uuid_newtype!(
+    /// One file transfer job (`transfer::TransferJob`).
+    TransferId
+);
+
+uuid_newtype!(
+    /// The jobs one `enqueue_transfers` call created.
+    BatchId
+);
+
 #[cfg(test)]
 mod tests {
 

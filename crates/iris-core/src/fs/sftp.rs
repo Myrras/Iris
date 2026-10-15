@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::SftpSession;
-use russh_sftp::protocol::{FileAttributes, StatusCode};
+use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::task::JoinSet;
 
 use crate::error::{CoreError, CoreResult};
 use crate::fs::{
     check_mode, chmod_folder_first, is_dotfile, join_posix, kind_from_mode, posix_name, Entry,
-    EntryKind, FileSystem, LinkTargetKind, ModeKind, ReadRange,
+    EntryKind, FileMeta, FileSystem, LinkTargetKind, ModeKind, ReadRange, Reader, Writer,
 };
 
 /// The SFTP view of one live session. Cloning shares the same channel.
@@ -286,6 +286,153 @@ impl SftpFs {
     }
 }
 
+/// The transfer primitives. Errors map like [`map_err`], except that a
+/// broken channel ("session closed", "sender dropped") is `NotConnected`:
+/// for a copy in progress that means the connection went away, and the job
+/// pauses instead of failing.
+impl SftpFs {
+    /// The file at `path`, links followed; `None` when nothing is there.
+    pub(crate) async fn metadata(&self, path: &str) -> CoreResult<Option<FileMeta>> {
+        match self.sftp.metadata(path).await {
+            Ok(attrs) => Ok(Some(FileMeta {
+                size: attrs.size.unwrap_or(0),
+                mtime: attrs.mtime.map(i64::from),
+                mode: attrs.permissions.map(|m| m & 0o7777),
+                is_dir: is_real_dir(&attrs),
+            })),
+            Err(e) => match transfer_err(e, path) {
+                CoreError::NotFound(_) => Ok(None),
+                other => Err(other),
+            },
+        }
+    }
+
+    /// Open `path` for reading from `offset`. Reads are pipelined by the
+    /// SFTP client (several requests in flight).
+    pub(crate) async fn open_reader(&self, path: &str, offset: u64) -> CoreResult<Reader> {
+        let mut file = self
+            .sftp
+            .open(path)
+            .await
+            .map_err(|e| transfer_err(e, path))?;
+        if offset > 0 {
+            file.seek(std::io::SeekFrom::Start(offset))
+                .await
+                .map_err(|e| io_err(e, path, "read"))?;
+        }
+        Ok(Box::new(file))
+    }
+
+    /// Open `path` for writing at `offset`: 0 creates or truncates it, any
+    /// other offset keeps what is there and writes from that point on
+    /// (resume). Writes are pipelined; `shutdown` waits for all of them.
+    pub(crate) async fn open_writer(&self, path: &str, offset: u64) -> CoreResult<Writer> {
+        let flags = if offset == 0 {
+            OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE
+        } else {
+            OpenFlags::CREATE | OpenFlags::WRITE
+        };
+        let mut file = self
+            .sftp
+            .open_with_flags(path, flags)
+            .await
+            .map_err(|e| transfer_err(e, path))?;
+        if offset > 0 {
+            file.seek(std::io::SeekFrom::Start(offset))
+                .await
+                .map_err(|e| io_err(e, path, "write"))?;
+        }
+        Ok(Box::new(file))
+    }
+
+    /// Set the modification time (and access time, which SFTP v3 only sets
+    /// together with it) and/or the permission bits of `path`.
+    pub(crate) async fn set_times(
+        &self,
+        path: &str,
+        mtime: Option<i64>,
+        mode: Option<u32>,
+    ) -> CoreResult<()> {
+        let time = mtime.and_then(|t| u32::try_from(t).ok());
+        if time.is_none() && mode.is_none() {
+            return Ok(());
+        }
+        let attrs = FileAttributes {
+            atime: time,
+            mtime: time,
+            permissions: mode,
+            ..FileAttributes::empty()
+        };
+        self.sftp
+            .set_metadata(path, attrs)
+            .await
+            .map_err(|e| transfer_err(e, path))
+    }
+
+    /// Create the folder `path` and any missing parents; existing folders
+    /// are fine, anything else in the way is `AlreadyExists`.
+    pub(crate) async fn mkdir_all(&self, path: &str) -> CoreResult<()> {
+        match self.metadata(path).await? {
+            Some(meta) if meta.is_dir => return Ok(()),
+            Some(_) => return Err(CoreError::AlreadyExists(path.to_string())),
+            None => {}
+        }
+        let absolute = path.starts_with('/');
+        let mut current = String::new();
+        for part in path.split('/').filter(|p| !p.is_empty()) {
+            current = if current.is_empty() && absolute {
+                format!("/{part}")
+            } else if current.is_empty() {
+                part.to_string()
+            } else {
+                join_posix(&current, part)
+            };
+            match self.metadata(&current).await? {
+                Some(meta) if meta.is_dir => {}
+                Some(_) => return Err(CoreError::AlreadyExists(current)),
+                None => {
+                    if let Err(e) = self.sftp.create_dir(current.as_str()).await {
+                        // Another worker may have created it meanwhile.
+                        match self.metadata(&current).await? {
+                            Some(meta) if meta.is_dir => {}
+                            _ => return Err(transfer_err(e, &current)),
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// [`map_err`] for transfers: a channel that broke underneath is
+/// `NotConnected`.
+fn transfer_err(err: SftpError, path: &str) -> CoreError {
+    match err {
+        SftpError::UnexpectedBehavior(_) => CoreError::NotConnected,
+        other => map_err(other, path),
+    }
+}
+
+/// Classify an I/O error from reading or writing a remote file. The
+/// client wraps its own errors (kept and classified); a failure status
+/// from the server arrives as bare text, which is never forwarded.
+pub(crate) fn io_err(err: std::io::Error, path: &str, verb: &str) -> CoreError {
+    match err
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<SftpError>())
+    {
+        Some(inner) => match transfer_err(inner.clone(), path) {
+            CoreError::Remote(_) => CoreError::Remote(format!("could not {verb} {path}")),
+            other => other,
+        },
+        None if err.kind() == std::io::ErrorKind::TimedOut => {
+            CoreError::Remote("the server did not answer in time".into())
+        }
+        None => CoreError::Remote(format!("could not {verb} {path}")),
+    }
+}
+
 /// A folder itself (not a link to one).
 fn is_real_dir(attrs: &FileAttributes) -> bool {
     attrs.permissions.map(kind_from_mode) == Some(ModeKind::Dir)
@@ -391,6 +538,30 @@ mod tests {
         let err = map_err(status(StatusCode::Failure), "/a");
         assert_eq!(err.kind(), "remote");
         assert!(!err.to_string().contains("must not leak"), "{err}");
+    }
+
+    #[test]
+    fn transfer_io_errors_are_classified_without_server_text() {
+        let status_text = std::io::Error::other("server-side text that must not leak");
+        let err = io_err(status_text, "/a", "write");
+        assert_eq!(err.kind(), "remote");
+        assert_eq!(err.to_string(), "remote error: could not write /a");
+
+        let broken = std::io::Error::other(SftpError::UnexpectedBehavior("session closed".into()));
+        assert!(matches!(
+            io_err(broken, "/a", "read"),
+            CoreError::NotConnected
+        ));
+        let gone = std::io::Error::other(SftpError::IO("reset".into()));
+        assert!(matches!(
+            io_err(gone, "/a", "read"),
+            CoreError::NotConnected
+        ));
+        let denied = std::io::Error::other(status(StatusCode::PermissionDenied));
+        assert!(matches!(
+            io_err(denied, "/a", "write"),
+            CoreError::PermissionDenied(p) if p == "/a"
+        ));
     }
 
     #[test]

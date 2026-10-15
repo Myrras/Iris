@@ -17,6 +17,7 @@ use crate::error::CoreResult;
 use crate::ids::SessionId;
 
 pub use local::LocalFs;
+pub(crate) use sftp::io_err as sftp_io_error;
 pub use sftp::SftpFs;
 pub use trash::{SystemTrash, Trash};
 
@@ -113,6 +114,25 @@ pub struct BatchFailure {
     /// App-owned text (the `CoreError`'s `Display`).
     pub message: String,
 }
+
+/// What a transfer needs to know about a file, links followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileMeta {
+    pub size: u64,
+    /// Last modification, unix seconds.
+    pub mtime: Option<i64>,
+    /// Unix permission bits (type bits stripped), when known.
+    pub mode: Option<u32>,
+    pub is_dir: bool,
+}
+
+/// The reading end of a transfer: a local file or a remote one, positioned
+/// at the offset it was opened at.
+pub(crate) type Reader = Box<dyn tokio::io::AsyncRead + Send + Unpin>;
+
+/// The writing end of a transfer. `shutdown` flushes it and closes the
+/// file; until then writes may still be in flight.
+pub(crate) type Writer = Box<dyn tokio::io::AsyncWrite + Send + Unpin>;
 
 /// The highest mode `chmod` accepts: permission bits plus setuid, setgid
 /// and sticky.

@@ -11,8 +11,8 @@ use std::time::UNIX_EPOCH;
 
 use crate::error::{CoreError, CoreResult};
 use crate::fs::{
-    check_mode, is_dotfile, Entry, EntryKind, FileSystem, LinkTargetKind, ReadRange, SystemTrash,
-    Trash,
+    check_mode, is_dotfile, Entry, EntryKind, FileMeta, FileSystem, LinkTargetKind, ReadRange,
+    Reader, SystemTrash, Trash, Writer,
 };
 
 /// The local filesystem. Cheap to clone; deletes go to its [`Trash`].
@@ -175,6 +175,120 @@ impl FileSystem for LocalFs {
     }
 }
 
+/// The transfer primitives (see the `SftpFs` counterparts).
+impl LocalFs {
+    /// The file at `path`, links followed; `None` when nothing is there.
+    pub(crate) async fn metadata(&self, path: &str) -> CoreResult<Option<FileMeta>> {
+        let path = path.to_string();
+        blocking(move || match std::fs::metadata(&path) {
+            Ok(meta) => Ok(Some(FileMeta {
+                size: meta.len(),
+                mtime: unix_seconds(&meta),
+                mode: unix_mode(&meta).map(|m| m & 0o7777),
+                is_dir: meta.is_dir(),
+            })),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(CoreError::from_io_at(e, &path)),
+        })
+        .await
+    }
+
+    /// Open `path` for reading from `offset`.
+    pub(crate) async fn open_reader(&self, path: &str, offset: u64) -> CoreResult<Reader> {
+        use tokio::io::AsyncSeekExt;
+        let at = |e| CoreError::from_io_at(e, path);
+        let mut file = tokio::fs::File::open(path).await.map_err(at)?;
+        if offset > 0 {
+            file.seek(SeekFrom::Start(offset)).await.map_err(at)?;
+        }
+        Ok(Box::new(file))
+    }
+
+    /// Open `path` for writing at `offset`: 0 creates or truncates it, any
+    /// other offset keeps what is there and writes from that point on.
+    pub(crate) async fn open_writer(&self, path: &str, offset: u64) -> CoreResult<Writer> {
+        use tokio::io::AsyncSeekExt;
+        let at = |e| CoreError::from_io_at(e, path);
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(offset == 0)
+            .open(path)
+            .await
+            .map_err(at)?;
+        if offset > 0 {
+            file.seek(SeekFrom::Start(offset)).await.map_err(at)?;
+        }
+        Ok(Box::new(file))
+    }
+
+    /// Set the modification time and/or (on unix) the permission bits of
+    /// `path`.
+    pub(crate) async fn set_times(
+        &self,
+        path: &str,
+        mtime: Option<i64>,
+        mode: Option<u32>,
+    ) -> CoreResult<()> {
+        let path = path.to_string();
+        blocking(move || {
+            let at = |e| CoreError::from_io_at(e, &path);
+            if let Some(time) = mtime.and_then(from_unix_seconds) {
+                let file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .map_err(at)?;
+                file.set_modified(time).map_err(at)?;
+            }
+            #[cfg(unix)]
+            if let Some(mode) = mode {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                    .map_err(at)?;
+            }
+            #[cfg(not(unix))]
+            let _ = mode;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Create the folder `path` and any missing parents; existing folders
+    /// are fine, a file in the way is `AlreadyExists`.
+    pub(crate) async fn mkdir_all(&self, path: &str) -> CoreResult<()> {
+        let path = path.to_string();
+        blocking(move || {
+            if let Ok(meta) = std::fs::metadata(&path) {
+                return if meta.is_dir() {
+                    Ok(())
+                } else {
+                    Err(CoreError::AlreadyExists(path))
+                };
+            }
+            std::fs::create_dir_all(&path).map_err(|e| CoreError::from_io_at(e, &path))
+        })
+        .await
+    }
+}
+
+fn unix_seconds(meta: &std::fs::Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()
+        .map(|t| match t.duration_since(UNIX_EPOCH) {
+            Ok(d) => i64::try_from(d.as_secs()).unwrap_or(i64::MAX),
+            Err(before) => -i64::try_from(before.duration().as_secs()).unwrap_or(i64::MAX),
+        })
+}
+
+fn from_unix_seconds(secs: i64) -> Option<std::time::SystemTime> {
+    let offset = std::time::Duration::from_secs(secs.unsigned_abs());
+    if secs >= 0 {
+        UNIX_EPOCH.checked_add(offset)
+    } else {
+        UNIX_EPOCH.checked_sub(offset)
+    }
+}
+
 /// Whether `from` and `to` name the same entry (a case-only rename on a
 /// case-insensitive disk).
 #[cfg(unix)]
@@ -297,13 +411,7 @@ fn entry_at(path: &Path, name: String) -> std::io::Result<Entry> {
     } else {
         EntryKind::Other
     };
-    let mtime = meta
-        .modified()
-        .ok()
-        .map(|t| match t.duration_since(UNIX_EPOCH) {
-            Ok(d) => i64::try_from(d.as_secs()).unwrap_or(i64::MAX),
-            Err(before) => -i64::try_from(before.duration().as_secs()).unwrap_or(i64::MAX),
-        });
+    let mtime = unix_seconds(&meta);
     Ok(Entry {
         hidden: is_dotfile(&name) || windows_hidden(&meta),
         name,

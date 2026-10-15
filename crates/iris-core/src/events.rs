@@ -9,9 +9,12 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::ids::{HostKeyRequestId, ProfileId, SessionId};
+use crate::ids::{BatchId, HostKeyRequestId, ProfileId, SessionId, TransferId};
+use crate::transfer::{ConflictSide, TransferJob};
 
-const EVENT_CHANNEL_CAPACITY: usize = 256;
+/// Room for bursts: a folder of small files finishes many jobs a second,
+/// each announcing its state changes.
+const EVENT_CHANNEL_CAPACITY: usize = 4096;
 
 /// Events emitted by the [`crate::Core`] for UI layers to react to.
 ///
@@ -56,6 +59,34 @@ pub enum CoreEvent {
         profile_id: ProfileId,
         state: SessionState,
         reason: Option<String>,
+    },
+
+    /// The transfer list changed shape (jobs found by a folder walk,
+    /// finished jobs cleared); the UI re-pulls it via `list_transfers`.
+    /// Coalesced while a batch is being expanded.
+    TransfersUpdated,
+
+    /// One job changed state (or its destination, after `keepBoth`).
+    TransferJobChanged { job: TransferJob },
+
+    /// A running job copied more bytes. At most ten per second per job.
+    TransferProgress {
+        job_id: TransferId,
+        batch_id: BatchId,
+        bytes_done: u64,
+        size: u64,
+        /// Over the last few seconds.
+        bytes_per_sec: u64,
+    },
+
+    /// A job's destination exists; the job waits (`needsDecision`) for
+    /// `resolve_conflict`. Not raised when the batch already has an
+    /// apply-to-all answer.
+    TransferConflict {
+        batch_id: BatchId,
+        job_id: TransferId,
+        src: ConflictSide,
+        dst: ConflictSide,
     },
 }
 
@@ -140,6 +171,42 @@ mod tests {
         assert_eq!(json["keyType"], "ssh-ed25519");
         assert_eq!(json["fingerprintSha256"], "SHA256:abc");
         assert_eq!(json["port"], 2222);
+    }
+
+    #[test]
+    fn transfer_events_are_camel_case() {
+        let json = serde_json::to_value(CoreEvent::TransferProgress {
+            job_id: TransferId::new(),
+            batch_id: BatchId::new(),
+            bytes_done: 10,
+            size: 20,
+            bytes_per_sec: 5,
+        })
+        .unwrap();
+        assert_eq!(json["type"], "transferProgress");
+        assert_eq!(json["bytesDone"], 10);
+        assert_eq!(json["bytesPerSec"], 5);
+        assert!(json["jobId"].is_string());
+
+        let side = |path: &str| ConflictSide {
+            path: path.into(),
+            size: 3,
+            mtime: Some(1_700_000_000),
+        };
+        let json = serde_json::to_value(CoreEvent::TransferConflict {
+            batch_id: BatchId::new(),
+            job_id: TransferId::new(),
+            src: side("/local/a.txt"),
+            dst: side("/srv/a.txt"),
+        })
+        .unwrap();
+        assert_eq!(json["type"], "transferConflict");
+        assert_eq!(json["dst"]["path"], "/srv/a.txt");
+        assert_eq!(json["src"]["mtime"], 1_700_000_000);
+        assert_eq!(
+            serde_json::to_value(CoreEvent::TransfersUpdated).unwrap(),
+            serde_json::json!({ "type": "transfersUpdated" })
+        );
     }
 
     #[test]
