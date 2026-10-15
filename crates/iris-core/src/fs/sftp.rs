@@ -5,12 +5,13 @@ use std::sync::Arc;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::{FileAttributes, StatusCode};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::task::JoinSet;
 
 use crate::error::{CoreError, CoreResult};
 use crate::fs::{
-    is_dotfile, join_posix, kind_from_mode, posix_name, Entry, EntryKind, FileSystem,
-    LinkTargetKind, ModeKind,
+    check_mode, chmod_folder_first, is_dotfile, join_posix, kind_from_mode, posix_name, Entry,
+    EntryKind, FileSystem, LinkTargetKind, ModeKind, ReadRange,
 };
 
 /// The SFTP view of one live session. Cloning shares the same channel.
@@ -95,6 +96,199 @@ impl FileSystem for SftpFs {
             .await
             .map_err(|e| map_err(e, path))
     }
+
+    async fn mkdir(&self, path: &str) -> CoreResult<()> {
+        // Servers answer an existing name with a generic failure; look
+        // first so the UI gets `alreadyExists`.
+        if self.exists(path).await? {
+            return Err(CoreError::AlreadyExists(path.to_string()));
+        }
+        self.sftp
+            .create_dir(path)
+            .await
+            .map_err(|e| map_err(e, path))
+    }
+
+    async fn rename(&self, from: &str, to: &str) -> CoreResult<()> {
+        if from == to {
+            return Ok(());
+        }
+        self.sftp
+            .symlink_metadata(from)
+            .await
+            .map_err(|e| map_err(e, from))?;
+        // SFTP v3 RENAME may or may not replace an existing target depending
+        // on the server; refuse up front so nothing is ever overwritten. A
+        // case-only rename is left to the server (on a case-insensitive disk
+        // the target "exists" as the entry itself).
+        let case_only = from.to_lowercase() == to.to_lowercase();
+        if !case_only && self.exists(to).await? {
+            return Err(CoreError::AlreadyExists(to.to_string()));
+        }
+        self.sftp
+            .rename(from, to)
+            .await
+            .map_err(|e| map_err(e, from))
+    }
+
+    async fn remove(&self, path: &str) -> CoreResult<()> {
+        let attrs = self
+            .sftp
+            .symlink_metadata(path)
+            .await
+            .map_err(|e| map_err(e, path))?;
+        // Depth-first without recursion: `(path, is_dir, children_done)`.
+        // Kinds come from LSTAT / READDIR (which do not follow links), so a
+        // symlink to a folder is unlinked, never walked into.
+        let mut stack = vec![(path.to_string(), is_real_dir(&attrs), false)];
+        while let Some((current, is_dir, children_done)) = stack.pop() {
+            if !is_dir {
+                self.sftp
+                    .remove_file(current.as_str())
+                    .await
+                    .map_err(|e| map_err(e, &current))?;
+            } else if children_done {
+                self.sftp
+                    .remove_dir(current.as_str())
+                    .await
+                    .map_err(|e| map_err(e, &current))?;
+            } else {
+                let items = self
+                    .sftp
+                    .read_dir(current.as_str())
+                    .await
+                    .map_err(|e| map_err(e, &current))?;
+                stack.push((current.clone(), true, true));
+                for item in items {
+                    let child = join_posix(&current, &item.file_name());
+                    stack.push((child, is_real_dir(&item.metadata()), false));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn chmod(&self, path: &str, mode: u32, recursive: bool) -> CoreResult<()> {
+        check_mode(mode)?;
+        let attrs = self
+            .sftp
+            .symlink_metadata(path)
+            .await
+            .map_err(|e| map_err(e, path))?;
+        if !recursive || !is_real_dir(&attrs) {
+            return self.set_mode(path, mode).await;
+        }
+        let folder_first = chmod_folder_first(mode);
+        let mut first_error = None;
+        let mut stack = vec![(path.to_string(), false)];
+        while let Some((current, children_done)) = stack.pop() {
+            if children_done {
+                if let Err(e) = self.set_mode(&current, mode).await {
+                    first_error.get_or_insert(e);
+                }
+                continue;
+            }
+            if folder_first {
+                if let Err(e) = self.set_mode(&current, mode).await {
+                    first_error.get_or_insert(e);
+                }
+            } else {
+                stack.push((current.clone(), true));
+            }
+            let items = match self.sftp.read_dir(current.as_str()).await {
+                Ok(items) => items,
+                Err(e) => {
+                    let err = map_err(e, &current);
+                    if matches!(err, CoreError::NotConnected) {
+                        return Err(err);
+                    }
+                    first_error.get_or_insert(err);
+                    continue;
+                }
+            };
+            for item in items {
+                let child = join_posix(&current, &item.file_name());
+                let attrs = item.metadata();
+                match attrs.permissions.map(kind_from_mode) {
+                    Some(ModeKind::Dir) => stack.push((child, false)),
+                    // SETSTAT follows links; leave them (and their targets) alone.
+                    Some(ModeKind::Symlink) => {}
+                    _ => {
+                        if let Err(e) = self.set_mode(&child, mode).await {
+                            if matches!(e, CoreError::NotConnected) {
+                                return Err(e);
+                            }
+                            first_error.get_or_insert(e);
+                        }
+                    }
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    async fn read_range(&self, path: &str, offset: u64, max_bytes: u64) -> CoreResult<ReadRange> {
+        // STAT follows links, as opening the file does.
+        let attrs = self
+            .sftp
+            .metadata(path)
+            .await
+            .map_err(|e| map_err(e, path))?;
+        if is_real_dir(&attrs) {
+            return Err(CoreError::InvalidInput(format!("{path} is a folder")));
+        }
+        let total_size = attrs.size.unwrap_or(0);
+        let mut file = self.sftp.open(path).await.map_err(|e| map_err(e, path))?;
+        // Read errors arrive as `io::Error`s that can carry the server's own
+        // message; never forward it.
+        let read_failed = |_| CoreError::Remote(format!("could not read {path}"));
+        file.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(read_failed)?;
+        let capacity = max_bytes.min(total_size.saturating_sub(offset));
+        let mut bytes = Vec::with_capacity(usize::try_from(capacity).unwrap_or(0));
+        (&mut file)
+            .take(max_bytes)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(read_failed)?;
+        // Best effort: a failed close does not undo a successful read.
+        let _ = file.close().await;
+        Ok(ReadRange {
+            truncated: offset + (bytes.len() as u64) < total_size,
+            bytes,
+            total_size,
+        })
+    }
+}
+
+impl SftpFs {
+    /// Whether anything (a broken link included) is at `path`.
+    async fn exists(&self, path: &str) -> CoreResult<bool> {
+        match self.sftp.symlink_metadata(path).await {
+            Ok(_) => Ok(true),
+            Err(e) => match map_err(e, path) {
+                CoreError::NotFound(_) => Ok(false),
+                other => Err(other),
+            },
+        }
+    }
+
+    async fn set_mode(&self, path: &str, mode: u32) -> CoreResult<()> {
+        let attrs = FileAttributes {
+            permissions: Some(mode),
+            ..FileAttributes::empty()
+        };
+        self.sftp
+            .set_metadata(path, attrs)
+            .await
+            .map_err(|e| map_err(e, path))
+    }
+}
+
+/// A folder itself (not a link to one).
+fn is_real_dir(attrs: &FileAttributes) -> bool {
+    attrs.permissions.map(kind_from_mode) == Some(ModeKind::Dir)
 }
 
 /// Read a link's text and what it resolves to; failures leave the fields

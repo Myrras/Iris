@@ -11,8 +11,9 @@
 //! all) and routed to from a jump server's `direct-tcpip` handler over an
 //! in-memory pipe, so the only way to reach it is through the jump.
 //!
-//! Only the SFTP requests the browsing code needs are implemented. All data
-//! is fictitious.
+//! Only the SFTP requests Iris uses are implemented: browsing, reading
+//! files, and the file operations (mkdir, rename, remove, rmdir, setstat).
+//! All data is fictitious.
 
 #![allow(dead_code)] // Each test binary uses a different subset.
 
@@ -26,7 +27,7 @@ use russh::keys::{Algorithm, PrivateKey, PublicKey};
 use russh::server::{Auth, Msg, Session};
 use russh::{Channel, ChannelId, ChannelOpenFailure};
 use russh_sftp::protocol::{
-    Attrs, File, FileAttributes, Handle, Name, Status, StatusCode, Version,
+    Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, Status, StatusCode, Version,
 };
 use tempfile::TempDir;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -359,6 +360,7 @@ impl russh::server::Handler for SshHandler {
                 let sftp = SftpHandler {
                     root: self.shared.root.clone(),
                     dirs: HashMap::new(),
+                    files: HashMap::new(),
                     next_handle: 0,
                 };
                 russh_sftp::server::run(channel.into_stream(), sftp).await;
@@ -369,15 +371,31 @@ impl russh::server::Handler for SshHandler {
     }
 }
 
-/// Serves the folder under `root` read-only. Virtual paths are POSIX paths
-/// rooted at `/`; `..` is refused so nothing outside `root` is reachable.
+/// Serves the folder under `root`. Virtual paths are POSIX paths rooted at
+/// `/`; `..` is refused so nothing outside `root` is reachable. Files open
+/// read-only.
 struct SftpHandler {
     root: PathBuf,
     dirs: HashMap<String, VecDeque<File>>,
+    files: HashMap<String, std::fs::File>,
     next_handle: u64,
 }
 
+fn ok(id: u32) -> Status {
+    Status {
+        id,
+        status_code: StatusCode::Ok,
+        error_message: "Ok".into(),
+        language_tag: "en-US".into(),
+    }
+}
+
 impl SftpHandler {
+    fn next_handle(&mut self) -> String {
+        self.next_handle += 1;
+        self.next_handle.to_string()
+    }
+
     fn real(&self, path: &str) -> Result<PathBuf, StatusCode> {
         let mut real = self.root.clone();
         for part in Path::new(path).components() {
@@ -456,10 +474,107 @@ impl russh_sftp::server::Handler for SftpHandler {
                 attrs_of(&meta),
             ));
         }
-        self.next_handle += 1;
-        let handle = self.next_handle.to_string();
+        let handle = self.next_handle();
         self.dirs.insert(handle.clone(), files);
         Ok(Handle { id, handle })
+    }
+
+    async fn open(
+        &mut self,
+        id: u32,
+        filename: String,
+        pflags: OpenFlags,
+        _attrs: FileAttributes,
+    ) -> Result<Handle, Self::Error> {
+        if pflags.bits() != OpenFlags::READ.bits() {
+            return Err(StatusCode::OpUnsupported);
+        }
+        let file = std::fs::File::open(self.real(&filename)?).map_err(status_of)?;
+        let handle = self.next_handle();
+        self.files.insert(handle.clone(), file);
+        Ok(Handle { id, handle })
+    }
+
+    async fn read(
+        &mut self,
+        id: u32,
+        handle: String,
+        offset: u64,
+        len: u32,
+    ) -> Result<Data, Self::Error> {
+        use std::io::{Read, Seek, SeekFrom};
+        let file = self.files.get_mut(&handle).ok_or(StatusCode::Failure)?;
+        file.seek(SeekFrom::Start(offset)).map_err(status_of)?;
+        let mut data = Vec::new();
+        file.take(u64::from(len))
+            .read_to_end(&mut data)
+            .map_err(status_of)?;
+        if data.is_empty() {
+            return Err(StatusCode::Eof);
+        }
+        Ok(Data { id, data })
+    }
+
+    async fn fstat(&mut self, id: u32, handle: String) -> Result<Attrs, Self::Error> {
+        let file = self.files.get(&handle).ok_or(StatusCode::Failure)?;
+        let meta = file.metadata().map_err(status_of)?;
+        Ok(Attrs {
+            id,
+            attrs: attrs_of(&meta),
+        })
+    }
+
+    async fn mkdir(
+        &mut self,
+        id: u32,
+        path: String,
+        _attrs: FileAttributes,
+    ) -> Result<Status, Self::Error> {
+        std::fs::create_dir(self.real(&path)?).map_err(status_of)?;
+        Ok(ok(id))
+    }
+
+    async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
+        std::fs::remove_dir(self.real(&path)?).map_err(status_of)?;
+        Ok(ok(id))
+    }
+
+    async fn remove(&mut self, id: u32, filename: String) -> Result<Status, Self::Error> {
+        std::fs::remove_file(self.real(&filename)?).map_err(status_of)?;
+        Ok(ok(id))
+    }
+
+    async fn rename(
+        &mut self,
+        id: u32,
+        oldpath: String,
+        newpath: String,
+    ) -> Result<Status, Self::Error> {
+        let (from, to) = (self.real(&oldpath)?, self.real(&newpath)?);
+        // Like OpenSSH: an existing target is a failure, never replaced.
+        if std::fs::symlink_metadata(&to).is_ok() {
+            return Err(StatusCode::Failure);
+        }
+        std::fs::rename(from, to).map_err(status_of)?;
+        Ok(ok(id))
+    }
+
+    async fn setstat(
+        &mut self,
+        id: u32,
+        path: String,
+        attrs: FileAttributes,
+    ) -> Result<Status, Self::Error> {
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(mode) = attrs.permissions {
+            // chmod(2) follows links, as OpenSSH's SETSTAT does.
+            std::fs::set_permissions(
+                self.real(&path)?,
+                std::fs::Permissions::from_mode(mode & 0o7777),
+            )
+            .map_err(status_of)?;
+        }
+        Ok(ok(id))
     }
 
     async fn readdir(&mut self, id: u32, handle: String) -> Result<Name, Self::Error> {
@@ -476,12 +591,8 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn close(&mut self, id: u32, handle: String) -> Result<Status, Self::Error> {
         self.dirs.remove(&handle);
-        Ok(Status {
-            id,
-            status_code: StatusCode::Ok,
-            error_message: "Ok".into(),
-            language_tag: "en-US".into(),
-        })
+        self.files.remove(&handle);
+        Ok(ok(id))
     }
 
     async fn stat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {

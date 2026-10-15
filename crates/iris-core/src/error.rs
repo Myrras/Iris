@@ -30,6 +30,11 @@ pub enum CoreError {
     #[error("not found: {0}")]
     NotFound(String),
 
+    /// Something already exists at the path a folder is created at or an
+    /// entry is renamed to (renames never overwrite). Carries the path.
+    #[error("already exists: {0}")]
+    AlreadyExists(String),
+
     /// The OS or the remote server refused access to a path.
     #[error("permission denied: {0}")]
     PermissionDenied(String),
@@ -105,6 +110,7 @@ impl CoreError {
             Self::Config(_) => "config",
             Self::InvalidInput(_) => "invalidInput",
             Self::NotFound(_) => "notFound",
+            Self::AlreadyExists(_) => "alreadyExists",
             Self::PermissionDenied(_) => "permissionDenied",
             Self::ConnectFailed(_) => "connectFailed",
             Self::AuthFailed => "authFailed",
@@ -127,6 +133,7 @@ impl CoreError {
         match err.kind() {
             std::io::ErrorKind::NotFound => Self::NotFound(path.to_string()),
             std::io::ErrorKind::PermissionDenied => Self::PermissionDenied(path.to_string()),
+            std::io::ErrorKind::AlreadyExists => Self::AlreadyExists(path.to_string()),
             _ => Self::Io(err),
         }
     }
@@ -150,6 +157,7 @@ mod tests {
             (CoreError::Config("x".into()), "config"),
             (CoreError::InvalidInput("x".into()), "invalidInput"),
             (CoreError::NotFound("/x".into()), "notFound"),
+            (CoreError::AlreadyExists("/x".into()), "alreadyExists"),
             (CoreError::PermissionDenied("/x".into()), "permissionDenied"),
             (CoreError::ConnectFailed("x".into()), "connectFailed"),
             (CoreError::AuthFailed, "authFailed"),
@@ -195,6 +203,11 @@ mod tests {
         assert!(matches!(
             CoreError::from_io_at(denied, "/b"),
             CoreError::PermissionDenied(_)
+        ));
+        let exists = std::io::Error::from(std::io::ErrorKind::AlreadyExists);
+        assert!(matches!(
+            CoreError::from_io_at(exists, "/d"),
+            CoreError::AlreadyExists(p) if p == "/d"
         ));
         let other = std::io::Error::other("boom");
         assert!(matches!(

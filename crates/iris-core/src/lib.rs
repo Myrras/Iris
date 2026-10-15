@@ -15,9 +15,11 @@
 //! close guard's [`Core::has_active_work`]) the core holds the saved
 //! [`ConnectionProfile`]s, their remembered secrets ([`secrets`]), the live
 //! SSH/SFTP sessions and the [`FileSystem`] calls the browsing panes make
-//! against either side ([`FsTarget`]). Connecting understands password, key
-//! file, ssh-agent and `~/.ssh/config` logins and jump hosts. Transfers
-//! arrive in a later phase.
+//! against either side ([`FsTarget`]): browsing, the file operations (new
+//! folder, rename, delete — to the Trash locally, permanently remotely —
+//! and chmod) and [`Preview`]s. Connecting understands password, key file,
+//! ssh-agent and `~/.ssh/config` logins and jump hosts. Transfers arrive in
+//! a later phase.
 
 #![forbid(unsafe_code)]
 
@@ -27,6 +29,7 @@ pub mod events;
 pub mod fs;
 pub mod ids;
 mod persist;
+pub mod preview;
 pub mod secret;
 pub mod secrets;
 pub mod session_manager;
@@ -34,7 +37,8 @@ pub mod settings;
 pub mod ssh;
 pub mod ssh_config;
 
-use std::path::PathBuf;
+use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::broadcast;
@@ -42,8 +46,12 @@ use tokio::sync::broadcast;
 pub use connection::{AuthMethod, ConnectionProfile, JumpHost, ProfileStore};
 pub use error::{CoreError, CoreResult};
 pub use events::{CoreEvent, EventBus, SessionState};
-pub use fs::{Entry, EntryKind, FileSystem, FsTarget, LinkTargetKind, LocalFs};
+pub use fs::{
+    BatchFailure, BatchReport, Entry, EntryKind, FileSystem, FsTarget, LinkTargetKind, LocalFs,
+    SystemTrash, Trash,
+};
 pub use ids::{HostKeyRequestId, ProfileId, SessionId};
+pub use preview::Preview;
 pub use secret::Secret;
 pub use secrets::{KeychainStore, MemorySecretStore, SecretKind, SecretStore};
 pub use settings::{IrisSettings, IrisSettingsStore};
@@ -93,7 +101,8 @@ pub struct Core {
     /// Remembered passwords / passphrases. In memory until the shell
     /// installs the OS keychain ([`Core::set_secret_store`]).
     secrets: Mutex<Arc<dyn SecretStore>>,
-    local: LocalFs,
+    /// The local disk; its [`Trash`] is swappable ([`Core::set_trash`]).
+    local: Mutex<LocalFs>,
 }
 
 impl Default for Core {
@@ -108,12 +117,33 @@ impl Default for Core {
             ssh_config: Mutex::default(),
             agent: Mutex::default(),
             secrets: Mutex::new(Arc::new(MemorySecretStore::new())),
-            local: LocalFs,
+            local: Mutex::new(LocalFs::new()),
         }
     }
 }
 
 const CONFIG_LOCK: &str = "core config lock poisoned";
+
+/// Run `$call` against the filesystem `$target` addresses, bound to `$fs`
+/// (a `&LocalFs` or `&SftpFs`). A remote call that finds the connection
+/// gone drops the session ([`Core::forget_if_lost`]).
+macro_rules! on_fs {
+    ($core:ident, $target:expr, |$fs:ident| $call:expr) => {
+        match $target {
+            FsTarget::Local => {
+                let local = $core.local();
+                let $fs = &local;
+                $call.await
+            }
+            FsTarget::Remote { session_id } => {
+                let live = $core.sessions.get(session_id)?;
+                let $fs = live.ssh.fs();
+                let result = $call.await;
+                $core.forget_if_lost(session_id, live.profile_id, result)
+            }
+        }
+    };
+}
 
 impl Core {
     pub fn new() -> Self {
@@ -467,50 +497,86 @@ impl Core {
 
     /// The entries of a folder, unsorted.
     pub async fn list_dir(&self, target: FsTarget, path: &str) -> CoreResult<Vec<Entry>> {
-        match target {
-            FsTarget::Local => self.local.list(path).await,
-            FsTarget::Remote { session_id } => {
-                let live = self.sessions.get(session_id)?;
-                let result = live.ssh.fs().list(path).await;
-                self.forget_if_lost(session_id, live.profile_id, result)
-            }
-        }
+        on_fs!(self, target, |fs| fs.list(path))
     }
 
     /// One entry (a final symlink is not followed; see [`EntryKind`]).
     pub async fn stat(&self, target: FsTarget, path: &str) -> CoreResult<Entry> {
-        match target {
-            FsTarget::Local => self.local.stat(path).await,
-            FsTarget::Remote { session_id } => {
-                let live = self.sessions.get(session_id)?;
-                let result = live.ssh.fs().stat(path).await;
-                self.forget_if_lost(session_id, live.profile_id, result)
-            }
-        }
+        on_fs!(self, target, |fs| fs.stat(path))
     }
 
     /// The raw target text of a symlink.
     pub async fn read_link(&self, target: FsTarget, path: &str) -> CoreResult<String> {
-        match target {
-            FsTarget::Local => self.local.read_link(path).await,
-            FsTarget::Remote { session_id } => {
-                let live = self.sessions.get(session_id)?;
-                let result = live.ssh.fs().read_link(path).await;
-                self.forget_if_lost(session_id, live.profile_id, result)
-            }
-        }
+        on_fs!(self, target, |fs| fs.read_link(path))
     }
 
     /// The user's home folder (local) or login folder (remote), absolute.
     pub async fn home_dir(&self, target: FsTarget) -> CoreResult<String> {
-        match target {
-            FsTarget::Local => self.local.home().await,
-            FsTarget::Remote { session_id } => {
-                let live = self.sessions.get(session_id)?;
-                let result = live.ssh.fs().home().await;
-                self.forget_if_lost(session_id, live.profile_id, result)
+        on_fs!(self, target, |fs| fs.home())
+    }
+
+    // -- File operations --------------------------------------------------------
+
+    /// Local deletes go to `trash` (the OS Trash by default; tests install a
+    /// fake so they never touch it).
+    pub fn set_trash(&self, trash: Arc<dyn Trash>) {
+        *self.local.lock().expect(CONFIG_LOCK) = LocalFs::with_trash(trash);
+    }
+
+    fn local(&self) -> LocalFs {
+        self.local.lock().expect(CONFIG_LOCK).clone()
+    }
+
+    /// Create the folder `path`; `AlreadyExists` when the name is taken.
+    pub async fn mkdir(&self, target: FsTarget, path: &str) -> CoreResult<()> {
+        on_fs!(self, target, |fs| fs.mkdir(path))
+    }
+
+    /// Rename `from` to `to` (full paths). Never overwrites:
+    /// `AlreadyExists` when `to` is taken.
+    pub async fn rename(&self, target: FsTarget, from: &str, to: &str) -> CoreResult<()> {
+        on_fs!(self, target, |fs| fs.rename(from, to))
+    }
+
+    /// Delete each of `paths` (folders with their contents; symlinks
+    /// themselves). Local entries go to the Trash, remote ones are deleted
+    /// permanently. A path that fails is reported and the rest carry on; a
+    /// lost connection fails the whole call with `NotConnected`.
+    pub async fn delete(&self, target: FsTarget, paths: &[String]) -> CoreResult<BatchReport> {
+        on_fs!(self, target, |fs| run_batch(paths, |path| async move {
+            if is_root(target, path) {
+                return Err(CoreError::InvalidInput(format!(
+                    "{path} is a root folder and cannot be deleted"
+                )));
             }
-        }
+            fs.remove(path).await
+        }))
+    }
+
+    /// Set the permission bits of each of `paths` to `mode` (≤ `0o7777`);
+    /// with `recursive`, also of everything inside folders (symlinks
+    /// skipped). Failures are reported per path, as for [`Core::delete`].
+    pub async fn chmod(
+        &self,
+        target: FsTarget,
+        paths: &[String],
+        mode: u32,
+        recursive: bool,
+    ) -> CoreResult<BatchReport> {
+        fs::check_mode(mode)?;
+        on_fs!(self, target, |fs| run_batch(paths, |path| fs
+            .chmod(path, mode, recursive)))
+    }
+
+    /// Preview the file at `path`, reading at most `max_bytes` (text at most
+    /// [`preview::TEXT_PREVIEW_MAX_BYTES`]).
+    pub async fn preview(
+        &self,
+        target: FsTarget,
+        path: &str,
+        max_bytes: u64,
+    ) -> CoreResult<Preview> {
+        on_fs!(self, target, |fs| preview::preview(fs, path, max_bytes))
     }
 
     /// A remote call that found the connection gone drops the session and
@@ -544,6 +610,36 @@ impl Core {
     /// transfer).
     pub fn has_active_work(&self) -> bool {
         false
+    }
+}
+
+/// Apply `op` to each path in turn, collecting failures instead of
+/// stopping. A lost connection ends the batch: nothing after it can work.
+async fn run_batch<'a, F, Fut>(paths: &'a [String], mut op: F) -> CoreResult<BatchReport>
+where
+    F: FnMut(&'a str) -> Fut,
+    Fut: Future<Output = CoreResult<()>>,
+{
+    let mut report = BatchReport::default();
+    for path in paths {
+        match op(path).await {
+            Ok(()) => report.succeeded.push(path.clone()),
+            Err(CoreError::NotConnected) => return Err(CoreError::NotConnected),
+            Err(e) => report.failed.push(BatchFailure {
+                path: path.clone(),
+                kind: e.kind().to_string(),
+                message: e.to_string(),
+            }),
+        }
+    }
+    Ok(report)
+}
+
+/// Whether `path` is a filesystem root (or empty), which Iris never deletes.
+fn is_root(target: FsTarget, path: &str) -> bool {
+    match target {
+        FsTarget::Local => Path::new(path).parent().is_none(),
+        FsTarget::Remote { .. } => path.trim_end_matches('/').is_empty(),
     }
 }
 

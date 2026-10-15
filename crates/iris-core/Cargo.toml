@@ -28,6 +28,8 @@ ssh2-config = "0.8.2"
 # OS keychain for remembered passwords / passphrases (`secrets.rs`).
 # macOS Keychain and Windows Credential Manager here; Linux below.
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
+trash = "5.2.9"
+base64 = "0.22"
 
 # Linux: the Secret Service (GNOME Keyring/KWallet) over D-Bus. Building needs
 # the libdbus headers (`libdbus-1-dev` / `dbus-devel`).

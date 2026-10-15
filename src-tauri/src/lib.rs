@@ -173,6 +173,11 @@ pub fn run() {
             commands::fs::stat,
             commands::fs::read_link,
             commands::fs::home_dir,
+            commands::fs::mkdir,
+            commands::fs::rename,
+            commands::fs::delete,
+            commands::fs::chmod,
+            commands::fs::preview,
             commands::window::window_confirm_close,
         ])
         .build(tauri::generate_context!())

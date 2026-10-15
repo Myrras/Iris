@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use iris_core::ssh::hostkey::fingerprint_sha256;
 use iris_core::{
     AuthMethod, ConnectionProfile, Core, CoreError, CoreEvent, EntryKind, FsTarget, LinkTargetKind,
-    ProfileId, Secret, SessionId, SessionState,
+    Preview, ProfileId, Secret, SessionId, SessionState,
 };
 use tempfile::TempDir;
 use tokio::sync::broadcast;
@@ -467,4 +467,193 @@ async fn ten_thousand_entries_list_in_under_two_seconds() {
     eprintln!("listed 10,000 remote entries in {elapsed:?}");
     assert_eq!(entries.len(), 10_000);
     assert!(elapsed < Duration::from_secs(2), "listing took {elapsed:?}");
+}
+
+// -- File operations ----------------------------------------------------------------
+
+#[tokio::test]
+async fn remote_mkdir_and_rename_never_overwrite() {
+    let server = TestServer::start(None).await;
+    let root = server.root();
+    std::fs::write(root.join("taken.txt"), "keep me").unwrap();
+    let f = fixture(&server, true);
+    let target = remote(connect_with_password(&f, &server).await);
+
+    f.core.mkdir(target, "/untitled folder").await.unwrap();
+    assert!(root.join("untitled folder").is_dir());
+    assert!(matches!(
+        f.core.mkdir(target, "/untitled folder").await,
+        Err(CoreError::AlreadyExists(p)) if p == "/untitled folder"
+    ));
+
+    f.core
+        .rename(target, "/untitled folder", "/Reports")
+        .await
+        .unwrap();
+    assert!(root.join("Reports").is_dir());
+    assert!(!root.join("untitled folder").exists());
+
+    let err = f
+        .core
+        .rename(target, "/Reports", "/taken.txt")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, CoreError::AlreadyExists(p) if p == "/taken.txt"),
+        "{err:?}"
+    );
+    assert_eq!(err.kind(), "alreadyExists");
+    assert_eq!(
+        std::fs::read_to_string(root.join("taken.txt")).unwrap(),
+        "keep me"
+    );
+    assert!(matches!(
+        f.core.rename(target, "/nope", "/x").await,
+        Err(CoreError::NotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn remote_delete_is_recursive_and_does_not_follow_symlinks() {
+    let server = TestServer::start(None).await;
+    let root = server.root();
+    // A tree with a link that points outside it: deleting the tree must
+    // remove the link, not what it points at.
+    std::fs::create_dir_all(root.join("keep")).unwrap();
+    std::fs::write(root.join("keep").join("precious.txt"), "fictional").unwrap();
+    std::fs::create_dir_all(root.join("tree/a/b")).unwrap();
+    std::fs::write(root.join("tree/a/b/deep.txt"), "x").unwrap();
+    std::fs::write(root.join("tree/top.txt"), "x").unwrap();
+    std::os::unix::fs::symlink("../keep", root.join("tree/to-keep")).unwrap();
+    std::os::unix::fs::symlink("nowhere", root.join("tree/broken")).unwrap();
+    std::fs::write(root.join("single.txt"), "x").unwrap();
+    let f = fixture(&server, true);
+    let target = remote(connect_with_password(&f, &server).await);
+
+    let report = f
+        .core
+        .delete(
+            target,
+            &["/tree".into(), "/missing".into(), "/single.txt".into()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(report.succeeded, vec!["/tree", "/single.txt"]);
+    assert_eq!(report.failed.len(), 1);
+    assert_eq!(report.failed[0].path, "/missing");
+    assert_eq!(report.failed[0].kind, "notFound");
+
+    assert!(!root.join("tree").exists());
+    assert!(!root.join("single.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("keep/precious.txt")).unwrap(),
+        "fictional"
+    );
+
+    // A symlink to a folder is removed as a link.
+    std::os::unix::fs::symlink("keep", root.join("shortcut")).unwrap();
+    let report = f.core.delete(target, &["/shortcut".into()]).await.unwrap();
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert!(std::fs::symlink_metadata(root.join("shortcut")).is_err());
+    assert!(root.join("keep/precious.txt").exists());
+
+    // The root itself is refused.
+    let report = f.core.delete(target, &["/".into()]).await.unwrap();
+    assert_eq!(report.failed[0].kind, "invalidInput");
+    assert!(root.join("keep").exists());
+}
+
+#[tokio::test]
+async fn remote_chmod_sets_modes_recursively_skipping_links() {
+    use std::os::unix::fs::PermissionsExt;
+    let server = TestServer::start(None).await;
+    let root = server.root().to_path_buf();
+    let mode_of = |p: &str| {
+        std::fs::symlink_metadata(root.join(p))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o7777
+    };
+    std::fs::write(root.join("outside.txt"), "x").unwrap();
+    std::fs::set_permissions(root.join("outside.txt"), PermissionsExt::from_mode(0o600)).unwrap();
+    std::fs::create_dir_all(root.join("site/assets")).unwrap();
+    std::fs::write(root.join("site/assets/app.js"), "x").unwrap();
+    std::fs::write(root.join("site/index.html"), "x").unwrap();
+    std::os::unix::fs::symlink("../outside.txt", root.join("site/link")).unwrap();
+    let f = fixture(&server, true);
+    let target = remote(connect_with_password(&f, &server).await);
+
+    let report = f
+        .core
+        .chmod(target, &["/site/index.html".into()], 0o640, false)
+        .await
+        .unwrap();
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert_eq!(mode_of("site/index.html"), 0o640);
+
+    let report = f
+        .core
+        .chmod(target, &["/site".into()], 0o750, true)
+        .await
+        .unwrap();
+    assert!(report.failed.is_empty(), "{report:?}");
+    for p in [
+        "site",
+        "site/assets",
+        "site/assets/app.js",
+        "site/index.html",
+    ] {
+        assert_eq!(mode_of(p), 0o750, "{p}");
+    }
+    assert_eq!(mode_of("outside.txt"), 0o600, "the link was not followed");
+
+    // The entry reports the new mode.
+    let entry = f.core.stat(target, "/site/index.html").await.unwrap();
+    assert_eq!(entry.mode.unwrap() & 0o7777, 0o750);
+}
+
+#[tokio::test]
+async fn remote_preview_reads_and_truncates() {
+    let server = TestServer::start(None).await;
+    let root = server.root();
+    let text = "line one\nline two\n".repeat(1000);
+    std::fs::write(root.join("log.txt"), &text).unwrap();
+    std::fs::write(root.join("blob.bin"), [0u8, 1, 2, 3]).unwrap();
+    std::fs::create_dir(root.join("dir")).unwrap();
+    let f = fixture(&server, true);
+    let target = remote(connect_with_password(&f, &server).await);
+
+    let whole = f.core.preview(target, "/log.txt", 1 << 20).await.unwrap();
+    assert_eq!(
+        whole,
+        Preview::Text {
+            text: text.clone(),
+            truncated: false,
+            total_size: text.len() as u64,
+        }
+    );
+
+    let head = f.core.preview(target, "/log.txt", 100).await.unwrap();
+    assert_eq!(
+        head,
+        Preview::Text {
+            text: text[..100].to_string(),
+            truncated: true,
+            total_size: text.len() as u64,
+        }
+    );
+
+    assert_eq!(
+        f.core.preview(target, "/blob.bin", 1024).await.unwrap(),
+        Preview::Binary { total_size: 4 }
+    );
+    assert!(matches!(
+        f.core.preview(target, "/dir", 1024).await,
+        Err(CoreError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        f.core.preview(target, "/missing.txt", 1024).await,
+        Err(CoreError::NotFound(_))
+    ));
 }

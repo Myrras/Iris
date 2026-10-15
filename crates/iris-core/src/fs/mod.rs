@@ -7,6 +7,7 @@
 
 mod local;
 mod sftp;
+mod trash;
 
 use std::future::Future;
 
@@ -17,6 +18,7 @@ use crate::ids::SessionId;
 
 pub use local::LocalFs;
 pub use sftp::SftpFs;
+pub use trash::{SystemTrash, Trash};
 
 /// Which filesystem a call addresses. On the wire:
 /// `{ "kind": "local" }` or `{ "kind": "remote", "sessionId": "…" }`.
@@ -80,7 +82,43 @@ pub enum LinkTargetKind {
     Dir,
 }
 
-/// The operations the browsing panes need, implemented by [`LocalFs`] and
+/// The start of a file, as read by [`FileSystem::read_range`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadRange {
+    /// At most `max_bytes` bytes from `offset`.
+    pub bytes: Vec<u8>,
+    /// The whole file's size in bytes.
+    pub total_size: u64,
+    /// More of the file follows what was read.
+    pub truncated: bool,
+}
+
+/// The outcome of a batch operation (delete, chmod) over several paths:
+/// one failure does not stop the others. On the wire:
+/// `{ "succeeded": ["…"], "failed": [{ "path", "kind", "message" }] }`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchReport {
+    pub succeeded: Vec<String>,
+    pub failed: Vec<BatchFailure>,
+}
+
+/// One path a batch operation could not handle.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchFailure {
+    pub path: String,
+    /// The `CoreError` kind, as an `IpcError` would carry it.
+    pub kind: String,
+    /// App-owned text (the `CoreError`'s `Display`).
+    pub message: String,
+}
+
+/// The highest mode `chmod` accepts: permission bits plus setuid, setgid
+/// and sticky.
+pub const MAX_MODE: u32 = 0o7777;
+
+/// The operations the panes need, implemented by [`LocalFs`] and
 /// [`SftpFs`]. Futures are `Send` so they can run on any runtime thread
 /// (Tauri's async commands require it).
 pub trait FileSystem {
@@ -99,6 +137,57 @@ pub trait FileSystem {
 
     /// `path` made absolute with links and `..` resolved.
     fn canonicalize(&self, path: &str) -> impl Future<Output = CoreResult<String>> + Send;
+
+    /// Create the folder `path` (its parent must exist). `AlreadyExists`
+    /// when anything is there already.
+    fn mkdir(&self, path: &str) -> impl Future<Output = CoreResult<()>> + Send;
+
+    /// Rename (or move, within this filesystem) `from` to `to`. Never
+    /// overwrites: `AlreadyExists` when `to` exists (a case-only rename of
+    /// the same entry is allowed).
+    fn rename(&self, from: &str, to: &str) -> impl Future<Output = CoreResult<()>> + Send;
+
+    /// Delete `path`, a folder with everything in it. A symlink is removed
+    /// itself, never followed. [`LocalFs`] moves to the OS Trash; [`SftpFs`]
+    /// deletes permanently.
+    fn remove(&self, path: &str) -> impl Future<Output = CoreResult<()>> + Send;
+
+    /// Set the permission bits of `path` to `mode` (at most [`MAX_MODE`]);
+    /// with `recursive`, also of everything inside a folder. Symlinks inside
+    /// are skipped (changing them would change their targets).
+    fn chmod(
+        &self,
+        path: &str,
+        mode: u32,
+        recursive: bool,
+    ) -> impl Future<Output = CoreResult<()>> + Send;
+
+    /// Up to `max_bytes` of the file at `path` (links followed) from
+    /// `offset`, with the file's total size. `InvalidInput` for a folder.
+    fn read_range(
+        &self,
+        path: &str,
+        offset: u64,
+        max_bytes: u64,
+    ) -> impl Future<Output = CoreResult<ReadRange>> + Send;
+}
+
+/// Whether a recursive chmod should change a folder before its contents.
+/// A mode the owner can list and enter (`r-x`) goes top-down, so a folder
+/// that was closed opens before it is walked; one that closes it goes
+/// bottom-up, so the walk finishes before the folder locks.
+pub(crate) fn chmod_folder_first(mode: u32) -> bool {
+    mode & 0o500 == 0o500
+}
+
+/// Reject modes beyond [`MAX_MODE`].
+pub(crate) fn check_mode(mode: u32) -> CoreResult<()> {
+    if mode > MAX_MODE {
+        return Err(crate::error::CoreError::InvalidInput(format!(
+            "{mode:o} is not a valid permission mode"
+        )));
+    }
+    Ok(())
 }
 
 /// The unix file-type bits of a mode.
@@ -194,6 +283,35 @@ mod tests {
             serde_json::to_value(EntryKind::File).unwrap(),
             serde_json::json!({ "type": "file" })
         );
+    }
+
+    #[test]
+    fn batch_report_wire_shape() {
+        let report = BatchReport {
+            succeeded: vec!["/a".into()],
+            failed: vec![BatchFailure {
+                path: "/b".into(),
+                kind: "notFound".into(),
+                message: "not found: /b".into(),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_value(&report).unwrap(),
+            serde_json::json!({
+                "succeeded": ["/a"],
+                "failed": [{ "path": "/b", "kind": "notFound", "message": "not found: /b" }]
+            })
+        );
+    }
+
+    #[test]
+    fn chmod_order_and_mode_bounds() {
+        assert!(chmod_folder_first(0o755));
+        assert!(chmod_folder_first(0o500));
+        assert!(!chmod_folder_first(0o644));
+        assert!(!chmod_folder_first(0o000));
+        assert!(check_mode(0o7777).is_ok());
+        assert!(check_mode(0o10000).is_err());
     }
 
     #[test]

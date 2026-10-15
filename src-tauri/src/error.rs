@@ -80,6 +80,7 @@ mod tests {
             (CoreError::Config("x".into()), "config"),
             (CoreError::InvalidInput("x".into()), "invalidInput"),
             (CoreError::NotFound("/x".into()), "notFound"),
+            (CoreError::AlreadyExists("/x".into()), "alreadyExists"),
             (CoreError::PermissionDenied("/x".into()), "permissionDenied"),
             (CoreError::ConnectFailed("x".into()), "connectFailed"),
             (CoreError::AuthFailed, "authFailed"),
