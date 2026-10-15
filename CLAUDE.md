@@ -158,6 +158,50 @@ standalone template:
     `#[ignore]`d) runs against `linuxserver/openssh-server` (jump container
     with forwarding enabled by a custom init script): `just
     test-integration`, nightly `.github/workflows/integration.yml`.
+- ✅ **Phase 3 — File operations & preview.** Backend and UI done.
+  - `FileSystem` adds `mkdir`, `rename` (never overwrites: `alreadyExists`;
+    a case-only rename of the same entry is allowed), `remove` (folders
+    with contents; symlinks themselves), `chmod(mode, recursive)` (≤
+    `0o7777`; recursion skips symlinks, opening modes go top-down and
+    closing ones bottom-up) and `read_range(path, offset, max_bytes)`.
+    `LocalFs::remove` goes to a `Trash` (`fs/trash.rs`: `SystemTrash` via
+    the `trash` crate, NSFileManager on macOS so no Finder automation
+    prompt); `Core::set_trash` swaps it, so tests use a fake and never touch
+    the real Trash. `SftpFs::remove` is permanent: an iterative walk on
+    LSTAT/READDIR kinds, never following links. SFTP mkdir/rename check the
+    target first (servers answer an existing name with a generic failure).
+  - `Core::delete` / `Core::chmod` take a path list and return a
+    `BatchReport { succeeded, failed: [{path, kind, message}] }`: one
+    failure does not stop the rest, a lost session (`notConnected`) fails
+    the call. Root folders are never deleted (`invalidInput`). An
+    `on_fs!` macro in `lib.rs` dispatches every fs call to the local or
+    remote side (and drops a lost session).
+  - `preview.rs`: `Preview = text{text,truncated,totalSize} |
+    image{mime,dataBase64,totalSize} | binary{totalSize} |
+    tooLarge{totalSize}`. Reads 8 KB first; images need extension *and*
+    magic bytes (png/jpeg/gif/webp; over the cap → `tooLarge`); SVG is an
+    image when it fits (rendered via `<img>` data URL only), else text;
+    text = NUL-free UTF-8, capped at `min(maxBytes, 1 MiB)` with a cut
+    multi-byte character dropped; `maxBytes` 1 B–128 MiB. New kind:
+    `alreadyExists`; new dep `base64`.
+  - IPC: `mkdir`, `rename(from,to)`, `delete(paths)`, `chmod(paths, mode,
+    recursive?)`, `preview(path, maxBytes)` (TS: `deletePaths` wraps
+    `delete`).
+  - UI: `paneStore` owns the ops (`newFolder`, `startRename` /
+    `commitRename` / `cancelRename`, `remove`, `chmod`), each re-reading the
+    folder after; `editing` per pane, `active` pane (Preview follows its
+    `focusedEntry`), `actionTargets` = selection or cursor. `FileTable`
+    shows the inline `RenameField` (basename preselected; Enter/blur commit,
+    Escape cancels) and reports right-clicks; `Pane` owns the shortcuts
+    (`isMac` picks ⌘ vs Ctrl; Enter renames on macOS), the `ContextMenu`,
+    `DeleteConfirmModal` (remote: permanent/danger tone; local:
+    Trash/warning tone; Enter confirms) and `ChmodDialog` (Get Info + rwx
+    grid ⇄ octal, recursive for folders). `PreviewPanel` is the island right
+    of the panes (`layoutStore.previewOpen`; collapsed = slim strip),
+    debounced 120ms, size cap from `settingsStore.preview.maxSizeMb`.
+    Tests: `tests/remote.rs` covers mkdir/rename/delete/chmod/preview over
+    SFTP (the `support/` server now serves open/read/mkdir/rmdir/remove/
+    rename/setstat); `tests/core.rs` the local batch ops with a fake trash.
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":
@@ -218,7 +262,9 @@ crates/iris-core/src/
               # (profiles.json); route.rs = profile → hops (jumps, config)
   ssh/        # russh wrapper: session.rs (hops/auth/SFTP), hostkey.rs
               # (known_hosts + prompts), agent.rs (ssh-agent / Pageant)
-  fs/         # FileSystem trait, Entry/EntryKind/FsTarget; local.rs, sftp.rs
+  fs/         # FileSystem trait, Entry/EntryKind/FsTarget, BatchReport;
+              # local.rs, sftp.rs, trash.rs (Trash trait + SystemTrash)
+  preview.rs  # Preview (text/image/binary/tooLarge) from read_range
   session_manager.rs  # SessionId → live SshSession; drop-on-close callback
 crates/iris-core/tests/
   core.rs     # integration test over the public API — no UI required
@@ -238,12 +284,15 @@ src-tauri/src/
   commands/   # thin shims: settings.rs, connection.rs (profiles, secrets,
               # ssh config hosts), session.rs
               # (connect/disconnect/answer_host_key), fs.rs (list_dir/stat/
-              # read_link/home_dir), window.rs
+              # read_link/home_dir/mkdir/rename/delete/chmod/preview),
+              # window.rs
 src/
-  App.tsx     # the shell: title bar, sidebar, Local/Remote panes, transfers
+  App.tsx     # the shell: title bar, sidebar, Local/Remote panes, preview,
+              # transfers
   components/ # Sidebar + ConnectionSidebar/ConnectionRow, ConnectionForm,
               # PromptHost (SecretPrompt, HostKeyDialog), Pane + Breadcrumb +
-              # FileTable, ContextMenu, TransferPanel, WelcomeScreen, Modal,
+              # FileTable, ContextMenu, DeleteConfirmModal, ChmodDialog,
+              # PreviewPanel, TransferPanel, WelcomeScreen, Modal,
               # Toasts, SettingsModal, CloseWarningModal, WindowControls,
               # StatusDot, LogoMark, icons (lucide wrapper; import from here)
   ipc/        # commands.ts (typed wrappers), types.ts (wire types), events.ts
@@ -251,8 +300,8 @@ src/
               # connectionForm, theme, settings (UI prefs), settingsRequest,
               # layout, toast — mirror the backend; don't guess
   lib/        # connect flow, useCoreEvents, pure rules (entries, selection,
-              # path, fileFormat, dateFormat, connectionForm), log, motion,
-              # platform
+              # path, fileFormat, fileName, mode, dateFormat,
+              # connectionForm), log, motion, platform
   styles/     # tokens.css (design tokens) + global.css (resets/primitives)
   test/       # Vitest setup + stubViewport (jsdom has no layout)
 ```

@@ -39,9 +39,9 @@ when it merges.
   Refresh, a filter box and a hidden-files toggle. Columns for name, size,
   modified date and permissions; click a header to sort (folders stay on
   top, names sort naturally).
-- Open folders (and links to folders) with a double-click or Enter; select
-  with the arrow keys, Cmd/Ctrl-click and Shift-click. Folders with
-  thousands of entries scroll smoothly.
+- Open folders (and links to folders) with a double-click, or Enter on
+  Windows and Linux; select with the arrow keys, Cmd/Ctrl-click and
+  Shift-click. Folders with thousands of entries scroll smoothly.
 - A dropped connection shows in its pane with a Reconnect button.
 - Log in with the keys in your running SSH agent.
 - Pick a host from `~/.ssh/config` in the connection form: host, port and
@@ -54,3 +54,23 @@ when it merges.
   secret in your system keychain, so the next connect asks nothing. If a
   saved secret stops working you are asked again and can replace or forget
   it; editing a connection can also forget it, and deleting one removes it.
+- New Folder from the pane toolbar, the right-click menu or ⇧⌘N
+  (Ctrl+Shift+N elsewhere): creates "untitled folder" and lets you name it
+  right away.
+- Rename in place with F2, Enter on macOS (as in Finder) or the right-click
+  menu; Escape cancels. A rename never overwrites an existing file. On
+  macOS, ⌘↓ opens a folder and ⌘↑ goes to the enclosing one.
+- Delete with the Delete key, ⌘⌫ (Ctrl+Backspace elsewhere) or the
+  right-click menu, always after a confirmation that lists what goes: local
+  files move to the Trash (Recycle Bin on Windows), remote files are deleted
+  permanently. A symbolic link is deleted itself, never what it points to.
+- Get Info / Permissions (⌘I, Ctrl+I elsewhere): kind, size and date, and
+  the permissions as a read/write/execute grid with a matching octal field;
+  for folders, optionally applied to everything inside.
+- Preview panel to the right of the panes (Space, as in Quick Look, or the
+  toolbar button): text files, and PNG, JPEG, GIF, WebP and SVG images on a
+  checkerboard. Large text files show their first part with a notice;
+  images over the preview size limit and binary files say so. The panel
+  collapses to a slim strip and remembers its state.
+- Right-click menu on files and on the empty part of a pane: Open, Preview,
+  New Folder, Rename, Get Info, Refresh and Delete.
