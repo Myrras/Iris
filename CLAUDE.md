@@ -45,7 +45,7 @@ standalone template:
   - UI prefs (theme, reduced motion, show hidden, preview cap) are
     localStorage-only (`themeStore` → `iris.theme`, `settingsStore` →
     `iris.settings`, `layoutStore` → `iris.layout`).
-- 🚧 **Phase 1 — Connect & browse.** Backend done, UI pending.
+- ✅ **Phase 1 — Connect & browse.** Backend and UI done.
   - Core: `connection/` (`ConnectionProfile` + `AuthMethod`
     `password | keyFile{path}`, kind-tagged so Phase 2 can add `agent` /
     `sshConfigHost`; `ProfileStore` → `profiles.json`, **never a secret
@@ -74,6 +74,36 @@ standalone template:
     `read_link` / `home_dir` (`target` = `{kind:"local"}` |
     `{kind:"remote",sessionId}`); events `profiles:changed`,
     `session:host-key-prompt`, `session:state-changed`.
+  - UI: `useCoreEvents` (mounted once in `App`) feeds the events into
+    `profilesStore` / `sessionStore` / `promptStore`. `ConnectionSidebar`
+    lists profiles (`ConnectionRow` + `StatusDot` from the latest session;
+    click connects or shows the live session; context menu connect /
+    disconnect / edit / delete-with-confirm). `ConnectionForm` (opened via
+    `connectionFormStore`) validates inline (`lib/connectionForm.ts`
+    mirrors `ConnectionProfile::normalized`); the key file comes from the
+    native picker (`@tauri-apps/plugin-dialog`, `dialog:default`).
+    `lib/connect.ts` is the one connect flow: password profiles prompt
+    first, key files prompt for a passphrase only on `passphraseRequired`;
+    a wrong secret keeps `SecretPrompt` open, `hostKeyChanged` raises the
+    blocking `HostKeyChangedDialog`. `promptStore` is a queue rendered by
+    `PromptHost`; host-key prompts jump ahead of secret prompts (a busy
+    password prompt would otherwise block its own connect) and are dropped
+    when their session turns `disconnected` (backend timeout). Secrets live
+    only in `SecretPrompt`'s local state and are cleared on submit.
+  - Panes: `Pane` (Local/Remote) + `paneStore` (per pane: target, path,
+    entries, sort, filter, hidden override, selection/anchor/cursor, Back
+    history; listings are tokened so a stale one never wins; a failed
+    navigation toasts and keeps the folder). `FileTable` is TanStack Table
+    (column model) + TanStack Virtual (rows), like Selene's `ResultsGrid`.
+    Pure rules in `lib/entries.ts` (folders first, natural names),
+    `lib/selection.ts` (click/Cmd/Shift/arrows), `lib/path.ts`
+    (breadcrumb, Up), `lib/fileFormat.ts` (size, `drwxr-xr-x`),
+    `lib/dateFormat.ts` (compact Finder-style Modified label, full
+    timestamp as tooltip). Columns fit the pane: Name stretches from
+    120px, Size/Modified/Permissions are fixed (64/108/84px); only a pane
+    narrower than their sum scrolls sideways. Remote pane: `WelcomeScreen` without a session, a
+    Reconnect notice when it dropped. jsdom has no layout: tests that need
+    virtualised rows call `stubViewport()` (`src/test/viewport.ts`).
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":
@@ -105,6 +135,7 @@ standalone template:
 | FE state    | Zustand 5 (no data-fetching lib; call IPC, then resync)  |
 | Motion      | CSS tokens (`--dur-*`/`--ease-*`), reduced-motion guard  |
 | Icons       | `lucide-react`, only via `src/components/icons.tsx`      |
+| File table  | `@tanstack/react-table` + `@tanstack/react-virtual`      |
 | Tests       | `cargo test` (core + integration) · Vitest + jsdom + RTL |
 
 ## Architecture
@@ -147,14 +178,20 @@ src-tauri/src/
               # read_link/home_dir), window.rs
 src/
   App.tsx     # the shell: title bar, sidebar, Local/Remote panes, transfers
-  components/ # Sidebar, PaneIsland, TransferPanel, WelcomeScreen, Modal,
+  components/ # Sidebar + ConnectionSidebar/ConnectionRow, ConnectionForm,
+              # PromptHost (SecretPrompt, HostKeyDialog), Pane + Breadcrumb +
+              # FileTable, ContextMenu, TransferPanel, WelcomeScreen, Modal,
               # Toasts, SettingsModal, CloseWarningModal, WindowControls,
               # StatusDot, LogoMark, icons (lucide wrapper; import from here)
   ipc/        # commands.ts (typed wrappers), types.ts (wire types), events.ts
-  state/      # Zustand stores: theme, settings (UI prefs), settingsRequest,
+  state/      # Zustand stores: profiles, session, prompt (queue), pane,
+              # connectionForm, theme, settings (UI prefs), settingsRequest,
               # layout, toast — mirror the backend; don't guess
-  lib/        # framework-agnostic helpers (log, motion/usePresence, platform)
+  lib/        # connect flow, useCoreEvents, pure rules (entries, selection,
+              # path, fileFormat, dateFormat, connectionForm), log, motion,
+              # platform
   styles/     # tokens.css (design tokens) + global.css (resets/primitives)
+  test/       # Vitest setup + stubViewport (jsdom has no layout)
 ```
 
 ### The core contract

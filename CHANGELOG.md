@@ -29,3 +29,17 @@ when it merges.
   connection.
 - Browse remote folders over SFTP, with symlinks (and where they point) and
   hidden files recognised; large folders list quickly.
+- Connections sidebar: saved servers with a live status dot; click to
+  connect, right-click to connect, disconnect, edit or delete. New and edit
+  forms check host, port, user and key file as you type, with a file picker
+  for the private key.
+- Password and passphrase prompts when connecting; a wrong one can be
+  retyped without starting over.
+- Local and Remote panes side by side: breadcrumb path, Back, Up and
+  Refresh, a filter box and a hidden-files toggle. Columns for name, size,
+  modified date and permissions; click a header to sort (folders stay on
+  top, names sort naturally).
+- Open folders (and links to folders) with a double-click or Enter; select
+  with the arrow keys, Cmd/Ctrl-click and Shift-click. Folders with
+  thousands of entries scroll smoothly.
+- A dropped connection shows in its pane with a Reconnect button.
