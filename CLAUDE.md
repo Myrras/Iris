@@ -28,8 +28,44 @@ standalone template:
 
 ## Status — v0.1
 
-- Skeleton only: the boilerplate's sample feature (greet + notes) is still the
-  domain. Replace it with the real Iris domain.
+- ✅ **Phase 0 — Island shell.** Looks and feels like Podium
+  (`../podium`, the reference for every UI piece; `../Selene` is a second
+  one): same tokens, island layout, title bar, modals, toasts, settings dialog
+  and dark/light/retro themes. The boilerplate demo (greet + notes) is gone.
+  - Layout: title bar on the canvas; sidebar island (placeholder Connections
+    section); Local + Remote pane islands side by side (the remote pane shows
+    `WelcomeScreen`); collapsible transfer island underneath.
+  - Core: `CoreError` (`io`/`config`/`invalidInput`), `CoreEvent` on a tokio
+    broadcast bus (`Core::subscribe_events`, forwarded by
+    `src-tauri/src/events.rs`), `IrisSettingsStore` (`settings.json` in the
+    app data dir: `parallelTransfers`, `reconnectAttempts`,
+    `editorOverrides`; commands `get_settings` / `save_settings`), and
+    `Core::has_active_work()` for the close guard (always `false` until
+    Phase 5 wires it to transfers).
+  - UI prefs (theme, reduced motion, show hidden, preview cap) are
+    localStorage-only (`themeStore` → `iris.theme`, `settingsStore` →
+    `iris.settings`, `layoutStore` → `iris.layout`).
+- ⏭ Next: Phase 1 — connections and remote browsing over SSH.
+- ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
+  bar on Windows and macOS (`data-tauri-drag-region` makes the strip
+  draggable). Windows turns the native decorations off (`"decorations":
+  false`) and draws its own minimize/maximize/close in `WindowControls.tsx`
+  (polling `isMaximized()` on `onResized` to track Aero Snap). macOS keeps its
+  decorations with `"titleBarStyle": "Overlay"` and `"hiddenTitle": true`, so
+  the native traffic lights are drawn over the strip's top-left corner;
+  `.titlebarMac` leaves 78px of room and the brand is centered. macOS also
+  keeps its native *menu bar* (⌘, opens Settings via `menu:open-settings` —
+  see the `setup` hook's `#[cfg(target_os = "macos")]` block); elsewhere a
+  title-bar gear and Ctrl+, open it. Linux keeps its native title bar.
+  `src-tauri/tauri.windows.conf.json` / `tauri.macos.conf.json` are RFC 7396
+  merge patches over `tauri.conf.json` — a JSON *array* replaces wholesale,
+  so each repeats the whole `windows[0]` object. The window-state plugin is
+  registered without `StateFlags::DECORATIONS`, otherwise its restore
+  overrides the platform config's decorations.
+- ✅ **Close guard**: `CloseRequested` (red button) and `ExitRequested`
+  (Cmd+Q) are blocked while `Core::has_active_work()`; the webview gets
+  `window:close-requested`, shows `CloseWarningModal`, and "Close anyway"
+  calls `window_confirm_close` (arms `AppState::force_close`, exits).
 
 ## Tech stack
 
@@ -39,6 +75,7 @@ standalone template:
 | Core        | Plain Rust crate, zero Tauri dependency                  |
 | FE state    | Zustand 5 (no data-fetching lib; call IPC, then resync)  |
 | Motion      | CSS tokens (`--dur-*`/`--ease-*`), reduced-motion guard  |
+| Icons       | `lucide-react`, only via `src/components/icons.tsx`      |
 | Tests       | `cargo test` (core + integration) · Vitest + jsdom + RTL |
 
 ## Architecture
@@ -54,20 +91,30 @@ scripts/
 crates/iris-core/src/
   lib.rs      # Core — THE single entry point (all mutation goes through it)
   error.rs    # CoreError / CoreResult (messages are app-owned text, never secrets)
-  ids.rs      # UUID newtypes via the uuid_newtype! macro
+  events.rs   # CoreEvent + EventBus (tokio broadcast) — Core::subscribe_events
+  settings.rs # IrisSettings + IrisSettingsStore (settings.json, atomic write)
+  ids.rs      # UUID newtypes via the uuid_newtype! macro (first ids: Phase 1)
 crates/iris-core/tests/
   core.rs     # integration test over the public API — no UI required
+src-tauri/
+  tauri.conf.json                # base config
+  tauri.{macos,windows}.conf.json  # per-OS window chrome (merge patches)
 src-tauri/src/
   main.rs     # binary entry → iris_lib::run()
-  lib.rs      # Tauri builder, plugins, command registration
-  state.rs    # AppState: Arc<Core>
+  lib.rs      # Tauri builder, plugins, macOS menu, close guard, commands
+  state.rs    # AppState: Arc<Core> + force_close flag
   error.rs    # IpcError { kind, message } ← CoreError
-  commands/   # one thin (de)serialize-and-forward shim per command
+  events.rs   # forwards CoreEvents to the webview (app.emit, Lagged-safe)
+  commands/   # thin shims: settings.rs (get/save_settings), window.rs
 src/
-  App.tsx     # the shell
-  ipc/        # typed command wrappers + hand-written wire types
-  state/      # Zustand stores (mirror the backend; don't guess)
-  lib/        # framework-agnostic helpers (log, motion)
+  App.tsx     # the shell: title bar, sidebar, Local/Remote panes, transfers
+  components/ # Sidebar, PaneIsland, TransferPanel, WelcomeScreen, Modal,
+              # Toasts, SettingsModal, CloseWarningModal, WindowControls,
+              # StatusDot, LogoMark, icons (lucide wrapper; import from here)
+  ipc/        # commands.ts (typed wrappers), types.ts (wire types), events.ts
+  state/      # Zustand stores: theme, settings (UI prefs), settingsRequest,
+              # layout, toast — mirror the backend; don't guess
+  lib/        # framework-agnostic helpers (log, motion/usePresence, platform)
   styles/     # tokens.css (design tokens) + global.css (resets/primitives)
 ```
 

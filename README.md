@@ -2,8 +2,8 @@
 
 A cross-platform desktop **remote file manager over SSH** (in the spirit of
 Forklift), built in **Rust + Tauri 2 + React + TypeScript + Vite**.
-**v0.1 — in progress** (skeleton only; the domain is still the boilerplate's
-greet + notes sample).
+**v0.1 — in progress** (Phase 0: the island shell, themes, settings and app
+plumbing; no SSH yet).
 
 Forked from
 [rust-application-boilerplate](https://github.com/RobbieMinderhoud/rust-application-boilerplate);
