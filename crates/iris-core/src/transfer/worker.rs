@@ -122,6 +122,10 @@ async fn copy(shared: &Shared, ctx: &JobContext, src: &Side, dst: &Side) -> Core
         }
     };
 
+    // A cancel during the checks above must not truncate the destination.
+    if ctx.token.is_cancelled() {
+        return Ok(Outcome::Cancelled);
+    }
     let mut reader = src.open_reader(&ctx.src, offset).await?;
     let mut writer = dst.open_writer(&dst_path, offset).await?;
     shared.start_writing(ctx.id, offset);
