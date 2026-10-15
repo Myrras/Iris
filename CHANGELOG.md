@@ -74,3 +74,20 @@ when it merges.
   collapses to a slim strip and remembers its state.
 - Right-click menu on files and on the empty part of a pane: Open, Preview,
   New Folder, Rename, Get Info, Refresh and Delete.
+- Uploads and downloads of files and whole folders: folders are recreated
+  on the other side (empty ones included), files keep their modification
+  time and permissions, and several files copy at once (as many as the
+  "parallel transfers" setting allows; a change applies to the next file
+  that starts).
+- Live progress and speed per transfer and for all of them together;
+  transfers can be cancelled one by one or per batch.
+- When a file already exists at the destination you choose Replace, Skip,
+  Keep Both (saved as "name (2).ext") or Resume (continue a partial copy),
+  optionally for the rest of that transfer.
+- A transfer cut off by a dropped connection pauses instead of failing and
+  can continue where it stopped; a cancelled one leaves its partial file,
+  which a later transfer can resume.
+- Links to files are copied as the file; links to folders inside a folder
+  are skipped (they could loop) and listed as skipped.
+- The quit warning now appears while transfers are still queued, running,
+  waiting for your answer or paused.

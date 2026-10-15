@@ -40,8 +40,8 @@ standalone template:
     `src-tauri/src/events.rs`), `IrisSettingsStore` (`settings.json` in the
     app data dir: `parallelTransfers`, `reconnectAttempts`,
     `editorOverrides`; commands `get_settings` / `save_settings`), and
-    `Core::has_active_work()` for the close guard (always `false` until
-    Phase 5 wires it to transfers).
+    `Core::has_active_work()` for the close guard (= active transfers since
+    Phase 4).
   - UI prefs (theme, reduced motion, show hidden, preview cap) are
     localStorage-only (`themeStore` → `iris.theme`, `settingsStore` →
     `iris.settings`, `layoutStore` → `iris.layout`).
@@ -202,6 +202,62 @@ standalone template:
     Tests: `tests/remote.rs` covers mkdir/rename/delete/chmod/preview over
     SFTP (the `support/` server now serves open/read/mkdir/rmdir/remove/
     rename/setstat); `tests/core.rs` the local batch ops with a fake trash.
+- 🚧 **Phase 4 — Transfer engine.** Backend done; UI pending.
+  - `transfer/` (`TransferManager`, owned by `Core`): one registry behind a
+    mutex holds every `TransferJob {id, batchId, sessionId, direction:
+    upload|download, src, dst, size, bytesDone, state, error}`; all state
+    changes happen there and are published. States: `queued → running →
+    done | failed | skipped | needsDecision | paused | cancelled`;
+    `needsDecision → queued` (`resolve_conflict`), `paused → queued`
+    (`resume_paused`), any unfinished → `cancelled`. `error {kind,message}`
+    is set on `failed` and on Iris' own `skipped` (folder links, broken
+    links, sockets/devices, unsafe names).
+  - `expand.rs`: `enqueue` validates, returns the `BatchId` and walks the
+    items in a spawned task (depth-first, names sorted); each destination
+    folder is created (`mkdir_all`, existing OK) before its files are
+    queued. A selected link is followed; links to folders inside a tree are
+    skipped (loops). Names from listings must be one plain segment
+    (`naming::is_safe_name`) so a server cannot steer a download outside
+    its folder.
+  - Scheduling: `Shared::pump` starts queued jobs FIFO while `running <
+    parallelTransfers` — a counting semaphore whose size is re-read at
+    every acquisition (`Core::save_settings` / `set_settings_path` call
+    `set_parallelism`). `needsDecision` frees its slot.
+  - `worker.rs`: per running job, an SFTP channel from the per-session pool
+    (`SshSession::open_sftp_channel`; never shared by two running jobs),
+    STAT source + destination, conflict check (`resolution` of the job,
+    else the batch's apply-to-all `policy`, else `TransferConflict` event),
+    then 256 KiB reads/writes (russh-sftp's `File` pipelines up to 16
+    requests), `CancellationToken` per job (child of the batch token),
+    mtime + permission bits (`& 0o777`) copied at the end. Data goes
+    straight to the final path. `Resume` appends from the destination size
+    (equal = `done` untouched, larger = replaced); `KeepBoth` →
+    `naming::keep_both_name` (`a (2).txt`, `a.tar (2).gz`, `.env (2)`).
+    `NotConnected` (or a session that is gone) → `paused` with progress
+    kept and the job marked as owning its partial file, so `resume_paused`
+    / `resume_paused_on(old, new)` append without asking.
+  - Progress: `TransferProgress` throttled to one per 100 ms per job
+    (`progress::Throttle`); speeds from a 3 s moving window
+    (`progress::SpeedMeter`, also the aggregate in `list_transfers`'
+    `summary`). `TransfersUpdated` is a re-pull signal (coalesced during
+    expansion, on `clear_finished`, and by the shell's forwarder when the
+    bus lagged); the bus holds 4096 events.
+  - `fs/`: transfer primitives on `LocalFs` / `SftpFs` (`metadata`
+    following links, `open_reader`/`open_writer(offset)`, `set_times`,
+    `mkdir_all`), unified by `transfer/side.rs`. `sftp::io_err` classifies
+    read/write errors without server text (broken channel = `notConnected`).
+  - IPC: `enqueue_transfers(request)`, `cancel_transfer(jobId)`,
+    `cancel_batch(batchId)`, `resolve_conflict(jobId, resolution,
+    applyToAll?)`, `list_transfers`, `clear_finished`,
+    `has_active_transfers`; events `transfers:updated`,
+    `transfer:job-changed`, `transfer:progress`, `transfer:conflict`.
+    `resume_paused` is core-only until Phase 5 reconnects.
+  - Tests: `support/` serves writes/setstat-mtime, counts concurrently open
+    files and can delay READ/WRITE; `tests/transfers.rs` covers byte-exact
+    up/downloads with mtime/mode, trees, the parallelism limit, cancel →
+    partial → resume, connection drop → paused → resume over a new
+    session, every conflict answer, apply-to-all and progress coalescing;
+    the Docker test adds parallel tree transfers and a killed connection.
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":
@@ -219,7 +275,8 @@ standalone template:
   registered without `StateFlags::DECORATIONS`, otherwise its restore
   overrides the platform config's decorations.
 - ✅ **Close guard**: `CloseRequested` (red button) and `ExitRequested`
-  (Cmd+Q) are blocked while `Core::has_active_work()`; the webview gets
+  (Cmd+Q) are blocked while `Core::has_active_work()` (any queued, running,
+  needsDecision or paused transfer); the webview gets
   `window:close-requested`, shows `CloseWarningModal`, and "Close anyway"
   calls `window_confirm_close` (arms `AppState::force_close`, exits).
 
@@ -254,7 +311,8 @@ crates/iris-core/src/
   events.rs   # CoreEvent + SessionState + EventBus (tokio broadcast)
   settings.rs # IrisSettings + IrisSettingsStore (settings.json, atomic write)
   persist.rs  # shared atomic JSON write (temp file + rename)
-  ids.rs      # UUID newtypes (uuid_newtype!): ProfileId, SessionId, HostKeyRequestId
+  ids.rs      # UUID newtypes (uuid_newtype!): ProfileId, SessionId, HostKeyRequestId,
+              # TransferId, BatchId
   secret.rs   # Secret: redacted, non-serializable, zeroized password/passphrase
   secrets.rs  # SecretStore: KeychainStore (keyring) + MemorySecretStore
   ssh_config.rs  # ~/.ssh/config: host list, resolve, ProxyJump specs
@@ -266,10 +324,14 @@ crates/iris-core/src/
               # local.rs, sftp.rs, trash.rs (Trash trait + SystemTrash)
   preview.rs  # Preview (text/image/binary/tooLarge) from read_range
   session_manager.rs  # SessionId → live SshSession; drop-on-close callback
+  transfer/   # TransferManager: mod.rs (types, registry, scheduling), expand.rs
+              # (folder walk), worker.rs (one job), side.rs (local/remote end),
+              # naming.rs (keep-both names), progress.rs (throttle, speed)
 crates/iris-core/tests/
   core.rs     # integration test over the public API — no UI required
   remote.rs   # connect/browse against the in-process SFTP server (unix only)
   auth.rs     # agent, ssh config, jump hosts, remembered secrets (unix only)
+  transfers.rs  # transfer engine against the in-process server (unix only)
   ssh_integration.rs  # Docker OpenSSH servers, #[ignore]d (just test-integration)
   support/    # hermetic russh + russh-sftp test server, jump routing, agent
 src-tauri/
@@ -285,7 +347,7 @@ src-tauri/src/
               # ssh config hosts), session.rs
               # (connect/disconnect/answer_host_key), fs.rs (list_dir/stat/
               # read_link/home_dir/mkdir/rename/delete/chmod/preview),
-              # window.rs
+              # transfers.rs (async: the core spawns jobs on Tokio), window.rs
 src/
   App.tsx     # the shell: title bar, sidebar, Local/Remote panes, preview,
               # transfers
