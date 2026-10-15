@@ -40,6 +40,12 @@ test:
 test-core:
     cargo test -p iris-core
 
+# Run the Dockerized OpenSSH integration tests (needs Docker; not part of
+# `just test`). Scoped to the ssh_integration binary so it does not also run
+# the lib's manual `live_keychain_round_trip` test.
+test-integration:
+    cargo test -p iris-core --test ssh_integration -- --ignored
+
 # Lint: clippy with warnings-as-errors + frontend lint.
 lint:
     cargo clippy --workspace --all-targets -- -D warnings

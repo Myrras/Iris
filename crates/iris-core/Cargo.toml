@@ -40,4 +40,7 @@ tempfile = "3"
 rand = "0.10"
 # The in-process ssh-agent in the tests listens on a Unix socket.
 tokio-stream = { version = "0.1", features = ["net"] }
+# Dockerized OpenSSH servers for `tests/ssh_integration.rs` (ignored by
+# default; `just test-integration`).
+testcontainers = "0.27"
 
