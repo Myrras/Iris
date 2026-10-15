@@ -45,7 +45,35 @@ standalone template:
   - UI prefs (theme, reduced motion, show hidden, preview cap) are
     localStorage-only (`themeStore` → `iris.theme`, `settingsStore` →
     `iris.settings`, `layoutStore` → `iris.layout`).
-- ⏭ Next: Phase 1 — connections and remote browsing over SSH.
+- 🚧 **Phase 1 — Connect & browse.** Backend done, UI pending.
+  - Core: `connection/` (`ConnectionProfile` + `AuthMethod`
+    `password | keyFile{path}`, kind-tagged so Phase 2 can add `agent` /
+    `sshConfigHost`; `ProfileStore` → `profiles.json`, **never a secret
+    field**, corrupt file moved to `profiles.json.bak`), `secret.rs`
+    (`Secret`: redacted `Debug`/`Display`, no `Serialize`, zeroized on
+    drop; passwords/passphrases are prompted per connect, keychain is
+    Phase 2), `ssh/` (the only russh user besides `fs/sftp.rs`:
+    `session.rs` connects with `nodelay`, authenticates, opens SFTP;
+    `hostkey.rs` checks `known_hosts` — changed key = hard
+    `hostKeyChanged`, no override path; unknown key = `HostKeyPrompt`
+    event awaited via `Core::answer_host_key`, 120 s timeout = reject),
+    `fs/` (`FileSystem` trait, `LocalFs`, `SftpFs`, `Entry`/`EntryKind`
+    with symlink `target`/`targetKind`), `session_manager.rs`
+    (`SessionId` → live session; a dropped connection removes itself and
+    emits `disconnected` once).
+  - `known_hosts` is **injected**: the shell sets `~/.ssh/known_hosts` in
+    `setup`; a `Core` without it refuses to connect (`config`), so tests
+    can never touch the real file. Tests use temp files only.
+  - Tests: `crates/iris-core/tests/support/` is a hermetic in-process
+    russh + russh-sftp server (127.0.0.1, ephemeral port, temp dir root,
+    password + public-key auth, per-server host key); `tests/remote.rs`
+    covers auth, host-key flows, listing/symlinks/hidden and the
+    10,000-entry < 2 s listing.
+  - IPC: `list_profiles` / `save_profile` / `delete_profile`,
+    `connect` / `disconnect` / `answer_host_key`, `list_dir` / `stat` /
+    `read_link` / `home_dir` (`target` = `{kind:"local"}` |
+    `{kind:"remote",sessionId}`); events `profiles:changed`,
+    `session:host-key-prompt`, `session:state-changed`.
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":
@@ -73,6 +101,7 @@ standalone template:
 | ----------- | -------------------------------------------------------- |
 | Shell / UI  | Tauri 2 + React 19 + TypeScript + Vite                   |
 | Core        | Plain Rust crate, zero Tauri dependency                  |
+| SSH / SFTP  | `russh` 0.64 (`ring` backend) + `russh-sftp` 3, behind `ssh/` |
 | FE state    | Zustand 5 (no data-fetching lib; call IPC, then resync)  |
 | Motion      | CSS tokens (`--dur-*`/`--ease-*`), reduced-motion guard  |
 | Icons       | `lucide-react`, only via `src/components/icons.tsx`      |
@@ -90,12 +119,20 @@ scripts/
   next-version.sh, changelog.sh  # CI release helpers (+ *.test.sh)
 crates/iris-core/src/
   lib.rs      # Core — THE single entry point (all mutation goes through it)
-  error.rs    # CoreError / CoreResult (messages are app-owned text, never secrets)
-  events.rs   # CoreEvent + EventBus (tokio broadcast) — Core::subscribe_events
+  error.rs    # CoreError / CoreResult + CoreError::kind (app-owned text, never secrets)
+  events.rs   # CoreEvent + SessionState + EventBus (tokio broadcast)
   settings.rs # IrisSettings + IrisSettingsStore (settings.json, atomic write)
-  ids.rs      # UUID newtypes via the uuid_newtype! macro (first ids: Phase 1)
+  persist.rs  # shared atomic JSON write (temp file + rename)
+  ids.rs      # UUID newtypes (uuid_newtype!): ProfileId, SessionId, HostKeyRequestId
+  secret.rs   # Secret: redacted, non-serializable, zeroized password/passphrase
+  connection/ # ConnectionProfile + AuthMethod; store.rs = ProfileStore (profiles.json)
+  ssh/        # russh wrapper: session.rs (connect/auth/SFTP), hostkey.rs (known_hosts + prompts)
+  fs/         # FileSystem trait, Entry/EntryKind/FsTarget; local.rs, sftp.rs
+  session_manager.rs  # SessionId → live SshSession; drop-on-close callback
 crates/iris-core/tests/
   core.rs     # integration test over the public API — no UI required
+  remote.rs   # connect/browse against the in-process SFTP server (unix only)
+  support/    # hermetic russh + russh-sftp test server
 src-tauri/
   tauri.conf.json                # base config
   tauri.{macos,windows}.conf.json  # per-OS window chrome (merge patches)
@@ -105,7 +142,9 @@ src-tauri/src/
   state.rs    # AppState: Arc<Core> + force_close flag
   error.rs    # IpcError { kind, message } ← CoreError
   events.rs   # forwards CoreEvents to the webview (app.emit, Lagged-safe)
-  commands/   # thin shims: settings.rs (get/save_settings), window.rs
+  commands/   # thin shims: settings.rs, connection.rs (profiles), session.rs
+              # (connect/disconnect/answer_host_key), fs.rs (list_dir/stat/
+              # read_link/home_dir), window.rs
 src/
   App.tsx     # the shell: title bar, sidebar, Local/Remote panes, transfers
   components/ # Sidebar, PaneIsland, TransferPanel, WelcomeScreen, Modal,

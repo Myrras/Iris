@@ -19,3 +19,13 @@ when it merges.
 - Custom title bar: native traffic lights on macOS, own window controls on
   Windows; window size and position are remembered.
 - A warning before quitting while work is still in progress.
+- Saved connections: name, host, port, user, authentication method and an
+  optional start folder. Passwords and passphrases are never stored; you
+  enter them when connecting.
+- Connect over SSH with a password or a private key file, including
+  passphrase-protected keys.
+- Host key verification against `~/.ssh/known_hosts`: a new server shows
+  its fingerprint for you to trust once; a changed host key blocks the
+  connection.
+- Browse remote folders over SFTP, with symlinks (and where they point) and
+  hidden files recognised; large folders list quickly.
