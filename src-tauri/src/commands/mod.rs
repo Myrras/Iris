@@ -5,4 +5,5 @@ pub mod connection;
 pub mod fs;
 pub mod session;
 pub mod settings;
+pub mod transfers;
 pub mod window;

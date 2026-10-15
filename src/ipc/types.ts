@@ -190,6 +190,157 @@ export type Preview =
   | { kind: "tooLarge"; totalSize: number };
 
 // ---------------------------------------------------------------------------
+// Transfers (`iris_core::transfer`)
+// ---------------------------------------------------------------------------
+
+/** One transfer job's id (UUID string, `iris_core::TransferId`). */
+export type TransferId = string;
+/** The jobs of one `enqueueTransfers` call (UUID string, `BatchId`). */
+export type BatchId = string;
+
+/** `upload` = local → remote, `download` = remote → local. */
+export type TransferDirection = "upload" | "download";
+
+/**
+ * Where a job is (`iris_core::TransferState`):
+ *
+ * - `queued` → `running` when a slot is free (`parallelTransfers`).
+ * - `running` → `done` | `failed` | `skipped` | `needsDecision` | `paused`
+ *   | `cancelled`.
+ * - `needsDecision`: the destination exists; `resolveConflict` → `queued`.
+ * - `paused`: the connection dropped; progress is kept (resumed after a
+ *   reconnect).
+ * - Any unfinished state → `cancelled` via `cancelTransfer` / `cancelBatch`.
+ * - `done`, `failed`, `cancelled`, `skipped` are final.
+ */
+export type TransferState =
+  | "queued"
+  | "running"
+  | "needsDecision"
+  | "paused"
+  | "done"
+  | "failed"
+  | "cancelled"
+  | "skipped";
+
+/** Why a job failed, or why Iris skipped it (`iris_core::TransferError`). */
+export interface TransferError {
+  /** An `IpcErrorKind`, e.g. `"notFound"`, `"permissionDenied"`. */
+  kind: string;
+  /** App-owned, sanitized text. */
+  message: string;
+}
+
+/** One file being copied (`iris_core::TransferJob`). */
+export interface TransferJob {
+  id: TransferId;
+  batchId: BatchId;
+  sessionId: SessionId;
+  direction: TransferDirection;
+  /** Full source path (local for uploads, remote for downloads). */
+  src: string;
+  /** Full destination path; changes after a `keepBoth` answer. */
+  dst: string;
+  /** Source size in bytes (refreshed when the job starts). */
+  size: number;
+  bytesDone: number;
+  state: TransferState;
+  /**
+   * Set when `failed`, and when `skipped` by Iris itself (a link to a
+   * folder, a broken link, a socket/device, an unsafe name). `null` for a
+   * `skip` answer.
+   */
+  error: TransferError | null;
+}
+
+/** One selected file or folder (`iris_core::TransferItem`). */
+export interface TransferItem {
+  /** Full path on the source side. */
+  src: string;
+}
+
+/** What `enqueueTransfers` takes (`iris_core::TransferRequest`). */
+export interface TransferRequest {
+  /** The remote side. */
+  sessionId: SessionId;
+  direction: TransferDirection;
+  items: TransferItem[];
+  /** The folder on the destination side the items are copied into. */
+  dstDir: string;
+}
+
+/**
+ * The answer to a conflict (`iris_core::ConflictResolution`):
+ *
+ * - `replace`: overwrite the destination.
+ * - `skip`: leave it; the job ends `skipped`.
+ * - `keepBoth`: copy to the first free `name (2).ext`, `name (3).ext`, …
+ * - `resume`: append the rest to a shorter destination. An equal-sized one
+ *   counts as done (untouched); a larger one is replaced.
+ */
+export type ConflictResolution = "replace" | "skip" | "keepBoth" | "resume";
+
+/** Totals over the listed jobs (`iris_core::TransferSummary`). */
+export interface TransferSummary {
+  /** Bytes of all jobs except skipped and cancelled ones. */
+  totalBytes: number;
+  doneBytes: number;
+  /** All transfers together, over the last few seconds. */
+  bytesPerSec: number;
+  /** Running jobs. */
+  active: number;
+  /** Jobs waiting for a slot. */
+  queued: number;
+  /** Jobs waiting for a conflict answer. */
+  needsDecision: number;
+  paused: number;
+}
+
+/** What `listTransfers` returns (`iris_core::TransferList`). */
+export interface TransferList {
+  /** In the order they were found. */
+  jobs: TransferJob[];
+  summary: TransferSummary;
+}
+
+/** One side of a conflict (`iris_core::ConflictSide`). */
+export interface ConflictSide {
+  path: string;
+  size: number;
+  /** Unix seconds; `null` when unknown. */
+  mtime: number | null;
+}
+
+/** Payload of `transfer:job-changed`: a job changed state or destination. */
+export interface TransferJobChangedEvent {
+  type: "transferJobChanged";
+  job: TransferJob;
+}
+
+/** Payload of `transfer:progress` (at most ten per second per job). */
+export interface TransferProgressEvent {
+  type: "transferProgress";
+  jobId: TransferId;
+  batchId: BatchId;
+  bytesDone: number;
+  size: number;
+  /** Over the last few seconds. */
+  bytesPerSec: number;
+}
+
+/**
+ * Payload of `transfer:conflict`: the job waits (`needsDecision`) for
+ * `resolveConflict`. Not raised once the batch has an apply-to-all answer.
+ */
+export interface TransferConflictEvent {
+  type: "transferConflict";
+  batchId: BatchId;
+  jobId: TransferId;
+  src: ConflictSide;
+  dst: ConflictSide;
+}
+
+// ---------------------------------------------------------------------------
 // Session events (`iris_core::CoreEvent`)
 // ---------------------------------------------------------------------------
 

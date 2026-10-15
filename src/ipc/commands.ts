@@ -9,7 +9,9 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  BatchId,
   BatchReport,
+  ConflictResolution,
   ConnectionProfile,
   ConnectionProfileInput,
   Entry,
@@ -22,6 +24,9 @@ import type {
   SecretKind,
   SessionId,
   SshConfigHost,
+  TransferId,
+  TransferList,
+  TransferRequest,
 } from "./types";
 
 /** Narrow an unknown rejection to the structured `IpcError` shape. */
@@ -237,6 +242,64 @@ export function preview(
   maxBytes: number,
 ): Promise<Preview> {
   return invoke("preview", { target, path, maxBytes });
+}
+
+// ---------------------------------------------------------------------------
+// Transfers
+// ---------------------------------------------------------------------------
+
+/**
+ * Queue an upload or download of `request.items` into `request.dstDir`;
+ * resolves with the batch id at once. Folders are expanded in the
+ * background (`transfers:updated`); each job then reports through
+ * `transfer:job-changed`, `transfer:progress` and `transfer:conflict`.
+ * Rejects with `notConnected` (unknown session) or `invalidInput` (no
+ * items, empty path).
+ */
+export function enqueueTransfers(request: TransferRequest): Promise<BatchId> {
+  return invoke("enqueue_transfers", { request });
+}
+
+/**
+ * Cancel one job; a running one leaves its partial file. A finished job is
+ * left as it is; rejects with `notFound` for an unknown id.
+ */
+export function cancelTransfer(jobId: TransferId): Promise<void> {
+  return invoke("cancel_transfer", { jobId });
+}
+
+/** Cancel every unfinished job of a batch; rejects with `notFound`. */
+export function cancelBatch(batchId: BatchId): Promise<void> {
+  return invoke("cancel_batch", { batchId });
+}
+
+/**
+ * Answer a `transfer:conflict`. With `applyToAll` the answer also decides
+ * the batch's other waiting conflicts and every later one, without new
+ * events. Rejects with `notFound`, or `invalidInput` when the job is not
+ * waiting for a decision.
+ */
+export function resolveConflict(
+  jobId: TransferId,
+  resolution: ConflictResolution,
+  applyToAll = false,
+): Promise<void> {
+  return invoke("resolve_conflict", { jobId, resolution, applyToAll });
+}
+
+/** Every transfer job (in discovery order) and the totals. */
+export function listTransfers(): Promise<TransferList> {
+  return invoke("list_transfers");
+}
+
+/** Drop finished jobs (done, failed, cancelled, skipped) from the list. */
+export function clearFinished(): Promise<void> {
+  return invoke("clear_finished");
+}
+
+/** Whether any job is queued, running, waiting for an answer or paused. */
+export function hasActiveTransfers(): Promise<boolean> {
+  return invoke("has_active_transfers");
 }
 
 // ---------------------------------------------------------------------------

@@ -178,6 +178,13 @@ pub fn run() {
             commands::fs::delete,
             commands::fs::chmod,
             commands::fs::preview,
+            commands::transfers::enqueue_transfers,
+            commands::transfers::cancel_transfer,
+            commands::transfers::cancel_batch,
+            commands::transfers::resolve_conflict,
+            commands::transfers::list_transfers,
+            commands::transfers::clear_finished,
+            commands::transfers::has_active_transfers,
             commands::window::window_confirm_close,
         ])
         .build(tauri::generate_context!())

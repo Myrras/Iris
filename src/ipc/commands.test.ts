@@ -8,9 +8,16 @@ import { invoke } from "@tauri-apps/api/core";
 
 import {
   answerHostKey,
+  cancelBatch,
+  cancelTransfer,
   chmod,
+  clearFinished,
   clearSecret,
   connect,
+  enqueueTransfers,
+  hasActiveTransfers,
+  listTransfers,
+  resolveConflict,
   deletePaths,
   deleteProfile,
   disconnect,
@@ -30,7 +37,7 @@ import {
   toIpcError,
   windowConfirmClose,
 } from "./commands";
-import type { FsTarget, IrisSettings } from "./types";
+import type { FsTarget, IrisSettings, TransferRequest } from "./types";
 
 describe("IPC commands", () => {
   beforeEach(() => vi.mocked(invoke).mockClear());
@@ -173,6 +180,49 @@ describe("file operation commands", () => {
       paths: ["/srv/d"],
       mode: 0o700,
       recursive: true,
+    });
+  });
+});
+
+describe("transfer commands", () => {
+  beforeEach(() => vi.mocked(invoke).mockClear());
+
+  it("passes the request under the camelCase `request` key", async () => {
+    const request: TransferRequest = {
+      sessionId: "s-1",
+      direction: "upload",
+      items: [{ src: "/home/demo/report.pdf" }],
+      dstDir: "/srv/uploads",
+    };
+    await enqueueTransfers(request);
+    expect(invoke).toHaveBeenCalledWith("enqueue_transfers", { request });
+  });
+
+  it("names the job commands like the Rust handlers", async () => {
+    await cancelTransfer("t-1");
+    await cancelBatch("b-1");
+    await listTransfers();
+    await clearFinished();
+    await hasActiveTransfers();
+    expect(invoke).toHaveBeenCalledWith("cancel_transfer", { jobId: "t-1" });
+    expect(invoke).toHaveBeenCalledWith("cancel_batch", { batchId: "b-1" });
+    expect(invoke).toHaveBeenCalledWith("list_transfers");
+    expect(invoke).toHaveBeenCalledWith("clear_finished");
+    expect(invoke).toHaveBeenCalledWith("has_active_transfers");
+  });
+
+  it("sends applyToAll false unless asked", async () => {
+    await resolveConflict("t-1", "keepBoth");
+    expect(invoke).toHaveBeenLastCalledWith("resolve_conflict", {
+      jobId: "t-1",
+      resolution: "keepBoth",
+      applyToAll: false,
+    });
+    await resolveConflict("t-2", "replace", true);
+    expect(invoke).toHaveBeenLastCalledWith("resolve_conflict", {
+      jobId: "t-2",
+      resolution: "replace",
+      applyToAll: true,
     });
   });
 });

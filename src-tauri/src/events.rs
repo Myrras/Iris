@@ -1,7 +1,8 @@
 //! Forwards iris-core domain events to the webview as global Tauri events.
 //!
-//! These are low-volume lifecycle notifications that only say *what* changed;
-//! the frontend re-pulls the data through the matching command.
+//! Most are lifecycle notifications that only say *what* changed; the
+//! frontend re-pulls the data through the matching command. Transfer
+//! progress is the busy one (at most ten events a second per running job).
 
 use std::sync::Arc;
 
@@ -19,9 +20,11 @@ pub fn spawn_forwarder(app: AppHandle, core: Arc<Core>) {
             match rx.recv().await {
                 Ok(event) => forward(&app, event),
                 Err(RecvError::Lagged(skipped)) => {
-                    // Lifecycle events are tiny and rare; lagging here means
-                    // something is very wrong. The UI can resync by re-pulling.
+                    // A burst (many small transfers finishing at once)
+                    // outran the forwarder. Tell the transfer list to
+                    // re-pull so it does not keep stale job states.
                     tracing::warn!(skipped, "event bus lagged; dropped UI events");
+                    forward(&app, CoreEvent::TransfersUpdated);
                 }
                 Err(RecvError::Closed) => break,
             }
@@ -37,6 +40,10 @@ fn event_name(event: &CoreEvent) -> &'static str {
         CoreEvent::ProfilesChanged => "profiles:changed",
         CoreEvent::HostKeyPrompt { .. } => "session:host-key-prompt",
         CoreEvent::SessionStateChanged { .. } => "session:state-changed",
+        CoreEvent::TransfersUpdated => "transfers:updated",
+        CoreEvent::TransferJobChanged { .. } => "transfer:job-changed",
+        CoreEvent::TransferProgress { .. } => "transfer:progress",
+        CoreEvent::TransferConflict { .. } => "transfer:conflict",
     }
 }
 
@@ -44,7 +51,9 @@ fn forward(app: &AppHandle, event: CoreEvent) {
     let name = event_name(&event);
     let result = match event {
         // Pure "re-pull" signals carry no payload.
-        CoreEvent::SettingsChanged | CoreEvent::ProfilesChanged => app.emit(name, ()),
+        CoreEvent::SettingsChanged | CoreEvent::ProfilesChanged | CoreEvent::TransfersUpdated => {
+            app.emit(name, ())
+        }
         _ => app.emit(name, &event),
     };
     if let Err(e) = result {
@@ -55,7 +64,10 @@ fn forward(app: &AppHandle, event: CoreEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iris_core::{HostKeyRequestId, ProfileId, SessionId, SessionState};
+    use iris_core::{
+        BatchId, ConflictSide, HostKeyRequestId, ProfileId, SessionId, SessionState,
+        TransferDirection, TransferId, TransferJob, TransferState,
+    };
 
     #[test]
     fn every_core_event_has_a_webview_name() {
@@ -81,6 +93,51 @@ mod tests {
                     reason: None,
                 },
                 "session:state-changed",
+            ),
+            (CoreEvent::TransfersUpdated, "transfers:updated"),
+            (
+                CoreEvent::TransferJobChanged {
+                    job: TransferJob {
+                        id: TransferId::new(),
+                        batch_id: BatchId::new(),
+                        session_id: SessionId::new(),
+                        direction: TransferDirection::Upload,
+                        src: "/home/demo/a.txt".into(),
+                        dst: "/srv/a.txt".into(),
+                        size: 1,
+                        bytes_done: 0,
+                        state: TransferState::Queued,
+                        error: None,
+                    },
+                },
+                "transfer:job-changed",
+            ),
+            (
+                CoreEvent::TransferProgress {
+                    job_id: TransferId::new(),
+                    batch_id: BatchId::new(),
+                    bytes_done: 1,
+                    size: 2,
+                    bytes_per_sec: 3,
+                },
+                "transfer:progress",
+            ),
+            (
+                CoreEvent::TransferConflict {
+                    batch_id: BatchId::new(),
+                    job_id: TransferId::new(),
+                    src: ConflictSide {
+                        path: "/home/demo/a.txt".into(),
+                        size: 2,
+                        mtime: None,
+                    },
+                    dst: ConflictSide {
+                        path: "/srv/a.txt".into(),
+                        size: 1,
+                        mtime: Some(1_700_000_000),
+                    },
+                },
+                "transfer:conflict",
             ),
         ];
         for (event, name) in cases {
