@@ -3,23 +3,31 @@
 
 use tauri::State;
 
-use iris_core::{HostKeyRequestId, ProfileId, Secret, SessionId};
+use iris_core::{Credentials, HostKeyRequestId, ProfileId, Secret, SessionId};
 
 use crate::error::IpcError;
 use crate::state::AppState;
 
-/// Connect a saved profile. `password` (password profiles) and `passphrase`
-/// (encrypted key files) are used once and never stored. Resolves with the
-/// new session id once SFTP is ready; an unknown host key first raises
-/// `session:host-key-prompt` and waits for `answer_host_key`.
+/// Connect a saved profile. A `password` / `passphrase` left out is read
+/// from the keychain when the login needs it; with `remember`, the given
+/// ones are stored there after a successful login (otherwise they are used
+/// once). Resolves with the new session id once SFTP is ready; an unknown
+/// host key first raises `session:host-key-prompt` and waits for
+/// `answer_host_key`.
 #[tauri::command]
 pub async fn connect(
     state: State<'_, AppState>,
     profile_id: ProfileId,
     password: Option<Secret>,
     passphrase: Option<Secret>,
+    remember: Option<bool>,
 ) -> Result<SessionId, IpcError> {
-    Ok(state.core.connect(profile_id, password, passphrase).await?)
+    let credentials = Credentials {
+        password,
+        passphrase,
+        remember: remember.unwrap_or(false),
+    };
+    Ok(state.core.connect_with(profile_id, credentials).await?)
 }
 
 /// Close a session (a no-op when it is already gone).

@@ -142,6 +142,16 @@ pub fn run() {
                 Some(path) => state.core.set_known_hosts_path(path),
                 None => tracing::warn!("no home folder; known_hosts is not configured"),
             }
+            // `~/.ssh/config` for config-host profiles and jump aliases.
+            if let Some(path) = iris_core::ssh_config::default_ssh_config_path() {
+                state.core.set_ssh_config_path(path);
+            }
+            // The user's ssh-agent, and remembered secrets in the OS
+            // keychain.
+            state.core.set_agent(iris_core::AgentLocation::System);
+            state
+                .core
+                .set_secret_store(Arc::new(iris_core::KeychainStore::new()));
             // Forward core lifecycle events to the webview for the app's
             // whole lifetime.
             events::spawn_forwarder(app.handle().clone(), Arc::clone(&state.core));
@@ -153,6 +163,9 @@ pub fn run() {
             commands::connection::list_profiles,
             commands::connection::save_profile,
             commands::connection::delete_profile,
+            commands::connection::set_secret,
+            commands::connection::clear_secret,
+            commands::connection::list_ssh_config_hosts,
             commands::session::connect,
             commands::session::disconnect,
             commands::session::answer_host_key,
