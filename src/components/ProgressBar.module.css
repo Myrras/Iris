@@ -1,0 +1,53 @@
+/* Copied from Selene's BackupRestore.module.css (.bar / .fill /
+   .fillIndeterminate), with tone tints for finished transfers. */
+
+.bar {
+  position: relative;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  transform-origin: left center;
+  /* Animate the determinate fill via transform (GPU-cheap). */
+  transition: transform var(--dur-3) var(--ease-out);
+}
+
+.bar[data-tone="done"] .fill {
+  background: var(--success);
+}
+
+.bar[data-tone="error"] .fill {
+  background: var(--danger);
+}
+
+.bar[data-tone="muted"] .fill {
+  background: var(--text-faint);
+}
+
+/* Indeterminate: a short segment sliding across the track. */
+.fillIndeterminate {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 40%;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: indeterminate var(--dur-indeterminate) var(--ease-in-out) infinite;
+}
+
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(360%);
+  }
+}

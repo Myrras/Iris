@@ -1,0 +1,62 @@
+/* .lead / .hint copied from Selene's ConflictModal.module.css; the sides grid
+   follows the host key dialog's facts block. */
+
+.lead {
+  margin: 0 0 var(--sp-3);
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  margin: var(--sp-3) 0;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.sides {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: var(--sp-1) var(--sp-4);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+}
+
+.head {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sides dt {
+  color: var(--text-muted);
+}
+
+.sides dd {
+  margin: 0;
+  color: var(--text);
+  min-width: 0;
+}
+
+.size {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.date {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.badge {
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+}

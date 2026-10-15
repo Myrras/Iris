@@ -94,11 +94,13 @@
   --tabbar-h: 38px;
   --statusbar-h: 28px;
   --checker-size: 16px; /* image preview checkerboard tile */
+  --transfers-list-h: 168px; /* the transfer island's job list */
 
   /* Repeating animations that are not state transitions (spinner, pulsing
      status dots) — kept off the --dur-* scale on purpose. */
   --dur-spin: 600ms;
   --dur-pulse: 900ms;
+  --dur-indeterminate: 1.1s; /* sliding segment of an unknown-size progress bar */
 
   /* Overlays and fixed-contrast glyphs. */
   --overlay: rgba(0, 0, 0, 0.55); /* modal backdrop */
