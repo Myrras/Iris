@@ -11,6 +11,8 @@ when it merges.
 
 ## [Unreleased]
 
+- After going up a folder, the folder you came from is selected, like in Finder.
+- The active pane is marked with an accent ring and header; selected rows in the inactive pane turn grey.
 - Type a file name in a pane to select it, like in Finder.
 - Island layout in Podium's look: a sidebar with a Connections section, Local
   and Remote file panes side by side, and a collapsible Transfers panel.

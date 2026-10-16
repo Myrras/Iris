@@ -61,3 +61,18 @@ export function baseName(path: string): string {
   const segments = pathSegments(path);
   return segments[segments.length - 1]?.name ?? path;
 }
+
+/**
+ * The child of `ancestor` that `path` lies under (`path` itself when it is a
+ * direct child), or `null` when `path` is not strictly below `ancestor`.
+ * Case-sensitive, like every path comparison in the panes.
+ */
+export function childToward(ancestor: string, path: string): string | null {
+  const a = pathSegments(ancestor);
+  const p = pathSegments(path);
+  if (p.length <= a.length) return null;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].path !== p[i].path) return null;
+  }
+  return p[a.length].path;
+}

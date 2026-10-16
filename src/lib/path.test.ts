@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { baseName, joinPath, parentPath, pathSegments } from "./path";
+import {
+  baseName,
+  childToward,
+  joinPath,
+  parentPath,
+  pathSegments,
+} from "./path";
 
 describe("pathSegments", () => {
   it("splits a POSIX path into clickable segments", () => {
@@ -67,5 +73,21 @@ describe("joinPath / baseName", () => {
     expect(baseName("/srv/data/report.pdf")).toBe("report.pdf");
     expect(baseName("C:\\Users\\alice")).toBe("alice");
     expect(baseName("/")).toBe("/");
+  });
+});
+
+describe("childToward", () => {
+  it("returns the child of the ancestor on the way to path", () => {
+    expect(childToward("/a", "/a/b/c")).toBe("/a/b");
+    expect(childToward("/a/b", "/a/b/c")).toBe("/a/b/c");
+    expect(childToward("/", "/a")).toBe("/a");
+    expect(childToward("C:\\", "C:\\x\\y")).toBe("C:\\x");
+  });
+
+  it("is null for the same, a sibling or a deeper ancestor", () => {
+    expect(childToward("/a/b", "/a/b")).toBeNull();
+    expect(childToward("/a/b", "/a/x/c")).toBeNull();
+    expect(childToward("/a/b/c", "/a")).toBeNull();
+    expect(childToward("/a/B", "/a/b/c")).toBeNull();
   });
 });

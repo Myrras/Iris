@@ -34,9 +34,10 @@ import type { BatchReport, Entry, FsTarget, IpcError } from "../ipc/types";
 import { DEFAULT_SORT, type SortKey, type SortSpec } from "../lib/entries";
 import { NEW_FOLDER_NAME, nameError, uniqueName } from "../lib/fileName";
 import { formatOctalMode } from "../lib/mode";
-import { baseName, joinPath, parentPath } from "../lib/path";
+import { baseName, childToward, joinPath, parentPath } from "../lib/path";
 import { isWindows } from "../lib/platform";
 import type { SelectionState } from "../lib/selection";
+import { useSettingsStore } from "./settingsStore";
 import { toastError, toastSuccess } from "./toastStore";
 
 export type PaneId = "local" | "remote";
@@ -215,6 +216,14 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
           (mode === "push" && current.path && current.path !== path
             ? [...current.history, current.path]
             : current.history);
+        // Going up (Up, breadcrumb, Back): select the child we came from,
+        // like Finder. Hidden entries stay unselected while hidden.
+        const showHidden =
+          current.showHidden ?? useSettingsStore.getState().browser.showHidden;
+        const from = current.path ? childToward(path, current.path) : null;
+        const origin = from
+          ? entries.find((e) => e.path === from && (showHidden || !e.hidden))
+          : undefined;
         patch(pane, {
           path,
           entries,
@@ -223,9 +232,9 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
           history: nextHistory,
           filter: "",
           editing: null,
-          selection: [],
-          anchor: null,
-          cursor: null,
+          selection: origin ? [origin.path] : [],
+          anchor: origin ? origin.path : null,
+          cursor: origin ? origin.path : null,
         });
       }
       return true;
