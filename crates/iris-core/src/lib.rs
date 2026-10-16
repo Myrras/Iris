@@ -22,6 +22,9 @@
 //! downloads run through the [`transfer`] engine (a queue of per-file jobs
 //! with conflict handling and resume).
 //!
+//! [`Core::open_remote`] opens a remote file in a local editor and uploads
+//! every save, asking when the server copy changed meanwhile ([`edit`]).
+//!
 //! ## Sessions outlive their connections
 //! A connection that drops unexpectedly (keepalives notice a dead link) is
 //! re-established in the background with backoff — 1, 2, 4, 8, 16 s, up to
@@ -35,6 +38,7 @@
 #![forbid(unsafe_code)]
 
 pub mod connection;
+pub mod edit;
 pub mod error;
 pub mod events;
 pub mod fs;
@@ -57,13 +61,14 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 pub use connection::{AuthMethod, ConnectionProfile, JumpHost, ProfileStore};
+pub use edit::{EditInfo, EditResolution, EditStatus, Opener, RemoteStamp};
 pub use error::{CoreError, CoreResult};
 pub use events::{CoreEvent, EventBus, SessionState};
 pub use fs::{
     BatchFailure, BatchReport, Entry, EntryKind, FileSystem, FsTarget, LinkTargetKind, LocalFs,
     SystemTrash, Trash,
 };
-pub use ids::{BatchId, HostKeyRequestId, ProfileId, SessionId, TransferId};
+pub use ids::{BatchId, EditId, HostKeyRequestId, ProfileId, SessionId, TransferId};
 pub use preview::Preview;
 pub use secret::Secret;
 pub use secrets::{KeychainStore, MemorySecretStore, SecretKind, SecretStore};
@@ -128,6 +133,8 @@ struct CoreInner {
     /// The local disk; its [`Trash`] is swappable ([`Core::set_trash`]).
     local: Mutex<LocalFs>,
     transfers: TransferManager,
+    /// Remote files open in a local editor.
+    edits: edit::EditManager,
     /// One step of the reconnect backoff ([`reconnect_delay_secs`] of them
     /// before each attempt); a second, shortened by tests.
     reconnect_unit: Mutex<Duration>,
@@ -150,6 +157,7 @@ impl Default for Core {
                 profiles: ProfileStore::default(),
                 sessions,
                 transfers,
+                edits: edit::EditManager::default(),
                 host_key_prompts: Arc::default(),
                 known_hosts: Mutex::default(),
                 ssh_config: Mutex::default(),
@@ -713,6 +721,7 @@ impl Core {
                 self.publish_state(session_id, profile_id, SessionState::Connected);
                 let resumed = self.inner.transfers.resume_paused(session_id);
                 tracing::debug!(resumed, "resumed paused transfers");
+                self.inner.edits.session_connected(session_id);
                 if live.ssh.is_closed() {
                     self.connection_lost(session_id, live.generation, LOST.into());
                 }
@@ -759,9 +768,10 @@ impl Core {
     }
 
     /// Close a session for good: its unfinished transfers are cancelled
-    /// (they could never continue), a running reconnect stops, and the id is
-    /// forgotten. Idempotent: an unknown or already closed session is not an
-    /// error.
+    /// (they could never continue), its files open for editing are closed
+    /// (their local copies deleted), a running reconnect stops, and the id
+    /// is forgotten. Idempotent: an unknown or already closed session is not
+    /// an error.
     pub async fn disconnect(&self, session_id: SessionId) -> CoreResult<()> {
         self.inner.transfers.cancel_session(session_id);
         self.inner.transfers.forget_session(session_id);
@@ -775,6 +785,7 @@ impl Core {
             }
             Removed::NotLive { profile_id } => profile_id,
         };
+        self.close_session_edits(session_id);
         self.publish_state(
             session_id,
             profile_id,
@@ -989,9 +1000,11 @@ impl Core {
     /// Whether quitting now would interrupt work the user cares about. The
     /// shell's close/exit guard asks this before letting the window close:
     /// any transfer that is queued, running, waiting for a conflict answer
-    /// or paused. Open sessions alone are not work in progress.
+    /// or paused, and any edited file whose save is being uploaded, waits
+    /// for the connection or waits for a conflict answer. Open sessions and
+    /// files open for editing alone are not work in progress.
     pub fn has_active_work(&self) -> bool {
-        self.has_active_transfers()
+        self.has_active_transfers() || self.inner.edits.has_active()
     }
 }
 

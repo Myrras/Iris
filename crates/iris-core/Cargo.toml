@@ -32,6 +32,10 @@ trash = "5.2.9"
 base64 = "0.22"
 # `CancellationToken` for cancelling transfer jobs and batches.
 tokio-util = "0.7"
+# Watching the local copies of files opened for editing (`edit/`): the
+# debouncer coalesces an editor's burst of writes/renames into one change.
+notify = "8.2.0"
+notify-debouncer-mini = "0.7.0"
 
 # Linux: the Secret Service (GNOME Keyring/KWallet) over D-Bus. Building needs
 # the libdbus headers (`libdbus-1-dev` / `dbus-devel`).

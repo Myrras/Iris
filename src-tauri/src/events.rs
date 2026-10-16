@@ -44,6 +44,9 @@ fn event_name(event: &CoreEvent) -> &'static str {
         CoreEvent::TransferJobChanged { .. } => "transfer:job-changed",
         CoreEvent::TransferProgress { .. } => "transfer:progress",
         CoreEvent::TransferConflict { .. } => "transfer:conflict",
+        CoreEvent::EditUploaded { .. } => "edit:uploaded",
+        CoreEvent::EditConflict { .. } => "edit:conflict",
+        CoreEvent::EditFailed { .. } => "edit:failed",
     }
 }
 
@@ -65,8 +68,8 @@ fn forward(app: &AppHandle, event: CoreEvent) {
 mod tests {
     use super::*;
     use iris_core::{
-        BatchId, ConflictSide, HostKeyRequestId, ProfileId, SessionId, SessionState,
-        TransferDirection, TransferId, TransferJob, TransferState,
+        BatchId, ConflictSide, EditId, HostKeyRequestId, ProfileId, RemoteStamp, SessionId,
+        SessionState, TransferDirection, TransferId, TransferJob, TransferState,
     };
 
     #[test]
@@ -142,6 +145,37 @@ mod tests {
                     },
                 },
                 "transfer:conflict",
+            ),
+            (
+                CoreEvent::EditUploaded {
+                    edit_id: EditId::new(),
+                    session_id: SessionId::new(),
+                    path: "/srv/notes.txt".into(),
+                },
+                "edit:uploaded",
+            ),
+            (
+                CoreEvent::EditConflict {
+                    edit_id: EditId::new(),
+                    session_id: SessionId::new(),
+                    path: "/srv/notes.txt".into(),
+                    remote: None,
+                    baseline: RemoteStamp {
+                        size: 1,
+                        mtime: None,
+                    },
+                },
+                "edit:conflict",
+            ),
+            (
+                CoreEvent::EditFailed {
+                    edit_id: EditId::new(),
+                    session_id: SessionId::new(),
+                    path: "/srv/notes.txt".into(),
+                    kind: "remote".into(),
+                    message: "remote error: write failed".into(),
+                },
+                "edit:failed",
             ),
         ];
         for (event, name) in cases {

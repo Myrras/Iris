@@ -2,6 +2,7 @@
 //! [`iris_core::Core`]; no domain logic lives here.
 
 pub mod connection;
+pub mod edit;
 pub mod fs;
 pub mod session;
 pub mod settings;

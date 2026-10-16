@@ -5,7 +5,8 @@
 //! the public [`Core`] API end to end: password, key and agent logins,
 //! `known_hosts` handling, a jump host (ProxyJump) on a shared Docker
 //! network, the file operations and previews, parallel transfers with
-//! resume, and an automatic reconnect that lets the queue carry on.
+//! resume, an automatic reconnect that lets the queue carry on, and a remote
+//! edit round trip (save → upload, server change → conflict → copy).
 //!
 //! ## Why every test is `#[ignore]`-d
 //! `just test` must stay hermetic and fast, so these need Docker and run
@@ -30,8 +31,8 @@ use std::time::Duration;
 
 use iris_core::{
     AgentLocation, AuthMethod, ConflictResolution, ConnectionProfile, Core, CoreError, CoreEvent,
-    FsTarget, JumpHost, Preview, ProfileId, Secret, SessionId, SessionState, TransferDirection,
-    TransferItem, TransferList, TransferRequest, TransferState,
+    CoreResult, EditResolution, FsTarget, JumpHost, Opener, Preview, ProfileId, Secret, SessionId,
+    SessionState, TransferDirection, TransferItem, TransferList, TransferRequest, TransferState,
 };
 use russh::keys::{PrivateKey, PublicKey};
 use tempfile::TempDir;
@@ -475,6 +476,129 @@ async fn file_operations_against_openssh() {
     ));
     assert!(f.core.stat(target, &at("keep/precious.txt")).await.is_ok());
     f.core.disconnect(session).await.unwrap();
+}
+
+// -- Remote edit --------------------------------------------------------------
+
+/// Opens nothing: the test plays the editor by writing the local copy.
+struct NoEditor;
+
+impl Opener for NoEditor {
+    fn open(&self, _path: &std::path::Path, _app: Option<&str>) -> CoreResult<()> {
+        Ok(())
+    }
+}
+
+/// Wait (bounded) for the first event `pick` accepts.
+async fn next_event<T>(
+    rx: &mut tokio::sync::broadcast::Receiver<CoreEvent>,
+    what: &str,
+    pick: impl Fn(&CoreEvent) -> Option<T>,
+) -> T {
+    let wait = async {
+        loop {
+            if let Some(found) = pick(&rx.recv().await.expect("the event bus")) {
+                return found;
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(30), wait)
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+}
+
+#[tokio::test]
+#[ignore = "needs Docker; run with just test-integration"]
+async fn edit_round_trip_against_openssh() {
+    let sshd = start_sshd(SshdOptions::default()).await;
+    sshd.sh("cd /config && printf 'draft one\n' > notes.txt && chown 1000:1000 notes.txt")
+        .await;
+    let f = Fixture::new();
+    let _answers = auto_answer(&f.core, true);
+    let cache = tempfile::tempdir().unwrap();
+    f.core.set_cache_dir(cache.path().to_path_buf());
+    f.core.set_opener(Arc::new(NoEditor));
+    f.core.set_edit_debounce(Duration::from_millis(100));
+    let id = f.save(HOST, sshd.port, AuthMethod::Password, None);
+    let session = f
+        .core
+        .connect(id, Some(Secret::new(PASSWORD)), None)
+        .await
+        .unwrap();
+    let target = remote(session);
+    let home = f.core.home_dir(target).await.unwrap();
+    let at = |name: &str| format!("{}/{name}", home.trim_end_matches('/'));
+    let text = |path: String| {
+        let core = Arc::clone(&f.core);
+        async move {
+            match core.preview(target, &path, 1024).await.unwrap() {
+                Preview::Text { text, .. } => text,
+                other => panic!("not text: {other:?}"),
+            }
+        }
+    };
+    let mut events = f.core.subscribe_events();
+
+    // Open, save locally: the save lands on the server.
+    let edit = f.core.open_remote(session, &at("notes.txt")).await.unwrap();
+    let local = f.core.list_edits()[0].local_path.clone();
+    assert_eq!(
+        std::fs::read_to_string(&local).unwrap(),
+        "draft one
+"
+    );
+    std::fs::write(
+        &local,
+        "draft two, longer
+",
+    )
+    .unwrap();
+    next_event(&mut events, "the upload", |e| {
+        matches!(e, CoreEvent::EditUploaded { edit_id, .. } if *edit_id == edit).then_some(())
+    })
+    .await;
+    assert_eq!(
+        text(at("notes.txt")).await,
+        "draft two, longer
+"
+    );
+
+    // Someone changes it on the server; the next save is a conflict, and
+    // saving a copy keeps both versions.
+    sshd.sh("printf 'changed on the server\n' > /config/notes.txt")
+        .await;
+    std::fs::write(
+        &local,
+        "draft three
+",
+    )
+    .unwrap();
+    next_event(&mut events, "the conflict", |e| {
+        matches!(e, CoreEvent::EditConflict { edit_id, .. } if *edit_id == edit).then_some(())
+    })
+    .await;
+    f.core.resolve_edit(edit, EditResolution::SaveCopy).unwrap();
+    let copy = next_event(&mut events, "the copy", |e| match e {
+        CoreEvent::EditUploaded { edit_id, path, .. } if *edit_id == edit => Some(path.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(copy, at("notes (edited).txt"));
+    assert_eq!(
+        text(copy).await,
+        "draft three
+"
+    );
+    assert_eq!(
+        text(at("notes.txt")).await,
+        "changed on the server
+"
+    );
+
+    // Disconnecting deletes the local copy.
+    f.core.disconnect(session).await.unwrap();
+    assert!(!std::path::Path::new(&local).exists());
+    assert!(f.core.list_edits().is_empty());
 }
 
 // -- Transfers ----------------------------------------------------------------

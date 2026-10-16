@@ -14,6 +14,7 @@
 mod commands;
 mod error;
 mod events;
+mod opener;
 mod state;
 
 use std::sync::atomic::Ordering;
@@ -152,6 +153,14 @@ pub fn run() {
             state
                 .core
                 .set_secret_store(Arc::new(iris_core::KeychainStore::new()));
+            // Remote edit: local copies live in the app cache dir (leftovers
+            // of an earlier run are removed here) and open in the user's
+            // editor.
+            match app.path().app_cache_dir() {
+                Ok(dir) => state.core.set_cache_dir(dir),
+                Err(e) => tracing::warn!("no cache dir; remote edit is unavailable: {e}"),
+            }
+            state.core.set_opener(Arc::new(opener::DesktopOpener));
             // Forward core lifecycle events to the webview for the app's
             // whole lifetime.
             events::spawn_forwarder(app.handle().clone(), Arc::clone(&state.core));
@@ -187,12 +196,22 @@ pub fn run() {
             commands::transfers::list_transfers,
             commands::transfers::clear_finished,
             commands::transfers::has_active_transfers,
+            commands::edit::open_remote,
+            commands::edit::resolve_edit,
+            commands::edit::list_edits,
+            commands::edit::close_edit,
             commands::window::window_confirm_close,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
+        // Quitting: stop watching edited files and delete their local
+        // copies.
+        if let RunEvent::Exit = event {
+            app_handle.state::<AppState>().core.close_all_edits();
+            return;
+        }
         // Cmd+Q / app-quit path (the window's CloseRequested guard covers the
         // red close button). Warn instead of quitting while work is in
         // flight, unless the user already confirmed via

@@ -1,15 +1,31 @@
-//! File names for transfers: the "keep both" name and the check that a
-//! name from a listing is safe to create.
+//! File names for transfers and edits: the "keep both" name, the "edited
+//! copy" name, and the check that a name from a listing is safe to create.
 
 /// The `n`th "keep both" name for `name`: `report (2).pdf`, `report (3).pdf`
 /// and so on. Only the last extension counts (`archive.tar (2).gz`), and a
 /// dotfile's leading dot is not an extension (`.env (2)`).
 pub fn keep_both_name(name: &str, n: u32) -> String {
+    tagged_name(name, &n.to_string())
+}
+
+/// The `n`th name for an edited copy of `name` saved next to it:
+/// `report (edited).pdf` for `n` ≤ 1, then `report (edited 2).pdf`, … —
+/// numbered like [`keep_both_name`].
+pub fn edited_copy_name(name: &str, n: u32) -> String {
+    if n <= 1 {
+        tagged_name(name, "edited")
+    } else {
+        tagged_name(name, &format!("edited {n}"))
+    }
+}
+
+/// `name` with ` (tag)` before its last extension.
+fn tagged_name(name: &str, tag: &str) -> String {
     match name.rfind('.') {
         Some(dot) if dot > 0 && dot + 1 < name.len() => {
-            format!("{} ({n}){}", &name[..dot], &name[dot..])
+            format!("{} ({tag}){}", &name[..dot], &name[dot..])
         }
-        _ => format!("{name} ({n})"),
+        _ => format!("{name} ({tag})"),
     }
 }
 
@@ -46,6 +62,14 @@ mod tests {
     fn keep_both_without_an_extension() {
         assert_eq!(keep_both_name("Makefile", 2), "Makefile (2)");
         assert_eq!(keep_both_name("trailing.", 2), "trailing. (2)");
+    }
+
+    #[test]
+    fn edited_copies_are_tagged_then_numbered() {
+        assert_eq!(edited_copy_name("notes.txt", 1), "notes (edited).txt");
+        assert_eq!(edited_copy_name("notes.txt", 2), "notes (edited 2).txt");
+        assert_eq!(edited_copy_name(".env", 1), ".env (edited)");
+        assert_eq!(edited_copy_name("Makefile", 3), "Makefile (edited 3)");
     }
 
     #[test]

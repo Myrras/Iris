@@ -76,6 +76,12 @@ uuid_newtype!(
     BatchId
 );
 
+uuid_newtype!(
+    /// One remote file opened for editing in a local editor
+    /// (`edit::EditInfo`).
+    EditId
+);
+
 #[cfg(test)]
 mod tests {
 

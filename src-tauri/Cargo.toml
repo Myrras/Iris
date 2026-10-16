@@ -31,3 +31,7 @@ tokio.workspace = true
 # Structured instrumentation. The `log` feature makes `tracing` events fall
 # through to the global `log` logger that `tauri-plugin-log` installs.
 tracing = { workspace = true, features = ["log"] }
+# Opens a file being edited in the user's editor (`opener.rs`). Only its
+# Rust `open_path` is used — the plugin is not registered, so the webview
+# gets no opener commands (and the capability grants none).
+tauri-plugin-opener = "2.5.5"

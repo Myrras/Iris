@@ -9,7 +9,8 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::ids::{BatchId, HostKeyRequestId, ProfileId, SessionId, TransferId};
+use crate::edit::RemoteStamp;
+use crate::ids::{BatchId, EditId, HostKeyRequestId, ProfileId, SessionId, TransferId};
 use crate::transfer::{ConflictSide, TransferJob};
 
 /// Room for bursts: a folder of small files finishes many jobs a second,
@@ -84,6 +85,35 @@ pub enum CoreEvent {
         job_id: TransferId,
         src: ConflictSide,
         dst: ConflictSide,
+    },
+
+    /// A save of a file open for editing reached the server as `path` (the
+    /// original, or the edited copy after a `saveCopy` answer).
+    EditUploaded {
+        edit_id: EditId,
+        session_id: SessionId,
+        path: String,
+    },
+
+    /// A save found the server copy changed since it was opened (or last
+    /// uploaded); `remote` is `None` when it was deleted. The edit waits for
+    /// `resolve_edit`.
+    EditConflict {
+        edit_id: EditId,
+        session_id: SessionId,
+        path: String,
+        remote: Option<RemoteStamp>,
+        baseline: RemoteStamp,
+    },
+
+    /// Uploading a save (or applying a conflict answer) failed; the next
+    /// save tries again. `kind` / `message` as an `IpcError` carries them.
+    EditFailed {
+        edit_id: EditId,
+        session_id: SessionId,
+        path: String,
+        kind: String,
+        message: String,
     },
 }
 
@@ -230,6 +260,44 @@ mod tests {
             serde_json::to_value(CoreEvent::TransfersUpdated).unwrap(),
             serde_json::json!({ "type": "transfersUpdated" })
         );
+    }
+
+    #[test]
+    fn edit_events_are_camel_case() {
+        let stamp = |size| RemoteStamp {
+            size,
+            mtime: Some(1_700_000_000),
+        };
+        let json = serde_json::to_value(CoreEvent::EditConflict {
+            edit_id: EditId::new(),
+            session_id: SessionId::new(),
+            path: "/srv/notes.txt".into(),
+            remote: None,
+            baseline: stamp(4),
+        })
+        .unwrap();
+        assert_eq!(json["type"], "editConflict");
+        assert!(json["editId"].is_string());
+        assert!(json["remote"].is_null());
+        assert_eq!(json["baseline"]["size"], 4);
+        let json = serde_json::to_value(CoreEvent::EditFailed {
+            edit_id: EditId::new(),
+            session_id: SessionId::new(),
+            path: "/srv/notes.txt".into(),
+            kind: "permissionDenied".into(),
+            message: "permission denied: /srv/notes.txt".into(),
+        })
+        .unwrap();
+        assert_eq!(json["type"], "editFailed");
+        assert_eq!(json["kind"], "permissionDenied");
+        let json = serde_json::to_value(CoreEvent::EditUploaded {
+            edit_id: EditId::new(),
+            session_id: SessionId::new(),
+            path: "/srv/notes.txt".into(),
+        })
+        .unwrap();
+        assert_eq!(json["type"], "editUploaded");
+        assert_eq!(json["path"], "/srv/notes.txt");
     }
 
     #[test]
