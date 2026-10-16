@@ -12,6 +12,9 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import {
+  onEditConflict,
+  onEditFailed,
+  onEditUploaded,
   onSessionStateChanged,
   onTransferConflict,
   onTransferJobChanged,
@@ -19,6 +22,7 @@ import {
   onTransfersUpdated,
 } from "./events";
 import type {
+  EditConflictEvent,
   SessionStateChangedEvent,
   TransferConflictEvent,
   TransferJobChangedEvent,
@@ -111,5 +115,33 @@ describe("session events", () => {
     await onSessionStateChanged(handler);
     listeners["session:state-changed"]({ payload: event });
     expect(handler).toHaveBeenCalledWith(event);
+  });
+});
+
+describe("edit events", () => {
+  beforeEach(() => {
+    for (const name of Object.keys(listeners)) delete listeners[name];
+  });
+
+  it("listens under the names src-tauri emits and passes the payload", async () => {
+    const seen: unknown[] = [];
+    await onEditUploaded((e) => seen.push(e));
+    await onEditConflict((e) => seen.push(e));
+    await onEditFailed((e) => seen.push(e));
+    expect(Object.keys(listeners).sort()).toEqual([
+      "edit:conflict",
+      "edit:failed",
+      "edit:uploaded",
+    ]);
+    const conflict: EditConflictEvent = {
+      type: "editConflict",
+      editId: "e-1",
+      sessionId: "s-1",
+      path: "/srv/notes.txt",
+      remote: null,
+      baseline: { size: 3, mtime: 1_700_000_000 },
+    };
+    listeners["edit:conflict"]({ payload: conflict });
+    expect(seen).toEqual([conflict]);
   });
 });

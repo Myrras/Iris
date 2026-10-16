@@ -20,6 +20,9 @@ vi.mock("../ipc/events", () => {
     onTransferJobChanged: sub("job"),
     onTransferProgress: sub("progress"),
     onTransferConflict: sub("conflict"),
+    onEditUploaded: sub("editUploaded"),
+    onEditFailed: sub("editFailed"),
+    onEditConflict: sub("editConflict"),
   };
 });
 vi.mock("../ipc/commands", async (importOriginal) => ({
@@ -247,7 +250,7 @@ describe("useCoreEvents", () => {
   it("unsubscribes on unmount", async () => {
     const { unmount } = renderHook(() => useCoreEvents());
     unmount();
-    await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(8));
+    await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(11));
   });
 
   it("loads the transfers and feeds transfer events into the stores", async () => {
@@ -295,5 +298,96 @@ describe("useCoreEvents", () => {
         useBackendSettingsStore.getState().settings?.parallelTransfers,
       ).toBe(4),
     );
+  });
+
+  describe("remote edit", () => {
+    const conflict = {
+      type: "editConflict",
+      editId: "e-1",
+      sessionId: "s-1",
+      path: "/srv/notes.txt",
+      remote: { size: 9, mtime: 1_700_000_100 },
+      baseline: { size: 4, mtime: 1_700_000_000 },
+    } as const;
+
+    beforeEach(() => {
+      usePaneStore.setState({
+        panes: {
+          local: initialPane(),
+          remote: {
+            ...initialPane(),
+            target: { kind: "remote", sessionId: "s-1" },
+            path: "/srv",
+          },
+        },
+      });
+    });
+
+    it("toasts an upload and re-lists the folder showing it", () => {
+      renderHook(() => useCoreEvents());
+      handlers.editUploaded({
+        type: "editUploaded",
+        editId: "e-1",
+        sessionId: "s-1",
+        path: "/srv/notes (edited).txt",
+      });
+      expect(toastSuccess).toHaveBeenCalledWith("Uploaded notes (edited).txt");
+      expect(listDir).toHaveBeenCalledWith(
+        { kind: "remote", sessionId: "s-1" },
+        "/srv",
+      );
+    });
+
+    it("does not re-list a pane showing another folder", () => {
+      renderHook(() => useCoreEvents());
+      handlers.editUploaded({
+        type: "editUploaded",
+        editId: "e-1",
+        sessionId: "s-1",
+        path: "/var/www/index.html",
+      });
+      expect(toastSuccess).toHaveBeenCalledWith("Uploaded index.html");
+      expect(listDir).not.toHaveBeenCalled();
+    });
+
+    it("toasts a failed upload with the reason", () => {
+      renderHook(() => useCoreEvents());
+      handlers.editFailed({
+        type: "editFailed",
+        editId: "e-1",
+        sessionId: "s-1",
+        path: "/srv/locked.txt",
+        kind: "permissionDenied",
+        message: "permission denied: /srv/locked.txt",
+      });
+      expect(toastError).toHaveBeenCalledWith(
+        "Could not upload locked.txt",
+        "permission denied: /srv/locked.txt. Saving again retries.",
+      );
+    });
+
+    it("queues conflicts and drops them when the user disconnects", () => {
+      renderHook(() => useCoreEvents());
+      handlers.editConflict(conflict);
+      expect(usePromptStore.getState().queue[0]).toMatchObject({
+        kind: "editConflict",
+        event: conflict,
+      });
+      // A dropped connection keeps the edit (and its question).
+      handlers.state({
+        type: "sessionStateChanged",
+        sessionId: "s-1",
+        profileId: "p-1",
+        state: { status: "disconnected", reason: "the connection was lost" },
+      });
+      expect(usePromptStore.getState().queue).toHaveLength(1);
+      handlers.state({
+        type: "sessionStateChanged",
+        sessionId: "s-1",
+        profileId: "p-1",
+        state: { status: "disconnected", reason: null },
+      });
+      expect(usePromptStore.getState().queue).toEqual([]);
+    });
   });
 });

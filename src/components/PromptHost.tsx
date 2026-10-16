@@ -1,11 +1,12 @@
 /**
  * Renders the head of the prompt queue: host key questions, password and
- * passphrase prompts, the changed-host-key warning and transfer conflicts —
- * one at a time.
+ * passphrase prompts, the changed-host-key warning, transfer conflicts and
+ * edit conflicts — one at a time.
  */
 
 import { usePromptStore } from "../state/promptStore";
 import { ConflictDialog } from "./ConflictDialog";
+import { EditConflictDialog } from "./EditConflictDialog";
 import { HostKeyChangedDialog, HostKeyDialog } from "./HostKeyDialog";
 import { SecretPrompt } from "./SecretPrompt";
 
@@ -20,6 +21,9 @@ export function PromptHost() {
       />
       <ConflictDialog
         prompt={head?.kind === "transferConflict" ? head : null}
+      />
+      <EditConflictDialog
+        prompt={head?.kind === "editConflict" ? head : null}
       />
     </>
   );

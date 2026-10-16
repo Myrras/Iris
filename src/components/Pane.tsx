@@ -11,6 +11,9 @@
  * enclosing folder. Transfers: Cmd+Shift+U uploads the Local selection,
  * Cmd+Shift+D downloads the Remote selection, and F5 (Total Commander's
  * "copy to the other pane") does either, into the other pane's folder.
+ * Remote files open in the local editor (`lib/edit`) with Cmd+E, the
+ * context menu's "Open in Editor", or by opening them (double-click, Enter
+ * off macOS, Cmd+Down / Cmd+O); folders still navigate.
  *
  * Rows dragged onto the other pane (or a folder row in it) transfer too
  * (`lib/paneDrag`); the pane under the drag, and the folder row, light up.
@@ -37,6 +40,7 @@ import {
 
 import type { ConnectionProfile, Entry, SessionId } from "../ipc/types";
 import { connectInTab, retrySession } from "../lib/connect";
+import { isEditable as isEditableFile, openForEdit } from "../lib/edit";
 import { isDirLike, visibleEntries } from "../lib/entries";
 import { startPaneDrag } from "../lib/paneDrag";
 import { baseName, parentPath } from "../lib/path";
@@ -345,6 +349,13 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     pane.path !== null &&
     otherPath !== null;
   const hasTargets = pane.selection.length > 0 || pane.cursor !== null;
+  // Editing needs this pane's session connected (a save is uploaded to it).
+  const editSession =
+    remote &&
+    pane.target?.kind === "remote" &&
+    (remoteStatus === undefined || remoteStatus === "connected")
+      ? pane.target.sessionId
+      : null;
   const dropDir = useDragStore((s) =>
     s.over?.pane === id ? s.over.dir : null,
   );
@@ -405,8 +416,11 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   const onOpen = useCallback(
     (entry: Entry) => {
       if (isDirLike(entry)) void store().navigate(id, entry.path);
+      else if (editSession && isEditableFile(entry)) {
+        void openForEdit(editSession, entry.path);
+      }
     },
-    [id, store],
+    [id, store, editSession],
   );
 
   // -- Actions (shared by shortcuts, toolbar and context menu) ---------------
@@ -434,6 +448,12 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     if (list.length > 0) setInfo({ entries: list });
   };
   const togglePreview = () => useLayoutStore.getState().togglePreview();
+  const editFile = () => {
+    const list = targets();
+    if (editSession && list.length === 1 && isEditableFile(list[0])) {
+      void openForEdit(editSession, list[0].path);
+    }
+  };
   const openCursor = () => {
     const [entry] = targets();
     if (entry) onOpen(entry);
@@ -471,6 +491,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     else if (e.key === "F2") rename();
     else if (e.key === "Delete" || (mod && e.key === "Backspace")) askDelete();
     else if (mod && key === "i") getInfo();
+    else if (mod && !e.shiftKey && key === "e" && remote) editFile();
     else if (e.key === " " && !mod) togglePreview();
     else if (mod && (e.key === "ArrowDown" || key === "o")) openCursor();
     else if (mod && e.key === "ArrowUp") void store().up(id);
@@ -512,6 +533,15 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         disabled: !(single && isDirLike(entry)),
         onSelect: () => onOpen(entry),
       },
+      ...(remote
+        ? [
+            {
+              label: "Open in Editor",
+              disabled: !(editSession && single && isEditableFile(entry)),
+              onSelect: editFile,
+            },
+          ]
+        : []),
       {
         label: "Preview",
         disabled: !single,

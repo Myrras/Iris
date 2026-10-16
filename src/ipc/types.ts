@@ -347,6 +347,72 @@ export interface TransferConflictEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Remote edit (`iris_core::edit`)
+// ---------------------------------------------------------------------------
+
+/** One remote file open in a local editor (UUID string, `EditId`). */
+export type EditId = string;
+
+/** The answer to an `edit:conflict` (`iris_core::EditResolution`). */
+export type EditResolution = "overwrite" | "discard" | "saveCopy";
+
+/** Where an edit is (`iris_core::EditStatus`). */
+export type EditStatus =
+  "synced" | "uploading" | "waitingForConnection" | "conflict" | "failed";
+
+/** A remote file's size and mtime (`iris_core::RemoteStamp`). */
+export interface RemoteStamp {
+  size: number;
+  /** Unix seconds; `null` when unknown. */
+  mtime: number | null;
+}
+
+/** What `listEdits` returns per file (`iris_core::EditInfo`). */
+export interface EditInfo {
+  id: EditId;
+  sessionId: SessionId;
+  /** The remote file saves go to (the edited copy's after `saveCopy`). */
+  path: string;
+  name: string;
+  /** The local copy the editor has open. */
+  localPath: string;
+  status: EditStatus;
+  /** The server copy as of the last download or upload. */
+  baseline: RemoteStamp;
+}
+
+/** Payload of `edit:uploaded`: a save reached the server as `path`. */
+export interface EditUploadedEvent {
+  type: "editUploaded";
+  editId: EditId;
+  sessionId: SessionId;
+  path: string;
+}
+
+/**
+ * Payload of `edit:conflict`: the server copy changed since it was opened
+ * (`remote` is `null` when it was deleted). The edit waits for `resolveEdit`.
+ */
+export interface EditConflictEvent {
+  type: "editConflict";
+  editId: EditId;
+  sessionId: SessionId;
+  path: string;
+  remote: RemoteStamp | null;
+  baseline: RemoteStamp;
+}
+
+/** Payload of `edit:failed`: an upload failed; the next save tries again. */
+export interface EditFailedEvent {
+  type: "editFailed";
+  editId: EditId;
+  sessionId: SessionId;
+  path: string;
+  kind: string;
+  message: string;
+}
+
+// ---------------------------------------------------------------------------
 // Session events (`iris_core::CoreEvent`)
 // ---------------------------------------------------------------------------
 

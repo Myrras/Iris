@@ -17,6 +17,7 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   deletePaths: vi.fn(() => Promise.resolve({ succeeded: [], failed: [] })),
   chmod: vi.fn(() => Promise.resolve({ succeeded: [], failed: [] })),
   enqueueTransfers: vi.fn(() => Promise.resolve("b-1")),
+  openRemote: vi.fn(() => Promise.resolve("e-1")),
   listTransfers: vi.fn(() => new Promise(() => undefined)),
 }));
 vi.mock("../lib/connect", () => ({
@@ -31,6 +32,7 @@ import {
   enqueueTransfers,
   listDir,
   mkdir,
+  openRemote,
   rename,
 } from "../ipc/commands";
 import type { ConnectionProfile, Entry, SessionState } from "../ipc/types";
@@ -550,6 +552,90 @@ describe("Pane", () => {
       // Upload's shortcut does nothing in the remote pane.
       fireEvent.keyDown(grid, { key: "U", ctrlKey: true, shiftKey: true });
       expect(enqueueTransfers).toHaveBeenCalledTimes(2);
+    });
+
+    it("opens a remote file in the editor on double-click; folders still navigate", async () => {
+      await openBoth();
+      fireEvent.doubleClick(within(remotePane()).getByText("readme.md"));
+      await waitFor(() =>
+        expect(openRemote).toHaveBeenCalledWith("s-1", "/srv/readme.md"),
+      );
+      // A local file is not opened for editing.
+      fireEvent.doubleClick(within(localPane()).getByText("notes.txt"));
+      expect(openRemote).toHaveBeenCalledTimes(1);
+
+      fireEvent.doubleClick(within(remotePane()).getByText("www"));
+      await waitFor(() =>
+        expect(usePaneStore.getState().panes.remote.path).toBe("/srv/www"),
+      );
+      expect(openRemote).toHaveBeenCalledTimes(1);
+    });
+
+    it("opens the remote selection in the editor with Ctrl+E", async () => {
+      await openBoth();
+      fireEvent.click(within(remotePane()).getByText("readme.md"));
+      fireEvent.keyDown(within(remotePane()).getByRole("grid"), {
+        key: "e",
+        ctrlKey: true,
+      });
+      await waitFor(() =>
+        expect(openRemote).toHaveBeenCalledWith("s-1", "/srv/readme.md"),
+      );
+      // Not on a folder, and not in the local pane.
+      fireEvent.click(within(remotePane()).getByText("www"));
+      fireEvent.keyDown(within(remotePane()).getByRole("grid"), {
+        key: "e",
+        ctrlKey: true,
+      });
+      fireEvent.click(within(localPane()).getByText("notes.txt"));
+      fireEvent.keyDown(within(localPane()).getByRole("grid"), {
+        key: "e",
+        ctrlKey: true,
+      });
+      expect(openRemote).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers Open in Editor in the remote context menu only", async () => {
+      await openBoth();
+      fireEvent.contextMenu(within(remotePane()).getByText("readme.md"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Open in Editor" }));
+      await waitFor(() =>
+        expect(openRemote).toHaveBeenCalledWith("s-1", "/srv/readme.md"),
+      );
+
+      fireEvent.contextMenu(within(remotePane()).getByText("www"));
+      expect(
+        screen.getByRole("menuitem", { name: "Open in Editor" }),
+      ).toBeDisabled();
+      fireEvent.keyDown(document, { key: "Escape" });
+
+      fireEvent.contextMenu(within(localPane()).getByText("notes.txt"));
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("menuitem", { name: "Open in Editor" }),
+        ).toBeNull(),
+      );
+    });
+
+    it("does not open for editing while the session reconnects", async () => {
+      await openBoth();
+      useSessionStore.getState().apply({
+        type: "sessionStateChanged",
+        sessionId: "s-1",
+        profileId: "p-1",
+        state: {
+          status: "reconnecting",
+          attempt: 1,
+          maxAttempts: 5,
+          nextRetryInSecs: 1,
+        },
+      });
+      fireEvent.doubleClick(await within(remotePane()).findByText("readme.md"));
+      fireEvent.contextMenu(within(remotePane()).getByText("readme.md"));
+      expect(
+        screen.getByRole("menuitem", { name: "Open in Editor" }),
+      ).toBeDisabled();
+      expect(openRemote).not.toHaveBeenCalled();
     });
 
     it("disables the transfer actions without a session", async () => {

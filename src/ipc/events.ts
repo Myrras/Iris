@@ -7,6 +7,9 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
+  EditConflictEvent,
+  EditFailedEvent,
+  EditUploadedEvent,
   HostKeyPromptEvent,
   SessionStateChangedEvent,
   TransferConflictEvent,
@@ -86,6 +89,30 @@ export function onTransferConflict(
   return listen<TransferConflictEvent>("transfer:conflict", (e) =>
     handler(e.payload),
   );
+}
+
+/** A save of a file open for editing reached the server. */
+export function onEditUploaded(
+  handler: (event: EditUploadedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<EditUploadedEvent>("edit:uploaded", (e) => handler(e.payload));
+}
+
+/**
+ * A save found the server copy changed; ask the user and answer with
+ * `resolveEdit(editId, resolution)`.
+ */
+export function onEditConflict(
+  handler: (event: EditConflictEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<EditConflictEvent>("edit:conflict", (e) => handler(e.payload));
+}
+
+/** Uploading a save failed; the next save tries again. */
+export function onEditFailed(
+  handler: (event: EditFailedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<EditFailedEvent>("edit:failed", (e) => handler(e.payload));
 }
 
 /** The native macOS menu's Settings… item (⌘,) was activated (`lib.rs`). */

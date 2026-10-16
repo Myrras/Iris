@@ -3,7 +3,9 @@
  * the stores: profile changes re-pull the list, host key prompts and
  * transfer conflicts join the prompt queue, session states update
  * `sessionStore`, transfer events update `transferStore`, and settings
- * changes re-pull `backendSettingsStore`. Also does the initial profile and
+ * changes re-pull `backendSettingsStore`, and remote edit reports its saves
+ * (a toast per upload or failure; a conflict joins the prompt queue). Also
+ * does the initial profile and
  * transfer load, and turns restored tabs of deleted profiles into blank ones.
  *
  * The automatic reconnect is announced here: a session going from
@@ -15,6 +17,9 @@
 import { useEffect } from "react";
 
 import {
+  onEditConflict,
+  onEditFailed,
+  onEditUploaded,
   onHostKeyPrompt,
   onProfilesChanged,
   onSessionStateChanged,
@@ -32,6 +37,7 @@ import { useSessionStore } from "../state/sessionStore";
 import { useTabsStore } from "../state/tabsStore";
 import { toastError, toastSuccess } from "../state/toastStore";
 import { useTransferStore } from "../state/transferStore";
+import { editFailed, editUploaded } from "./edit";
 import { refreshSessionPanes } from "./tabs";
 
 function onSessionState(event: SessionStateChangedEvent) {
@@ -41,6 +47,10 @@ function onSessionState(event: SessionStateChangedEvent) {
   // host key question for it can no longer be answered.
   if (state.status === "disconnected") {
     usePromptStore.getState().dropSession(sessionId);
+    // A user disconnect closed the session's edits in the backend.
+    if (state.reason === null) {
+      usePromptStore.getState().dropEditSession(sessionId);
+    }
   }
   if (previous?.status !== "reconnecting") return;
   const name =
@@ -80,6 +90,11 @@ export function useCoreEvents(): void {
       onTransferProgress((event) => transfers().applyProgress(event)),
       onTransferConflict((event) =>
         usePromptStore.getState().push({ kind: "transferConflict", event }),
+      ),
+      onEditUploaded(editUploaded),
+      onEditFailed(editFailed),
+      onEditConflict((event) =>
+        usePromptStore.getState().push({ kind: "editConflict", event }),
       ),
     ];
     const forgetMissing = (profiles: { id: string }[], loaded: boolean) => {

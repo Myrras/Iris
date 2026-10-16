@@ -6,10 +6,11 @@
 import { create } from "zustand";
 
 /**
- * Settings tabs: General (UI prefs) and Transfers (the core's parallel
- * transfers). Editors (per-extension overrides) joins later.
+ * Settings tabs: General (UI prefs), Transfers (the core's parallel
+ * transfers and reconnect attempts) and Editors (per-extension editor
+ * overrides).
  */
-export type SettingsTabId = "general" | "transfers";
+export type SettingsTabId = "general" | "transfers" | "editors";
 
 interface SettingsRequestState {
   request: SettingsTabId | null;

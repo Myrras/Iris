@@ -14,6 +14,9 @@ import type {
   ConflictResolution,
   ConnectionProfile,
   ConnectionProfileInput,
+  EditId,
+  EditInfo,
+  EditResolution,
   Entry,
   FsTarget,
   HostKeyRequestId,
@@ -331,6 +334,48 @@ export function clearFinished(): Promise<void> {
 /** Whether any job is queued, running, waiting for an answer or paused. */
 export function hasActiveTransfers(): Promise<boolean> {
   return invoke("has_active_transfers");
+}
+
+// ---------------------------------------------------------------------------
+// Remote edit
+// ---------------------------------------------------------------------------
+
+/**
+ * Download a remote file and open it in the editor set for its extension
+ * (Settings → Editors) or the OS default; resolves with the edit id. Every
+ * save is uploaded (`edit:uploaded`), or raises `edit:conflict` when the
+ * server copy changed meanwhile. A file already open is shown again.
+ * Rejects with `notConnected`, `notFound`, `invalidInput` (a folder) or
+ * `config` (no editor could be opened).
+ */
+export function openRemote(
+  sessionId: SessionId,
+  path: string,
+): Promise<EditId> {
+  return invoke("open_remote", { sessionId, path });
+}
+
+/**
+ * Answer an `edit:conflict`: `overwrite` uploads the local copy anyway,
+ * `discard` reloads the server copy over it, `saveCopy` uploads it as
+ * `name (edited).ext` next to the original. Rejects with `notFound`, or
+ * `invalidInput` when the edit is not waiting for an answer.
+ */
+export function resolveEdit(
+  editId: EditId,
+  resolution: EditResolution,
+): Promise<void> {
+  return invoke("resolve_edit", { editId, resolution });
+}
+
+/** Every file open for editing. */
+export function listEdits(): Promise<EditInfo[]> {
+  return invoke("list_edits");
+}
+
+/** Stop editing a file and delete its local copy; rejects with `notFound`. */
+export function closeEdit(editId: EditId): Promise<void> {
+  return invoke("close_edit", { editId });
 }
 
 // ---------------------------------------------------------------------------

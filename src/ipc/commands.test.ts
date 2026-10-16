@@ -13,7 +13,11 @@ import {
   chmod,
   clearFinished,
   clearSecret,
+  closeEdit,
   connect,
+  listEdits,
+  openRemote,
+  resolveEdit,
   enqueueTransfers,
   hasActiveTransfers,
   listTransfers,
@@ -260,5 +264,26 @@ describe("toIpcError", () => {
       message: "boom",
     });
     expect(toIpcError("nope")).toEqual({ kind: "unknown", message: "nope" });
+  });
+});
+
+describe("remote edit commands", () => {
+  beforeEach(() => vi.mocked(invoke).mockClear());
+
+  it("names the commands and keys like the Rust handlers", async () => {
+    await openRemote("s-1", "/srv/notes.txt");
+    await resolveEdit("e-1", "saveCopy");
+    await listEdits();
+    await closeEdit("e-1");
+    expect(invoke).toHaveBeenCalledWith("open_remote", {
+      sessionId: "s-1",
+      path: "/srv/notes.txt",
+    });
+    expect(invoke).toHaveBeenCalledWith("resolve_edit", {
+      editId: "e-1",
+      resolution: "saveCopy",
+    });
+    expect(invoke).toHaveBeenCalledWith("list_edits");
+    expect(invoke).toHaveBeenCalledWith("close_edit", { editId: "e-1" });
   });
 });

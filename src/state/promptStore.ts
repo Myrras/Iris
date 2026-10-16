@@ -1,7 +1,8 @@
 /**
  * Queue of blocking prompts: from the connect flow an unknown host key, a
  * password or key passphrase and the changed-host-key warning; from the
- * transfer engine a file that already exists at the destination. The head of
+ * transfer engine a file that already exists at the destination; from remote
+ * edit a save whose server copy changed meanwhile. The head of
  * the queue is the one on screen (`PromptHost`); the rest wait their turn.
  *
  * SECURITY: a secret prompt never holds the typed value — the prompt
@@ -13,6 +14,7 @@ import { create } from "zustand";
 import type {
   ConnectionProfile,
   BatchId,
+  EditConflictEvent,
   HostKeyPromptEvent,
   SessionId,
   TransferConflictEvent,
@@ -58,6 +60,11 @@ export type PromptRequest =
       /** A transfer's destination exists: the job waits for `resolveConflict`. */
       kind: "transferConflict";
       event: TransferConflictEvent;
+    }
+  | {
+      /** An edited file changed on the server: waits for `resolveEdit`. */
+      kind: "editConflict";
+      event: EditConflictEvent;
     };
 
 export type Prompt = PromptRequest & { id: number };
@@ -77,6 +84,8 @@ interface PromptState {
   dropTransferBatch: (batchId: BatchId) => void;
   /** A job no longer waits for an answer (cancelled, decided elsewhere). */
   dropTransferJob: (jobId: TransferId) => void;
+  /** The user closed a session: its edits (and their conflicts) are gone. */
+  dropEditSession: (sessionId: SessionId) => void;
 }
 
 let seq = 0;
@@ -110,6 +119,12 @@ export const usePromptStore = create<PromptState>((set) => ({
     set((s) => ({
       queue: s.queue.filter(
         (p) => p.kind !== "transferConflict" || p.event.batchId !== batchId,
+      ),
+    })),
+  dropEditSession: (sessionId) =>
+    set((s) => ({
+      queue: s.queue.filter(
+        (p) => p.kind !== "editConflict" || p.event.sessionId !== sessionId,
       ),
     })),
   dropTransferJob: (jobId) =>
