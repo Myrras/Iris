@@ -1107,6 +1107,35 @@ impl Shared {
             .is_ok_and(|live| !live.ssh.is_closed())
     }
 
+    /// Whether `err` (from a remote call on the session) means its
+    /// connection is gone, rather than this one item being a problem.
+    ///
+    /// A request that got no answer is checked with a ping first: a
+    /// connection that died silently lets SFTP requests time out (10 s)
+    /// before the keepalive or the next write notices, and blaming the item
+    /// then would fail work that should wait for a reconnect. A ping that
+    /// is not answered either closes the connection, so the core's usual
+    /// "connection lost" path (reconnect, resume) takes over.
+    pub async fn connection_gone(&self, session_id: SessionId, err: &CoreError) -> bool {
+        if matches!(err, CoreError::NotConnected) {
+            return true;
+        }
+        let Ok(live) = self.sessions.get(session_id) else {
+            return true;
+        };
+        if live.ssh.is_closed() {
+            return true;
+        }
+        if !matches!(err, CoreError::NoAnswer) || live.ssh.probe().await {
+            return false;
+        }
+        tracing::info!("the server did not answer a ping: closing the connection");
+        if !live.ssh.is_closed() {
+            tokio::spawn(async move { live.ssh.disconnect().await });
+        }
+        true
+    }
+
     pub fn local(&self) -> LocalFs {
         self.local.clone()
     }

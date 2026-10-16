@@ -44,6 +44,9 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 /// TCP gives up.
 const KEEPALIVE_MAX: usize = 3;
 
+/// How long [`SshSession::probe`] waits for the server to answer a ping.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Called once when an established connection ends for any reason, with an
 /// Iris-owned description.
 pub type OnClosed = Box<dyn FnOnce(String) + Send + Sync>;
@@ -199,6 +202,23 @@ impl SshSession {
     /// Whether the SSH connection has ended.
     pub fn is_closed(&self) -> bool {
         self.handle.is_closed()
+    }
+
+    /// Ask the server for a sign of life: a keepalive ping that must be
+    /// answered within [`PROBE_TIMEOUT`]. A connection that died without a
+    /// FIN or RST reaching the reader (a dropped network, a sleeping NAT)
+    /// is only noticed by a write or the keepalive timer, so an SFTP
+    /// request on it times out first; this tells such a timeout apart from
+    /// a server that is merely slow. `false` when the connection is gone or
+    /// did not answer.
+    pub async fn probe(&self) -> bool {
+        if self.is_closed() {
+            return false;
+        }
+        // `send_ping` also returns once the session ends (its reply channel
+        // is dropped), so the connection is checked again afterwards.
+        let answered = tokio::time::timeout(PROBE_TIMEOUT, self.handle.send_ping()).await;
+        matches!(answered, Ok(Ok(()))) && !self.is_closed()
     }
 
     /// Close SFTP and the SSH connection, then its jump connections (best
@@ -482,7 +502,11 @@ async fn open_sftp(handle: &Handle) -> CoreResult<SftpSession> {
         .map_err(|e| failed(&e))?;
     SftpSession::new(channel.into_stream())
         .await
-        .map_err(|e| failed(&e))
+        .map_err(|e| match e {
+            // No VERSION reply: maybe a dead connection (see `probe`).
+            russh_sftp::client::error::Error::Timeout => CoreError::NoAnswer,
+            e => failed(&e),
+        })
 }
 
 /// Iris-owned text for a failed connect. The OS description of an I/O error

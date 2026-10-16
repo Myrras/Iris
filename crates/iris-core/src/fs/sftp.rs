@@ -426,9 +426,7 @@ pub(crate) fn io_err(err: std::io::Error, path: &str, verb: &str) -> CoreError {
             CoreError::Remote(_) => CoreError::Remote(format!("could not {verb} {path}")),
             other => other,
         },
-        None if err.kind() == std::io::ErrorKind::TimedOut => {
-            CoreError::Remote("the server did not answer in time".into())
-        }
+        None if err.kind() == std::io::ErrorKind::TimedOut => CoreError::NoAnswer,
         None => CoreError::Remote(format!("could not {verb} {path}")),
     }
 }
@@ -490,7 +488,7 @@ pub(crate) fn map_err(err: SftpError, path: &str) -> CoreError {
             StatusCode::NoConnection | StatusCode::ConnectionLost => CoreError::NotConnected,
             code => CoreError::Remote(format!("{code} ({path})")),
         },
-        SftpError::Timeout => CoreError::Remote("the server did not answer in time".into()),
+        SftpError::Timeout => CoreError::NoAnswer,
         // The channel's stream failed: the connection is gone.
         SftpError::IO(_) => CoreError::NotConnected,
         SftpError::Limited(_) | SftpError::UnexpectedPacket | SftpError::UnexpectedBehavior(_) => {

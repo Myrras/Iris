@@ -100,6 +100,7 @@ mod tests {
             (CoreError::HostKeyRejected, "hostKeyRejected"),
             (CoreError::NotConnected, "notConnected"),
             (CoreError::Remote("x".into()), "remote"),
+            (CoreError::NoAnswer, "remote"),
         ];
         for (err, kind) in cases {
             let message = err.to_string();

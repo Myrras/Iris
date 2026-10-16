@@ -103,9 +103,9 @@ const UNSAFE_NAME: &str = "the name is not a valid file name";
 
 impl Walker<'_> {
     /// Whether `err` means the connection is gone (rather than this one
-    /// entry being a problem).
-    fn lost(&self, err: &CoreError) -> bool {
-        matches!(err, CoreError::NotConnected) || !self.shared.session_alive(self.session_id)
+    /// entry being a problem); see [`Shared::connection_gone`].
+    async fn lost(&self, err: &CoreError) -> bool {
+        self.shared.connection_gone(self.session_id, err).await
     }
 
     /// One selected item. A selected link is followed (folders included:
@@ -118,7 +118,7 @@ impl Walker<'_> {
             return;
         }
         match self.src.entry(path).await {
-            Err(e) if self.lost(&e) => {
+            Err(e) if self.lost(&e).await => {
                 self.stopped = true;
                 self.placeholder(Work::Item {
                     src: path.to_string(),
@@ -159,7 +159,7 @@ impl Walker<'_> {
             };
             let mut entries = match listed {
                 Ok(entries) => entries,
-                Err(e) if self.lost(&e) => {
+                Err(e) if self.lost(&e).await => {
                     // This folder and every one still on the stack wait for
                     // the connection to come back.
                     self.stopped = true;

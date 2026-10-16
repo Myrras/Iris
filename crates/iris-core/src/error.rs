@@ -100,6 +100,13 @@ pub enum CoreError {
     /// (the server's own message text is never forwarded).
     #[error("remote error: {0}")]
     Remote(String),
+
+    /// A request got no answer in time. On the wire it is a `remote` error
+    /// like any other; inside the core it tells "the server is slow or the
+    /// connection died silently" apart from an answer that said no, so the
+    /// caller can check the connection before blaming the item.
+    #[error("remote error: the server did not answer in time")]
+    NoAnswer,
 }
 
 impl CoreError {
@@ -123,7 +130,7 @@ impl CoreError {
             Self::HostKeyChanged { .. } => "hostKeyChanged",
             Self::HostKeyRejected => "hostKeyRejected",
             Self::NotConnected => "notConnected",
-            Self::Remote(_) => "remote",
+            Self::Remote(_) | Self::NoAnswer => "remote",
         }
     }
 
@@ -177,6 +184,7 @@ mod tests {
             (CoreError::HostKeyRejected, "hostKeyRejected"),
             (CoreError::NotConnected, "notConnected"),
             (CoreError::Remote("x".into()), "remote"),
+            (CoreError::NoAnswer, "remote"),
         ];
         for (err, kind) in cases {
             assert_eq!(err.kind(), kind);

@@ -35,7 +35,7 @@ async fn execute(shared: &Shared, ctx: &JobContext) -> Outcome {
     }
     let channel = match shared.take_channel(ctx.session_id).await {
         Ok(channel) => channel,
-        Err(e) => return classify(shared, ctx, e),
+        Err(e) => return classify(shared, ctx, e).await,
     };
     let remote = Side::Remote(channel.clone());
     let local = Side::Local(shared.local());
@@ -49,16 +49,16 @@ async fn execute(shared: &Shared, ctx: &JobContext) -> Outcome {
             outcome
         }
         // A broken channel is dropped, not pooled.
-        Err(e) => classify(shared, ctx, e),
+        Err(e) => classify(shared, ctx, e).await,
     }
 }
 
 /// A failure is a pause when the connection is gone (the job can resume
 /// later), a cancel when the user asked for one, and a failure otherwise.
-fn classify(shared: &Shared, ctx: &JobContext, err: CoreError) -> Outcome {
+async fn classify(shared: &Shared, ctx: &JobContext, err: CoreError) -> Outcome {
     if ctx.token.is_cancelled() {
         Outcome::Cancelled
-    } else if matches!(err, CoreError::NotConnected) || !shared.session_alive(ctx.session_id) {
+    } else if shared.connection_gone(ctx.session_id, &err).await {
         tracing::info!(kind = err.kind(), "transfer paused: the connection is gone");
         // The pooled channels went down with it.
         shared.forget_pool(ctx.session_id);
