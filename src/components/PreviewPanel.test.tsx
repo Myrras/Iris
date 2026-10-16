@@ -1,10 +1,4 @@
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../ipc/commands", async (importOriginal) => ({
@@ -61,52 +55,23 @@ beforeEach(() => {
   useSettingsStore.getState().set("preview", { maxSizeMb: 2 });
 });
 
-const text = (t: string): Preview => ({
-  kind: "text",
-  text: t,
-  truncated: false,
-  totalSize: t.length,
-});
-
-/** Let the debounce and the mocked read settle. */
-const settle = () => act(() => new Promise((r) => setTimeout(r, 250)));
-
-/** Move the focus to `path` in the remote pane. */
-function moveTo(path: string) {
-  act(() =>
-    usePaneStore.getState().setSelection("remote", {
-      selection: [path],
-      anchor: path,
-      cursor: path,
-    }),
-  );
-}
-
 describe("PreviewPanel", () => {
-  it("shows a strip, not the island, when closed and previewable", async () => {
+  it("collapses to a strip with an expand button", () => {
     useLayoutStore.getState().setPreviewOpen(false);
-    answer(text("hi"));
     focus([entry("a.txt")], "/srv/a.txt");
     render(<PreviewPanel />);
-    const show = await screen.findByRole("button", { name: "Show preview" });
-    expect(screen.queryByText("hi")).toBeNull();
-    fireEvent.click(show);
+    expect(preview).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Show preview" }));
     expect(useLayoutStore.getState().previewOpen).toBe(true);
-    expect(await screen.findByText("hi")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Show preview" })).toBeNull();
-  });
-
-  it("renders nothing when closed and not previewable", async () => {
-    useLayoutStore.getState().setPreviewOpen(false);
-    answer({ kind: "binary", totalSize: 1 });
-    focus([entry("a.bin")], "/srv/a.bin");
-    const { container } = render(<PreviewPanel />);
-    await settle();
-    expect(container).toBeEmptyDOMElement();
   });
 
   it("previews text with the size cap from the settings", async () => {
-    answer(text("hello world"));
+    answer({
+      kind: "text",
+      text: "hello world",
+      truncated: false,
+      totalSize: 11,
+    });
     focus([entry("notes.txt")], "/srv/notes.txt");
     render(<PreviewPanel />);
     expect(await screen.findByText("hello world")).toBeInTheDocument();
@@ -147,96 +112,61 @@ describe("PreviewPanel", () => {
     expect(container.querySelector("svg:not(.lucide)")).toBeNull();
   });
 
-  it.each<[string, Preview | "error"]>([
-    [
-      "an unsupported image",
-      { kind: "image", mime: "text/html", dataBase64: "PGI+", totalSize: 3 },
-    ],
-    ["a binary file", { kind: "binary", totalSize: 2048 }],
-    ["a too large file", { kind: "tooLarge", totalSize: 50 * 1024 * 1024 }],
-    ["an empty file", text("")],
-    ["a read error", "error"],
-  ])("renders nothing for %s", async (_, result) => {
-    if (result === "error")
-      vi.mocked(preview).mockRejectedValue({
-        kind: "permissionDenied",
-        message: "permission denied",
-      });
-    else answer(result);
-    focus([entry("x.dat")], "/srv/x.dat");
-    const { container } = render(<PreviewPanel />);
-    await settle();
-    expect(preview).toHaveBeenCalled();
-    expect(container).toBeEmptyDOMElement();
+  it("refuses image types the backend never sends", async () => {
+    answer({
+      kind: "image",
+      mime: "text/html",
+      dataBase64: "PGI+",
+      totalSize: 3,
+    });
+    focus([entry("x.png")], "/srv/x.png");
+    render(<PreviewPanel />);
+    expect(await screen.findByText("Unsupported image")).toBeInTheDocument();
+    expect(screen.queryByRole("img")).toBeNull();
   });
 
-  it("renders nothing for no selection, folders, specials and broken links", async () => {
-    const entries = [
-      entry("docs", { kind: { type: "dir" } }),
-      entry("sock", { kind: { type: "other" } }),
-      entry("dead", {
-        kind: { type: "symlink", target: "/nope", targetKind: null },
-      }),
-    ];
-    focus(entries, null);
-    const { container } = render(<PreviewPanel />);
-    await settle();
-    expect(container).toBeEmptyDOMElement();
-    for (const e of entries) {
-      moveTo(e.path);
-      await settle();
-      expect(container).toBeEmptyDOMElement();
-    }
+  it("explains binary and too-large files", async () => {
+    answer({ kind: "binary", totalSize: 2048 });
+    focus([entry("a.bin"), entry("huge.png")], "/srv/a.bin");
+    render(<PreviewPanel />);
+    expect(await screen.findByText("Binary file")).toBeInTheDocument();
+
+    answer({ kind: "tooLarge", totalSize: 50 * 1024 * 1024 });
+    usePaneStore.getState().setSelection("remote", {
+      selection: ["/srv/huge.png"],
+      anchor: "/srv/huge.png",
+      cursor: "/srv/huge.png",
+    });
+    expect(await screen.findByText("Too large to preview")).toBeInTheDocument();
+    expect(
+      screen.getByText("50.0 MB is over the 2 MB preview limit (Settings)."),
+    ).toBeInTheDocument();
+  });
+
+  it("does not read folders and waits for a selection", async () => {
+    focus([entry("docs", { kind: { type: "dir" } })], "/srv/docs");
+    const { rerender } = render(<PreviewPanel />);
+    expect(screen.getByText("Folder")).toBeInTheDocument();
+    focus([entry("docs", { kind: { type: "dir" } })], null);
+    rerender(<PreviewPanel />);
+    expect(
+      screen.getByText("Select a file to preview it."),
+    ).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 200));
     expect(preview).not.toHaveBeenCalled();
   });
 
-  it("does not flash when moving between unpreviewable files", async () => {
-    answer({ kind: "binary", totalSize: 1 });
-    focus([entry("a.bin"), entry("b.bin")], "/srv/a.bin");
-    const { container } = render(<PreviewPanel />);
-    await settle();
-    expect(container).toBeEmptyDOMElement();
-    moveTo("/srv/b.bin");
-    expect(container).toBeEmptyDOMElement();
-    await settle();
-    expect(container).toBeEmptyDOMElement();
-    expect(preview).toHaveBeenCalledTimes(2);
-  });
-
-  it("stays up while the next file loads, and hides for a folder", async () => {
-    answer(text("first"));
-    focus(
-      [
-        entry("a.txt"),
-        entry("b.txt"),
-        entry("docs", { kind: { type: "dir" } }),
-      ],
-      "/srv/a.txt",
+  it("shows the error text when the file cannot be read", async () => {
+    vi.mocked(preview).mockRejectedValue({
+      kind: "permissionDenied",
+      message: "permission denied: /srv/secret.txt",
+    });
+    focus([entry("secret.txt")], "/srv/secret.txt");
+    render(<PreviewPanel />);
+    await waitFor(() =>
+      expect(
+        screen.getByText("permission denied: /srv/secret.txt"),
+      ).toBeInTheDocument(),
     );
-    render(<PreviewPanel />);
-    expect(await screen.findByText("first")).toBeInTheDocument();
-
-    let resolve!: (p: Preview) => void;
-    vi.mocked(preview).mockReturnValue(new Promise((r) => (resolve = r)));
-    moveTo("/srv/b.txt");
-    await settle();
-    expect(screen.getByRole("complementary")).toBeInTheDocument();
-    expect(screen.getByText("first")).toBeInTheDocument();
-
-    await act(async () => resolve(text("second")));
-    expect(await screen.findByText("second")).toBeInTheDocument();
-
-    moveTo("/srv/docs");
-    await waitFor(() => expect(screen.queryByRole("complementary")).toBeNull());
-  });
-
-  it("hides after a text file when the next one is binary", async () => {
-    answer(text("first"));
-    focus([entry("a.txt"), entry("b.bin")], "/srv/a.txt");
-    render(<PreviewPanel />);
-    expect(await screen.findByText("first")).toBeInTheDocument();
-    answer({ kind: "binary", totalSize: 1 });
-    moveTo("/srv/b.bin");
-    await waitFor(() => expect(screen.queryByRole("complementary")).toBeNull());
   });
 });

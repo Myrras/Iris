@@ -17,6 +17,7 @@ import {
   ArrowDownUp,
   ArrowLeft,
   ArrowUp,
+  Binary,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -31,11 +32,13 @@ import {
   EyeOff,
   File as FileGlyph,
   FileQuestion,
+  FileText,
   Folder,
   FolderOpen,
   FolderPlus,
   HardDrive,
   House,
+  ImageOff,
   Info,
   KeyRound,
   Link2,
@@ -122,6 +125,12 @@ export const HideHiddenIcon = icon(EyeOff);
 /** Toggles the preview island (Space). */
 export const PreviewIcon = icon(PanelRight);
 export const PreviewCloseIcon = icon(PanelRightClose);
+
+// Preview placeholders (no inline preview for this file).
+export const TextFileIcon = icon(FileText, { size: 28 });
+export const BinaryFileIcon = icon(Binary, { size: 28 });
+export const TooLargeIcon = icon(ImageOff, { size: 28 });
+export const FolderLargeIcon = icon(Folder, { size: 28 });
 
 // Chevrons. The caret rotates 90° on expand (CSS); the others point at a
 // direction (back, collapse/expand vertically).

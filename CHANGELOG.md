@@ -73,8 +73,6 @@ when it merges.
   checkerboard. Large text files show their first part with a notice;
   images over the preview size limit and binary files say so. The panel
   collapses to a slim strip and remembers its state.
-- The preview panel hides when the selected item has nothing to preview
-  (folders, binary or empty files, files over the limit, no selection).
 - Right-click menu on files and on the empty part of a pane: Open, Preview,
   New Folder, Rename, Get Info, Refresh and Delete.
 - Uploads and downloads of files and whole folders: folders are recreated

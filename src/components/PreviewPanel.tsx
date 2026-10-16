@@ -1,34 +1,32 @@
 /**
  * The preview island right of the panes (Quick Look-style; Space or the pane
- * toolbar toggles it). It follows the focused entry of the active pane and
- * exists only when that entry has something to show: non-empty text (in
- * monospace; the start only for large files, with a notice) or a supported
- * image (fitted on a checkerboard). For anything else (no selection, folder,
- * special file, broken link, binary, too large, empty, unreadable) nothing is
- * rendered, so the panes take the full width.
- *
- * `layoutStore.previewOpen` stays the user's preference: open + previewable is
- * the full island, closed + previewable a slim strip, not previewable nothing.
- * The file is read even while collapsed, to know whether there is a strip to
- * show. While a read is pending the island keeps its previous state and
- * content; a hidden island stays hidden until the result is displayable, so
- * moving between unpreviewable files never flashes it. Appearing and
- * disappearing use `usePresence` (the exit animation runs before unmount).
+ * toolbar toggles it). It follows the focused entry of the active pane: text
+ * in monospace (the start only for large files, with a notice), images fitted
+ * on a checkerboard, and a short note for folders, binary files and images
+ * over the size limit. Collapsed, it is a slim strip with an expand button;
+ * the state persists in `layoutStore`.
  *
  * SVG arrives as an image and is only ever shown through an `<img>` data URL,
  * which cannot run scripts; preview markup is never injected into the page.
  */
+
 import { useEffect, useState } from "react";
 
-import { preview as fetchPreview } from "../ipc/commands";
+import { preview as fetchPreview, toIpcError } from "../ipc/commands";
 import type { Entry, FsTarget, Preview } from "../ipc/types";
 import { isDirLike } from "../lib/entries";
 import { formatSize } from "../lib/fileFormat";
-import { MOTION, usePresence } from "../lib/motion";
 import { useLayoutStore } from "../state/layoutStore";
 import { focusedEntry, usePaneStore } from "../state/paneStore";
 import { useSettingsStore } from "../state/settingsStore";
-import { PreviewCloseIcon, PreviewIcon } from "./icons";
+import {
+  BinaryFileIcon,
+  FolderLargeIcon,
+  PreviewCloseIcon,
+  PreviewIcon,
+  TextFileIcon,
+  TooLargeIcon,
+} from "./icons";
 import styles from "./PreviewPanel.module.css";
 
 /** Wait this long after the selection settles before reading the file. */
@@ -46,8 +44,8 @@ const IMAGE_MIMES = new Set([
 type Load =
   | { state: "idle" }
   | { state: "loading" }
-  | { state: "ready"; path: string; preview: Preview }
-  | { state: "error" };
+  | { state: "ready"; preview: Preview }
+  | { state: "error"; message: string };
 
 /** Whether `entry` has file contents to read. */
 function previewable(entry: Entry): boolean {
@@ -68,6 +66,7 @@ function usePreview(
   target: FsTarget | null,
   entry: Entry | null,
   maxBytes: number,
+  enabled: boolean,
 ): Load {
   const [load, setLoad] = useState<Load>({ state: "idle" });
   const key = targetKey(target);
@@ -76,7 +75,7 @@ function usePreview(
   const version = entry ? `${entry.size}:${entry.mtime}` : "";
 
   useEffect(() => {
-    if (!target || path === null) {
+    if (!enabled || !target || path === null) {
       setLoad({ state: "idle" });
       return;
     }
@@ -85,10 +84,11 @@ function usePreview(
     const timer = setTimeout(() => {
       fetchPreview(target, path, maxBytes).then(
         (preview) => {
-          if (!cancelled) setLoad({ state: "ready", path, preview });
+          if (!cancelled) setLoad({ state: "ready", preview });
         },
-        () => {
-          if (!cancelled) setLoad({ state: "error" });
+        (e) => {
+          if (!cancelled)
+            setLoad({ state: "error", message: toIpcError(e).message });
         },
       );
     }, PREVIEW_DEBOUNCE_MS);
@@ -98,62 +98,9 @@ function usePreview(
     };
     // `target` is identified by `key`; its object identity may change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, path, version, maxBytes]);
+  }, [enabled, key, path, version, maxBytes]);
 
   return load;
-}
-
-/** What the island shows: the last displayable preview and whose it is. */
-interface Content {
-  name: string;
-  path: string;
-  preview: Extract<Preview, { kind: "text" | "image" }>;
-}
-
-/** Whether a finished read gives something to display. */
-function displayable(preview: Preview): preview is Content["preview"] {
-  if (preview.kind === "text") return preview.text.length > 0;
-  if (preview.kind === "image") return IMAGE_MIMES.has(preview.mime);
-  return false;
-}
-
-/**
- * The content to show and whether the island is visible. Visibility only
- * changes on a definite answer: a pending read keeps what was there.
- */
-function useContent(entry: Entry | null, load: Load) {
-  const [content, setContent] = useState<Content | null>(null);
-  const [visible, setVisible] = useState(false);
-  const possible = entry !== null && previewable(entry);
-
-  useEffect(() => {
-    if (!possible) {
-      setVisible(false);
-      return;
-    }
-    if (load.state === "error") {
-      setVisible(false);
-    } else if (
-      load.state === "ready" &&
-      entry !== null &&
-      load.path === entry.path
-    ) {
-      if (displayable(load.preview)) {
-        setContent({
-          name: entry.name,
-          path: entry.path,
-          preview: load.preview,
-        });
-        setVisible(true);
-      } else {
-        setVisible(false);
-      }
-    }
-    // `load` answers for `entry` only when the paths match (checked above).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [possible, load, entry?.path]);
-
-  return { content, visible: visible && possible };
 }
 
 export function PreviewPanel() {
@@ -162,19 +109,11 @@ export function PreviewPanel() {
   const target = usePaneStore((s) => s.panes[s.active].target);
   const entry = usePaneStore((s) => focusedEntry(s.panes[s.active]));
   const maxSizeMb = useSettingsStore((s) => s.preview.maxSizeMb);
-  const load = usePreview(target, entry, maxSizeMb * 1024 * 1024);
-  const { content, visible } = useContent(entry, load);
-  const { mounted, state } = usePresence(visible, MOTION.base);
-
-  if (!mounted || !content) return null;
+  const load = usePreview(target, entry, maxSizeMb * 1024 * 1024, open);
 
   if (!open) {
     return (
-      <aside
-        className={styles.collapsed}
-        data-state={state}
-        aria-label="Preview"
-      >
+      <aside className={styles.collapsed} aria-label="Preview">
         <button
           type="button"
           className={styles.tool}
@@ -190,13 +129,15 @@ export function PreviewPanel() {
   }
 
   return (
-    <aside className={styles.panel} data-state={state} aria-label="Preview">
+    <aside className={styles.panel} aria-label="Preview">
       <header className={styles.header}>
         <PreviewIcon className={styles.icon} />
         <h2 className={styles.title}>Preview</h2>
-        <span className={styles.subtitle} title={content.path}>
-          {content.name}
-        </span>
+        {entry && (
+          <span className={styles.subtitle} title={entry.path}>
+            {entry.name}
+          </span>
+        )}
         <button
           type="button"
           className={styles.tool}
@@ -209,30 +150,99 @@ export function PreviewPanel() {
         </button>
       </header>
       <div className={styles.body}>
-        <PreviewBody content={content} />
+        <PreviewBody entry={entry} load={load} maxSizeMb={maxSizeMb} />
       </div>
     </aside>
   );
 }
 
-function PreviewBody({ content }: { content: Content }) {
-  const { preview, name } = content;
-  if (preview.kind === "text") return <TextPreview preview={preview} />;
+function Note({
+  Icon,
+  title,
+  text,
+}: {
+  Icon?: typeof BinaryFileIcon;
+  title: string;
+  text?: string;
+}) {
   return (
-    <figure className={styles.figure}>
-      <div className={styles.checker}>
-        <img
-          className={styles.image}
-          src={`data:${preview.mime};base64,${preview.dataBase64}`}
-          alt={name}
-          draggable={false}
-        />
-      </div>
-      <figcaption className={styles.caption}>
-        {formatSize(preview.totalSize)}
-      </figcaption>
-    </figure>
+    <div className={styles.note}>
+      {Icon && <Icon className={styles.noteIcon} />}
+      <p className={styles.noteTitle}>{title}</p>
+      {text && <p className={styles.noteText}>{text}</p>}
+    </div>
   );
+}
+
+function PreviewBody({
+  entry,
+  load,
+  maxSizeMb,
+}: {
+  entry: Entry | null;
+  load: Load;
+  maxSizeMb: number;
+}) {
+  if (!entry) return <Note title="Select a file to preview it." />;
+  if (isDirLike(entry))
+    return <Note Icon={FolderLargeIcon} title="Folder" text={entry.name} />;
+  if (entry.kind.type === "other")
+    return <Note title="No preview for special files." />;
+  if (entry.kind.type === "symlink" && entry.kind.targetKind === null)
+    return (
+      <Note
+        title="Broken link"
+        text={`Points to ${entry.kind.target ?? "an unreadable target"}.`}
+      />
+    );
+
+  switch (load.state) {
+    case "idle":
+    case "loading":
+      return <p className={styles.loading}>Loading preview…</p>;
+    case "error":
+      return <Note title="No preview" text={load.message} />;
+  }
+
+  const preview = load.preview;
+  switch (preview.kind) {
+    case "text":
+      return <TextPreview preview={preview} />;
+    case "image":
+      if (!IMAGE_MIMES.has(preview.mime))
+        return <Note Icon={BinaryFileIcon} title="Unsupported image" />;
+      return (
+        <figure className={styles.figure}>
+          <div className={styles.checker}>
+            <img
+              className={styles.image}
+              src={`data:${preview.mime};base64,${preview.dataBase64}`}
+              alt={entry.name}
+              draggable={false}
+            />
+          </div>
+          <figcaption className={styles.caption}>
+            {formatSize(preview.totalSize)}
+          </figcaption>
+        </figure>
+      );
+    case "binary":
+      return (
+        <Note
+          Icon={BinaryFileIcon}
+          title="Binary file"
+          text={`${formatSize(preview.totalSize)} · no preview for this kind of file.`}
+        />
+      );
+    case "tooLarge":
+      return (
+        <Note
+          Icon={TooLargeIcon}
+          title="Too large to preview"
+          text={`${formatSize(preview.totalSize)} is over the ${maxSizeMb} MB preview limit (Settings).`}
+        />
+      );
+  }
 }
 
 function TextPreview({
@@ -240,6 +250,8 @@ function TextPreview({
 }: {
   preview: Extract<Preview, { kind: "text" }>;
 }) {
+  if (preview.text.length === 0)
+    return <Note Icon={TextFileIcon} title="Empty file" />;
   const shown = new TextEncoder().encode(preview.text).length;
   return (
     <div className={styles.textWrap}>
