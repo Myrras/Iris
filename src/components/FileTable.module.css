@@ -89,7 +89,12 @@
 }
 
 .row[data-selected="true"] {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: var(--selection);
+}
+
+/* Finder: selected rows in the inactive pane turn neutral grey. */
+.row[data-selected="true"][data-pane-active="false"] {
+  background: var(--selection-inactive);
 }
 
 .scroll:focus .row[data-cursor="true"] {

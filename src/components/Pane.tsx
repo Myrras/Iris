@@ -149,6 +149,7 @@ export function Pane({
     );
   }
 
+  const isActive = usePaneStore((s) => s.active === id);
   const setActive = () => usePaneStore.getState().setActive(id);
 
   // A drag (from the other pane, or from the OS) would drop here.
@@ -165,6 +166,7 @@ export function Pane({
       className={styles.pane}
       aria-label={`${title} files`}
       data-drop-pane={id}
+      data-active={isActive ? "true" : "false"}
       data-drop-target={dropHere ? "true" : undefined}
       onMouseDownCapture={setActive}
       onFocusCapture={setActive}
@@ -336,6 +338,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   const previewOpen = useLayoutStore((s) => s.previewOpen);
   const store = usePaneStore.getState;
   const remote = pane.target?.kind === "remote";
+  const paneActive = usePaneStore((s) => s.active === id);
 
   // Copying to the other pane needs a live session and both folders.
   const otherPath = usePaneStore((s) => s.panes[otherPane(id)].path);
@@ -750,6 +753,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         emptyText={emptyText}
         onRowDragStart={onRowDragStart}
         dropDir={dropDir}
+        active={paneActive}
       />
       <ContextMenu
         open={menu !== null}

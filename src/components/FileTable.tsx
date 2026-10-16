@@ -223,6 +223,8 @@ interface FileTableProps {
   onRowDragStart?: (entry: Entry, e: React.MouseEvent) => void;
   /** The folder row a drag would drop into, by path (highlighted). */
   dropDir?: string | null;
+  /** False in the inactive pane: selected rows turn grey. Default true. */
+  active?: boolean;
 }
 
 export function FileTable({
@@ -244,6 +246,7 @@ export function FileTable({
   emptyText,
   onRowDragStart,
   dropDir = null,
+  active = true,
 }: FileTableProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -394,6 +397,7 @@ export function FileTable({
               aria-selected={selected}
               className={styles.row}
               data-selected={selected ? "true" : undefined}
+              data-pane-active={active ? "true" : "false"}
               data-cursor={entry.path === cursor ? "true" : undefined}
               data-hidden={entry.hidden ? "true" : undefined}
               // Folder rows are drop targets for transfers (`dragStore`).

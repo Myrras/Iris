@@ -27,6 +27,8 @@
   --accent: #4493f8;
   --accent-hover: #58a6ff;
   --accent-contrast: #ffffff;
+  --selection: color-mix(in srgb, var(--accent) 18%, transparent); /* selected rows, active pane */
+  --selection-inactive: #2f3743; /* selected rows, inactive pane: neutral grey */
 
   /* Semantic */
   --danger: #f85149;
@@ -173,6 +175,8 @@
   --accent: #458588;
   --accent-hover: #689d6a;
   --accent-contrast: #fbf1c7;
+  --selection: color-mix(in srgb, var(--accent) 18%, transparent);
+  --selection-inactive: #cfbe94;
 
   --danger: #cc241d;
   --danger-bg: #f9d8d6;

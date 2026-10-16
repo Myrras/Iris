@@ -502,6 +502,7 @@ describe("Pane", () => {
       vi.mocked(listDir).mockImplementation(async (_t, path) =>
         path === "/home/alice" ? HOME : path === "/srv" ? SRV : [],
       );
+      act(() => usePaneStore.getState().setActive("local"));
       render(
         <>
           <Pane id="local" title="Local" Icon={LocalIcon} />
@@ -670,6 +671,7 @@ describe("Pane", () => {
 
     it("disables the transfer actions without a session", async () => {
       await openLocal();
+      act(() => usePaneStore.getState().setActive("local"));
       fireEvent.click(screen.getByText("notes.txt"));
       expect(screen.getByRole("button", { name: "Upload" })).toBeDisabled();
       fireEvent.contextMenu(screen.getByText("notes.txt"));
@@ -746,6 +748,63 @@ describe("Pane", () => {
       );
       act(() => useDragStore.getState().end());
       expect(within(remotePane()).queryByRole("status")).toBeNull();
+    });
+  });
+
+  describe("active pane", () => {
+    async function openBoth() {
+      act(() => usePaneStore.getState().setActive("local"));
+      render(
+        <>
+          <Pane id="local" title="Local" Icon={LocalIcon} />
+          <Pane id="remote" title="Remote" Icon={ServerIcon} />
+        </>,
+      );
+      await usePaneStore.getState().open("local", { kind: "local" }, null);
+      await screen.findByText("notes.txt");
+    }
+    const island = (name: string) =>
+      screen.getByRole("region", { name: `${name} files` });
+    const flags = () => [
+      island("Local").getAttribute("data-active"),
+      island("Remote").getAttribute("data-active"),
+    ];
+
+    it("follows clicks on rows, empty area, toolbar and keyboard focus", async () => {
+      await openBoth();
+      expect(flags()).toEqual(["true", "false"]);
+
+      fireEvent.mouseDown(island("Remote"));
+      expect(flags()).toEqual(["false", "true"]);
+
+      fireEvent.mouseDown(screen.getByText("notes.txt"));
+      expect(flags()).toEqual(["true", "false"]);
+
+      fireEvent.mouseDown(
+        screen.getByRole("button", { name: "Connect to a server…" }),
+      );
+      expect(flags()).toEqual(["false", "true"]);
+
+      const toolbarBtn = within(island("Local")).getAllByRole("button")[0];
+      fireEvent.mouseDown(toolbarBtn);
+      expect(flags()).toEqual(["true", "false"]);
+
+      act(() =>
+        screen.getByRole("button", { name: "Connect to a server…" }).focus(),
+      );
+      expect(flags()).toEqual(["false", "true"]);
+    });
+
+    it("greys selected rows in the inactive pane only", async () => {
+      await openBoth();
+      act(() => usePaneStore.getState().setActive("local"));
+      fireEvent.click(screen.getByText("notes.txt"));
+      const row = () => screen.getByText("notes.txt").closest("[role=row]")!;
+      expect(row()).toHaveAttribute("data-selected", "true");
+      expect(row()).toHaveAttribute("data-pane-active", "true");
+      act(() => usePaneStore.getState().setActive("remote"));
+      expect(row()).toHaveAttribute("data-selected", "true");
+      expect(row()).toHaveAttribute("data-pane-active", "false");
     });
   });
 });
