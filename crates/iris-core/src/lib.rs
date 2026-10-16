@@ -26,7 +26,9 @@
 //! every save, asking when the server copy changed meanwhile ([`edit`]).
 //! [`Core::prepare_drag_out`] downloads a remote selection to the cache so
 //! the UI can drag it out to Finder / Explorer as local files
-//! ([`drag_out`]).
+//! ([`drag_out`]). [`Core::plan_sync`] / [`Core::run_sync`] sync the Local
+//! and Remote folders one way, as a transfer batch plus (Mirror) deletes
+//! ([`sync`]).
 //!
 //! ## Sessions outlive their connections
 //! A connection that drops unexpectedly (keepalives notice a dead link) is
@@ -55,6 +57,7 @@ pub mod session_manager;
 pub mod settings;
 pub mod ssh;
 pub mod ssh_config;
+pub mod sync;
 pub mod transfer;
 
 use std::future::Future;
@@ -73,13 +76,19 @@ pub use fs::{
     BatchFailure, BatchReport, Entry, EntryKind, FileSystem, FsTarget, LinkTargetKind, LocalFs,
     SystemTrash, Trash,
 };
-pub use ids::{BatchId, DragOutId, EditId, HostKeyRequestId, ProfileId, SessionId, TransferId};
+pub use ids::{
+    BatchId, DragOutId, EditId, HostKeyRequestId, ProfileId, SessionId, SyncPlanId, TransferId,
+};
 pub use preview::Preview;
 pub use secret::Secret;
 pub use secrets::{KeychainStore, MemorySecretStore, SecretKind, SecretStore};
 pub use settings::{IrisSettings, IrisSettingsStore};
 pub use ssh::AgentLocation;
 pub use ssh_config::SshConfigHost;
+pub use sync::{
+    CompareRule, SyncGroup, SyncItem, SyncItemKind, SyncMode, SyncOptions, SyncPlan, SyncTotal,
+    SyncTotals,
+};
 pub use transfer::{
     ConflictResolution, ConflictSide, TransferDirection, TransferError, TransferItem, TransferJob,
     TransferList, TransferManager, TransferRequest, TransferState, TransferSummary,
@@ -142,6 +151,8 @@ struct CoreInner {
     edits: edit::EditManager,
     /// Remote files downloaded for a drag out of the window.
     drag_outs: drag_out::DragOutManager,
+    /// Folder comparisons waiting to run, and runs deleting.
+    sync: sync::SyncManager,
     /// One step of the reconnect backoff ([`reconnect_delay_secs`] of them
     /// before each attempt); a second, shortened by tests.
     reconnect_unit: Mutex<Duration>,
@@ -166,6 +177,7 @@ impl Default for Core {
                 transfers,
                 edits: edit::EditManager::default(),
                 drag_outs: drag_out::DragOutManager::default(),
+                sync: sync::SyncManager::default(),
                 host_key_prompts: Arc::default(),
                 known_hosts: Mutex::default(),
                 ssh_config: Mutex::default(),
@@ -614,6 +626,8 @@ impl Core {
         };
         tracing::info!("connection lost");
         self.inner.transfers.forget_session(session_id);
+        // What a plan compared may change while the connection is down.
+        self.inner.sync.forget_session(session_id);
         let profile_id = lost.profile_id;
         let runtime = tokio::runtime::Handle::try_current().ok();
         if let Some(runtime) = &runtime {
@@ -783,6 +797,7 @@ impl Core {
     pub async fn disconnect(&self, session_id: SessionId) -> CoreResult<()> {
         self.inner.transfers.cancel_session(session_id);
         self.inner.transfers.forget_session(session_id);
+        self.inner.sync.forget_session(session_id);
         let Some(removed) = self.inner.sessions.remove(session_id) else {
             return Ok(());
         };
@@ -1009,10 +1024,13 @@ impl Core {
     /// shell's close/exit guard asks this before letting the window close:
     /// any transfer that is queued, running, waiting for a conflict answer
     /// or paused, and any edited file whose save is being uploaded, waits
-    /// for the connection or waits for a conflict answer. Open sessions and
-    /// files open for editing alone are not work in progress.
+    /// for the connection or waits for a conflict answer, and a sync
+    /// deleting its target-only items. Open sessions and files open for
+    /// editing alone are not work in progress.
     pub fn has_active_work(&self) -> bool {
-        self.has_active_transfers() || self.inner.edits.has_active()
+        self.has_active_transfers()
+            || self.inner.edits.has_active()
+            || self.inner.sync.is_deleting()
     }
 }
 

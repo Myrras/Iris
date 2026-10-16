@@ -10,8 +10,10 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use crate::edit::RemoteStamp;
-use crate::ids::{BatchId, DragOutId, EditId, HostKeyRequestId, ProfileId, SessionId, TransferId};
-use crate::transfer::{ConflictSide, TransferJob};
+use crate::ids::{
+    BatchId, DragOutId, EditId, HostKeyRequestId, ProfileId, SessionId, SyncPlanId, TransferId,
+};
+use crate::transfer::{ConflictSide, TransferDirection, TransferJob};
 
 /// Room for bursts: a folder of small files finishes many jobs a second,
 /// each announcing its state changes.
@@ -122,6 +124,25 @@ pub enum CoreEvent {
         drag_id: DragOutId,
         bytes_done: u64,
         total_bytes: u64,
+    },
+
+    /// A sync run ended: its copies (the transfer batch `batch_id`) are all
+    /// finished and, in Mirror mode, its deletes are done. `kept` counts
+    /// target-only items not deleted (a copy failed or was cancelled, they
+    /// changed since the comparison, or deleting failed); `note` says why,
+    /// in Iris' words.
+    SyncFinished {
+        plan_id: SyncPlanId,
+        batch_id: BatchId,
+        session_id: SessionId,
+        direction: TransferDirection,
+        copied: usize,
+        skipped: usize,
+        failed: usize,
+        cancelled: usize,
+        deleted: usize,
+        kept: usize,
+        note: Option<String>,
     },
 }
 
@@ -306,6 +327,29 @@ mod tests {
         .unwrap();
         assert_eq!(json["type"], "editUploaded");
         assert_eq!(json["path"], "/srv/notes.txt");
+    }
+
+    #[test]
+    fn sync_finished_is_camel_case() {
+        let json = serde_json::to_value(CoreEvent::SyncFinished {
+            plan_id: SyncPlanId::new(),
+            batch_id: BatchId::new(),
+            session_id: SessionId::new(),
+            direction: TransferDirection::Download,
+            copied: 3,
+            skipped: 0,
+            failed: 1,
+            cancelled: 0,
+            deleted: 0,
+            kept: 2,
+            note: Some("a copy failed or was cancelled, so nothing was deleted".into()),
+        })
+        .unwrap();
+        assert_eq!(json["type"], "syncFinished");
+        assert!(json["planId"].is_string());
+        assert_eq!(json["direction"], "download");
+        assert_eq!(json["copied"], 3);
+        assert_eq!(json["kept"], 2);
     }
 
     #[test]

@@ -48,6 +48,7 @@ fn event_name(event: &CoreEvent) -> &'static str {
         CoreEvent::EditConflict { .. } => "edit:conflict",
         CoreEvent::EditFailed { .. } => "edit:failed",
         CoreEvent::DragOutProgress { .. } => "dragOut:progress",
+        CoreEvent::SyncFinished { .. } => "sync:finished",
     }
 }
 
@@ -70,7 +71,8 @@ mod tests {
     use super::*;
     use iris_core::{
         BatchId, ConflictSide, DragOutId, EditId, HostKeyRequestId, ProfileId, RemoteStamp,
-        SessionId, SessionState, TransferDirection, TransferId, TransferJob, TransferState,
+        SessionId, SessionState, SyncPlanId, TransferDirection, TransferId, TransferJob,
+        TransferState,
     };
 
     #[test]
@@ -185,6 +187,22 @@ mod tests {
                     total_bytes: 2,
                 },
                 "dragOut:progress",
+            ),
+            (
+                CoreEvent::SyncFinished {
+                    plan_id: SyncPlanId::new(),
+                    batch_id: BatchId::new(),
+                    session_id: SessionId::new(),
+                    direction: TransferDirection::Upload,
+                    copied: 1,
+                    skipped: 0,
+                    failed: 0,
+                    cancelled: 0,
+                    deleted: 0,
+                    kept: 0,
+                    note: None,
+                },
+                "sync:finished",
             ),
         ];
         for (event, name) in cases {

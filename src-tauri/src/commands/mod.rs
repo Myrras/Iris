@@ -7,5 +7,6 @@ pub mod edit;
 pub mod fs;
 pub mod session;
 pub mod settings;
+pub mod sync;
 pub mod transfers;
 pub mod window;

@@ -208,6 +208,9 @@ pub fn run() {
             commands::drag_out::prepare_drag_out,
             commands::drag_out::cancel_drag_out,
             commands::drag_out::finish_drag_out,
+            commands::sync::plan_sync,
+            commands::sync::run_sync,
+            commands::sync::discard_sync_plan,
             commands::window::window_confirm_close,
         ])
         .build(tauri::generate_context!())

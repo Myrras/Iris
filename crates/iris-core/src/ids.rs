@@ -89,6 +89,12 @@ uuid_newtype!(
     DragOutId
 );
 
+uuid_newtype!(
+    /// One folder comparison made by `Core::plan_sync`, run by
+    /// `Core::run_sync`.
+    SyncPlanId
+);
+
 #[cfg(test)]
 mod tests {
 

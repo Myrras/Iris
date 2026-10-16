@@ -2,7 +2,7 @@
 //! (`settings.json`).
 //!
 //! These are the backend-relevant preferences (transfer parallelism, reconnect
-//! policy, per-extension editor overrides). Purely visual preferences (theme,
+//! policy, per-extension editor overrides, the names a sync leaves alone). Purely visual preferences (theme,
 //! hidden files, preview cap) live in the frontend's `settingsStore`
 //! (localStorage) instead, since nothing in the core needs them.
 //!
@@ -25,6 +25,17 @@ const LOCK_POISONED: &str = "settings store lock poisoned";
 pub const PARALLEL_TRANSFERS_RANGE: std::ops::RangeInclusive<u32> = 1..=16;
 /// Bounds for [`IrisSettings::reconnect_attempts`] (0 = never reconnect).
 pub const RECONNECT_ATTEMPTS_RANGE: std::ops::RangeInclusive<u32> = 0..=20;
+/// The most [`IrisSettings::sync_excludes`] patterns kept.
+pub const MAX_SYNC_EXCLUDES: usize = 100;
+/// The longest sync exclude pattern, in characters.
+pub const MAX_SYNC_EXCLUDE_LEN: usize = 255;
+
+/// What a sync leaves alone unless the user changes it.
+pub fn default_sync_excludes() -> Vec<String> {
+    [".git", ".DS_Store", "node_modules", "Thumbs.db"]
+        .map(String::from)
+        .to_vec()
+}
 
 /// The whole persisted document. Every field has a default, so a file written
 /// by an older version (missing newer fields) still loads.
@@ -38,6 +49,9 @@ pub struct IrisSettings {
     /// Per-extension editor override: lower-case extension without the dot
     /// (`"md"`) → path of the app to open it with. Empty = the OS default.
     pub editor_overrides: BTreeMap<String, String>,
+    /// Name patterns a sync never copies or deletes, matched against each
+    /// path segment (`*` and `?` wildcards; see [`crate::sync::exclude`]).
+    pub sync_excludes: Vec<String>,
 }
 
 impl Default for IrisSettings {
@@ -46,6 +60,7 @@ impl Default for IrisSettings {
             parallel_transfers: 4,
             reconnect_attempts: 5,
             editor_overrides: BTreeMap::new(),
+            sync_excludes: default_sync_excludes(),
         }
     }
 }
@@ -78,11 +93,42 @@ impl IrisSettings {
             })
             .filter(|(ext, app)| !ext.is_empty() && !app.is_empty())
             .collect();
+        let sync_excludes = normalize_excludes(self.sync_excludes)?;
         Ok(Self {
             editor_overrides,
+            sync_excludes,
             ..self
         })
     }
+}
+
+/// Trim the patterns and drop blanks and repeats (first one wins). A
+/// pattern is one path segment, so a separator in it is refused.
+pub(crate) fn normalize_excludes(patterns: Vec<String>) -> CoreResult<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for pattern in patterns {
+        let pattern = pattern.trim();
+        if pattern.is_empty() || out.iter().any(|p| p == pattern) {
+            continue;
+        }
+        if pattern.contains(['/', '\\', '\0']) {
+            return Err(CoreError::InvalidInput(format!(
+                "the sync exclude {pattern:?} must be a name, without / or \\"
+            )));
+        }
+        if pattern.chars().count() > MAX_SYNC_EXCLUDE_LEN {
+            return Err(CoreError::InvalidInput(format!(
+                "a sync exclude can be at most {MAX_SYNC_EXCLUDE_LEN} characters"
+            )));
+        }
+        out.push(pattern.to_string());
+    }
+    if out.len() > MAX_SYNC_EXCLUDES {
+        return Err(CoreError::InvalidInput(format!(
+            "there can be at most {MAX_SYNC_EXCLUDES} sync excludes"
+        )));
+    }
+    Ok(out)
 }
 
 struct Inner {
@@ -171,6 +217,43 @@ mod tests {
         assert_eq!(s.parallel_transfers, 4);
         assert_eq!(s.reconnect_attempts, 5);
         assert!(s.editor_overrides.is_empty());
+        assert_eq!(
+            s.sync_excludes,
+            vec![".git", ".DS_Store", "node_modules", "Thumbs.db"]
+        );
+    }
+
+    #[test]
+    fn sync_excludes_are_trimmed_deduplicated_and_names_only() {
+        let saved = IrisSettings {
+            sync_excludes: vec![" *.tmp ".into(), "".into(), "*.tmp".into(), "build".into()],
+            ..IrisSettings::default()
+        }
+        .normalized()
+        .unwrap();
+        assert_eq!(saved.sync_excludes, vec!["*.tmp", "build"]);
+        for bad in ["a/b", "a\\b"] {
+            let err = IrisSettings {
+                sync_excludes: vec![bad.into()],
+                ..IrisSettings::default()
+            }
+            .normalized()
+            .unwrap_err();
+            assert_eq!(err.kind(), "invalidInput", "{bad}");
+        }
+        let too_many = IrisSettings {
+            sync_excludes: (0..=MAX_SYNC_EXCLUDES).map(|i| format!("p{i}")).collect(),
+            ..IrisSettings::default()
+        };
+        assert!(too_many.normalized().is_err());
+    }
+
+    #[test]
+    fn a_file_without_sync_excludes_gets_the_defaults() {
+        let partial: IrisSettings = serde_json::from_str(r#"{"parallelTransfers":2}"#).unwrap();
+        assert_eq!(partial.sync_excludes, default_sync_excludes());
+        let empty: IrisSettings = serde_json::from_str(r#"{"syncExcludes":[]}"#).unwrap();
+        assert!(empty.sync_excludes.is_empty());
     }
 
     #[test]
@@ -179,8 +262,13 @@ mod tests {
             parallel_transfers: 8,
             reconnect_attempts: 0,
             editor_overrides: overrides(&[("md", "/Applications/Typora.app")]),
+            sync_excludes: vec!["*.log".into()],
         };
         let json = serde_json::to_string(&settings).unwrap();
+        assert!(
+            json.contains("\"syncExcludes\":[\"*.log\"]"),
+            "json: {json}"
+        );
         assert!(json.contains("\"parallelTransfers\":8"), "json: {json}");
         assert!(json.contains("\"reconnectAttempts\":0"), "json: {json}");
         assert!(json.contains("\"editorOverrides\""), "json: {json}");
@@ -207,6 +295,7 @@ mod tests {
                 parallel_transfers: 2,
                 reconnect_attempts: 9,
                 editor_overrides: overrides(&[("txt", "/usr/bin/nano")]),
+                sync_excludes: vec!["dist".into()],
             })
             .unwrap();
 

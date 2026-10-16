@@ -20,13 +20,22 @@ use crate::ids::{BatchId, SessionId};
 use super::naming::is_safe_name;
 use super::progress::{Throttle, PROGRESS_INTERVAL};
 use super::side::Side;
-use super::{NewJob, Shared, TransferDirection, TransferError, TransferState, Walk};
+use super::{
+    ConflictResolution, NewJob, Shared, TransferDirection, TransferError, TransferState, Walk,
+    BROKEN_LINK, DIR_LINK, SPECIAL, UNSAFE_NAME,
+};
 
 /// One piece of a walk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Work {
-    /// A selected item, copied into `dst_dir` under its own name.
-    Item { src: String, dst_dir: String },
+    /// A selected item, copied into `dst_dir` under its own name. A file
+    /// found for it starts with `resolution` as its conflict answer (a sync
+    /// overwrites the files it found changed without asking).
+    Item {
+        src: String,
+        dst_dir: String,
+        resolution: Option<ConflictResolution>,
+    },
     /// The folder `src`, created as `dst_parent/name` and filled.
     Folder {
         src: String,
@@ -70,7 +79,11 @@ pub(super) async fn run(
             continue;
         }
         match piece {
-            Work::Item { src, dst_dir } => walker.item(&src, &dst_dir).await,
+            Work::Item {
+                src,
+                dst_dir,
+                resolution,
+            } => walker.item(&src, &dst_dir, resolution).await,
             Work::Folder {
                 src,
                 dst_parent,
@@ -95,12 +108,6 @@ struct Walker<'a> {
     stopped: bool,
 }
 
-/// Why an entry is not copied.
-const DIR_LINK: &str = "links to folders are not copied";
-const BROKEN_LINK: &str = "the link is broken";
-const SPECIAL: &str = "only files and folders are copied";
-const UNSAFE_NAME: &str = "the name is not a valid file name";
-
 impl Walker<'_> {
     /// Whether `err` means the connection is gone (rather than this one
     /// entry being a problem); see [`Shared::connection_gone`].
@@ -111,7 +118,7 @@ impl Walker<'_> {
     /// One selected item. A selected link is followed (folders included:
     /// the user picked it); links met inside a folder are not (see
     /// [`Walker::folder`]).
-    async fn item(&mut self, path: &str, dst_dir: &str) {
+    async fn item(&mut self, path: &str, dst_dir: &str, resolution: Option<ConflictResolution>) {
         let name = self.src.name_of(path);
         if !is_safe_name(&name) {
             self.skip(path, dst_dir, &name, UNSAFE_NAME);
@@ -123,15 +130,30 @@ impl Walker<'_> {
                 self.placeholder(Work::Item {
                     src: path.to_string(),
                     dst_dir: dst_dir.to_string(),
+                    resolution,
                 });
             }
-            Err(e) => self.fail(path, dst_dir, &name, &e, Walk::Item),
+            Err(e) => {
+                tracing::info!(kind = e.kind(), "could not expand a transfer item");
+                let error = Some(TransferError::from(&e));
+                let state = TransferState::Failed;
+                let walk = Some(Walk::Item);
+                self.add(path, dst_dir, &name, 0, state, error, walk, resolution);
+            }
             Ok(entry) => match entry.kind {
-                EntryKind::File => self.file(path, dst_dir, &name, entry.size),
+                EntryKind::File => {
+                    let state = TransferState::Queued;
+                    self.add(
+                        path, dst_dir, &name, entry.size, state, None, None, resolution,
+                    );
+                }
                 EntryKind::Symlink {
                     target_kind: Some(LinkTargetKind::File),
                     ..
-                } => self.file(path, dst_dir, &name, 0),
+                } => {
+                    let state = TransferState::Queued;
+                    self.add(path, dst_dir, &name, 0, state, None, None, resolution);
+                }
                 EntryKind::Dir
                 | EntryKind::Symlink {
                     target_kind: Some(LinkTargetKind::Dir),
@@ -211,7 +233,16 @@ impl Walker<'_> {
     }
 
     fn file(&mut self, src: &str, dst_dir: &str, name: &str, size: u64) {
-        self.add(src, dst_dir, name, size, TransferState::Queued, None, None);
+        self.add(
+            src,
+            dst_dir,
+            name,
+            size,
+            TransferState::Queued,
+            None,
+            None,
+            None,
+        );
     }
 
     fn skip(&mut self, src: &str, dst_dir: &str, name: &str, why: &str) {
@@ -220,7 +251,7 @@ impl Walker<'_> {
             message: format!("{src}: {why}"),
         };
         let state = TransferState::Skipped;
-        self.add(src, dst_dir, name, 0, state, Some(error), None);
+        self.add(src, dst_dir, name, 0, state, Some(error), None, None);
     }
 
     /// A `failed` placeholder: retrying it walks `src` again.
@@ -228,16 +259,21 @@ impl Walker<'_> {
         tracing::info!(kind = err.kind(), "could not expand a transfer item");
         let error = TransferError::from(err);
         let state = TransferState::Failed;
-        self.add(src, dst_dir, name, 0, state, Some(error), Some(walk));
+        self.add(src, dst_dir, name, 0, state, Some(error), Some(walk), None);
     }
 
     /// A `paused` placeholder for work the lost connection cut off.
     fn placeholder(&mut self, work: Work) {
         let state = TransferState::Paused;
         match work {
-            Work::Item { src, dst_dir } => {
+            Work::Item {
+                src,
+                dst_dir,
+                resolution,
+            } => {
                 let name = self.src.name_of(&src);
-                self.add(&src, &dst_dir, &name, 0, state, None, Some(Walk::Item));
+                let walk = Some(Walk::Item);
+                self.add(&src, &dst_dir, &name, 0, state, None, walk, resolution);
             }
             Work::Folder {
                 src,
@@ -245,7 +281,7 @@ impl Walker<'_> {
                 name,
             } => {
                 let walk = Some(Walk::Folder);
-                self.add(&src, &dst_parent, &name, 0, state, None, walk);
+                self.add(&src, &dst_parent, &name, 0, state, None, walk, None);
             }
         }
     }
@@ -260,6 +296,7 @@ impl Walker<'_> {
         state: TransferState,
         error: Option<TransferError>,
         walk: Option<Walk>,
+        resolution: Option<ConflictResolution>,
     ) {
         let dst = if is_safe_name(name) {
             self.dst.join(dst_dir, name)
@@ -278,6 +315,7 @@ impl Walker<'_> {
             state,
             error,
             walk,
+            resolution,
         });
         if added && self.updates.ready(Instant::now()) {
             self.shared.publish(CoreEvent::TransfersUpdated);

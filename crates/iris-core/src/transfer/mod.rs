@@ -74,7 +74,7 @@ mod expand;
 pub(crate) use expand::Work;
 pub mod naming;
 pub(crate) mod progress;
-mod side;
+pub(crate) mod side;
 mod worker;
 
 use std::collections::{HashMap, VecDeque};
@@ -94,6 +94,12 @@ use crate::session_manager::SessionManager;
 use progress::{SpeedMeter, Throttle, PROGRESS_INTERVAL};
 
 const LOCK_POISONED: &str = "transfer registry lock poisoned";
+
+/// Why an entry is not copied (by a transfer or a sync).
+pub(crate) const DIR_LINK: &str = "links to folders are not copied";
+pub(crate) const BROKEN_LINK: &str = "the link is broken";
+pub(crate) const SPECIAL: &str = "only files and folders are copied";
+pub(crate) const UNSAFE_NAME: &str = "the name is not a valid file name";
 
 /// Which way a transfer goes. One pane is local and the other remote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -300,7 +306,41 @@ impl TransferManager {
         if request.items.iter().any(|item| item.src.trim().is_empty()) {
             return Err(CoreError::InvalidInput("a source path is empty".into()));
         }
-        let live = self.shared.sessions.get(request.session_id)?;
+        let work = request
+            .items
+            .into_iter()
+            .map(|item| Work::Item {
+                src: item.src,
+                dst_dir: request.dst_dir.clone(),
+                resolution: None,
+            })
+            .collect();
+        self.start_batch(request.session_id, request.direction, work, false)
+    }
+
+    /// Queue `work` as one batch whose outcome a caller waits for
+    /// ([`TransferManager::batch_outcome`]): the batch stays known, with
+    /// the final states of the jobs "Clear finished" removed, until
+    /// [`TransferManager::unpin`]. Each item names its own destination
+    /// folder, which must exist. `work` may be empty (the batch is then
+    /// finished at once).
+    pub(crate) fn enqueue_pinned(
+        &self,
+        session_id: SessionId,
+        direction: TransferDirection,
+        work: Vec<Work>,
+    ) -> CoreResult<BatchId> {
+        self.start_batch(session_id, direction, work, true)
+    }
+
+    fn start_batch(
+        &self,
+        session_id: SessionId,
+        direction: TransferDirection,
+        work: Vec<Work>,
+        pinned: bool,
+    ) -> CoreResult<BatchId> {
+        let live = self.shared.sessions.get(session_id)?;
         let runtime = tokio::runtime::Handle::try_current()
             .map_err(|_| CoreError::InvalidInput("transfers need an async runtime".into()))?;
         let _ = self.shared.runtime.set(runtime.clone());
@@ -313,28 +353,50 @@ impl TransferManager {
                 token: token.clone(),
                 policy: None,
                 expanding: 1,
-                session_id: request.session_id,
-                direction: request.direction,
+                session_id,
+                direction,
+                pinned,
+                cleared: BatchOutcome::default(),
             },
         );
-        let work = request
-            .items
-            .into_iter()
-            .map(|item| Work::Item {
-                src: item.src,
-                dst_dir: request.dst_dir.clone(),
-            })
-            .collect();
         runtime.spawn(expand::run(
             Arc::clone(&self.shared),
             batch_id,
-            request.session_id,
-            request.direction,
+            session_id,
+            direction,
             work,
             live.ssh.fs().clone(),
             token,
         ));
         Ok(batch_id)
+    }
+
+    /// How the jobs of a batch stand (`None` for an unknown batch).
+    pub(crate) fn batch_outcome(&self, batch_id: BatchId) -> Option<BatchOutcome> {
+        let reg = self.shared.lock();
+        let batch = reg.batches.get(&batch_id)?;
+        let mut outcome = batch.cleared;
+        outcome.finished = batch.expanding == 0;
+        for entry in reg.jobs.values() {
+            if entry.job.batch_id != batch_id {
+                continue;
+            }
+            match entry.job.state {
+                TransferState::Done => outcome.done += 1,
+                TransferState::Failed => outcome.failed += 1,
+                TransferState::Cancelled => outcome.cancelled += 1,
+                TransferState::Skipped => outcome.skipped += 1,
+                _ => outcome.finished = false,
+            }
+        }
+        Some(outcome)
+    }
+
+    /// Nobody waits for the batch's outcome any more.
+    pub(crate) fn unpin(&self, batch_id: BatchId) {
+        if let Some(batch) = self.shared.lock().batches.get_mut(&batch_id) {
+            batch.pinned = false;
+        }
     }
 
     /// Cancel one job. A running job stops after its current chunk and
@@ -620,11 +682,23 @@ impl TransferManager {
         {
             let mut reg = self.shared.lock();
             let reg = &mut *reg;
-            reg.jobs.retain(|_, e| e.job.state.is_active());
+            let batches = &mut reg.batches;
+            reg.jobs.retain(|_, e| {
+                if e.job.state.is_active() {
+                    return true;
+                }
+                // A pinned batch keeps counting the jobs that leave the list.
+                if let Some(batch) = batches.get_mut(&e.job.batch_id).filter(|b| b.pinned) {
+                    batch.cleared.count(e.job.state);
+                }
+                false
+            });
             let jobs = &reg.jobs;
             reg.order.retain(|id| jobs.contains_key(id));
             reg.batches.retain(|batch_id, batch| {
-                batch.expanding > 0 || jobs.values().any(|e| e.job.batch_id == *batch_id)
+                batch.pinned
+                    || batch.expanding > 0
+                    || jobs.values().any(|e| e.job.batch_id == *batch_id)
             });
         }
         self.shared.events.publish(CoreEvent::TransfersUpdated);
@@ -733,6 +807,7 @@ impl JobEntry {
             Some(Walk::Item) | None => Work::Item {
                 src: self.job.src.clone(),
                 dst_dir: self.dst_dir.clone(),
+                resolution: self.resolution,
             },
         }
     }
@@ -756,6 +831,33 @@ struct BatchEntry {
     /// The remote side (moves with a resume onto another session).
     session_id: SessionId,
     direction: TransferDirection,
+    /// Someone waits for the outcome ([`TransferManager::enqueue_pinned`]).
+    pinned: bool,
+    /// The finished jobs "Clear finished" took out of a pinned batch.
+    cleared: BatchOutcome,
+}
+
+/// How the jobs of a batch ended, so far.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct BatchOutcome {
+    /// Nothing is left to walk and every job is finished.
+    pub finished: bool,
+    pub done: usize,
+    pub failed: usize,
+    pub cancelled: usize,
+    pub skipped: usize,
+}
+
+impl BatchOutcome {
+    fn count(&mut self, state: TransferState) {
+        match state {
+            TransferState::Done => self.done += 1,
+            TransferState::Failed => self.failed += 1,
+            TransferState::Cancelled => self.cancelled += 1,
+            TransferState::Skipped => self.skipped += 1,
+            _ => {}
+        }
+    }
 }
 
 #[derive(Default)]
@@ -802,6 +904,8 @@ pub(crate) struct NewJob {
     pub state: TransferState,
     pub error: Option<TransferError>,
     pub walk: Option<Walk>,
+    /// The conflict answer the job starts with (`None`: ask).
+    pub resolution: Option<ConflictResolution>,
 }
 
 /// What the manager and its tasks share.
@@ -859,7 +963,7 @@ impl Shared {
                     name: new.name,
                     token,
                     append: false,
-                    resolution: None,
+                    resolution: new.resolution,
                     throttle: Throttle::new(PROGRESS_INTERVAL),
                     announced: 0,
                     speed: SpeedMeter::new(),
