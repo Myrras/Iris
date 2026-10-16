@@ -72,8 +72,9 @@ when it merges.
   toolbar button): text files, and PNG, JPEG, GIF, WebP and SVG images on a
   checkerboard. Large text files show their first part with a notice;
   images over the preview size limit and binary files say so. The panel is
-  open by default at a fixed width, whatever it shows, until you close it
-  (it then collapses to a slim strip and remembers that).
+  open by default at a fixed width, whatever it shows, until you close it.
+  Closed, it takes no space; a handle slides in from the window's right edge
+  for previewable files or when the pointer reaches the edge.
 - Right-click menu on files and on the empty part of a pane: Open, Preview,
   New Folder, Rename, Get Info, Refresh and Delete.
 - Uploads and downloads of files and whole folders: folders are recreated

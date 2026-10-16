@@ -3,19 +3,29 @@
  * toolbar toggles it). It follows the focused entry of the active pane: text
  * in monospace (the start only for large files, with a notice), images fitted
  * on a checkerboard, and a short note for folders, binary files and images
- * over the size limit. Collapsed, it is a slim strip with an expand button;
- * the state persists in `layoutStore`.
+ * over the size limit. Always open at a fixed width (`--preview-w`) until the
+ * user closes it (`layoutStore.previewOpen`, persisted). Closed, it takes no
+ * space at all: a small handle slides in from the window's right edge (it
+ * overlays the layout) when the focused file looks previewable or the pointer
+ * is at that edge, and reopens the island.
  *
  * SVG arrives as an image and is only ever shown through an `<img>` data URL,
  * which cannot run scripts; preview markup is never injected into the page.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { preview as fetchPreview, toIpcError } from "../ipc/commands";
 import type { Entry, FsTarget, Preview } from "../ipc/types";
 import { isDirLike } from "../lib/entries";
+import {
+  EDGE_REVEAL_PX,
+  HANDLE_HIDE_DELAY_MS,
+  looksPreviewable,
+  previewable,
+} from "../lib/previewReveal";
 import { formatSize } from "../lib/fileFormat";
+import { MOTION, usePresence } from "../lib/motion";
 import { useLayoutStore } from "../state/layoutStore";
 import { focusedEntry, usePaneStore } from "../state/paneStore";
 import { useSettingsStore } from "../state/settingsStore";
@@ -46,15 +56,6 @@ type Load =
   | { state: "loading" }
   | { state: "ready"; preview: Preview }
   | { state: "error"; message: string };
-
-/** Whether `entry` has file contents to read. */
-function previewable(entry: Entry): boolean {
-  if (isDirLike(entry)) return false;
-  if (entry.kind.type === "other") return false;
-  if (entry.kind.type === "symlink" && entry.kind.targetKind === null)
-    return false;
-  return true;
-}
 
 function targetKey(target: FsTarget | null): string {
   if (!target) return "";
@@ -105,28 +106,75 @@ function usePreview(
 
 export function PreviewPanel() {
   const open = useLayoutStore((s) => s.previewOpen);
+  return open ? <PreviewIsland /> : <RevealHandle />;
+}
+
+/** Whether the pointer is at the window's right edge. */
+function useEdgeHover(active: boolean): boolean {
+  const [edge, setEdge] = useState(false);
+  useEffect(() => {
+    if (!active) return;
+    const onMove = (e: MouseEvent) =>
+      setEdge(e.clientX >= window.innerWidth - EDGE_REVEAL_PX);
+    const onLeave = () => setEdge(false);
+    document.addEventListener("mousemove", onMove);
+    document.documentElement.addEventListener("mouseleave", onLeave);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.documentElement.removeEventListener("mouseleave", onLeave);
+      setEdge(false);
+    };
+  }, [active]);
+  return edge;
+}
+
+/** Follows `want`: true at once, false only after `delay`. */
+function useLingering(want: boolean, delay: number): boolean {
+  const [shown, setShown] = useState(want);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    clearTimeout(timer.current);
+    if (want) setShown(true);
+    else timer.current = setTimeout(() => setShown(false), delay);
+    return () => clearTimeout(timer.current);
+  }, [want, delay]);
+  return shown;
+}
+
+/** The closed state: no layout space, just an overlay handle on the edge. */
+function RevealHandle() {
+  const entry = usePaneStore((s) => focusedEntry(s.panes[s.active]));
+  const maxSizeMb = useSettingsStore((s) => s.preview.maxSizeMb);
+  const edge = useEdgeHover(true);
+  const [hovered, setHovered] = useState(false);
+  const want =
+    looksPreviewable(entry, maxSizeMb * 1024 * 1024) || edge || hovered;
+  const shown = useLingering(want, HANDLE_HIDE_DELAY_MS);
+  const { mounted, state } = usePresence(shown, MOTION.base);
+  if (!mounted) return null;
+  return (
+    <button
+      type="button"
+      className={styles.handle}
+      data-state={state}
+      aria-label="Show preview"
+      title="Show preview (Space)"
+      tabIndex={state === "open" ? 0 : -1}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+      onClick={() => useLayoutStore.getState().setPreviewOpen(true)}
+    >
+      <PreviewIcon />
+    </button>
+  );
+}
+
+function PreviewIsland() {
   const setOpen = useLayoutStore((s) => s.setPreviewOpen);
   const target = usePaneStore((s) => s.panes[s.active].target);
   const entry = usePaneStore((s) => focusedEntry(s.panes[s.active]));
   const maxSizeMb = useSettingsStore((s) => s.preview.maxSizeMb);
-  const load = usePreview(target, entry, maxSizeMb * 1024 * 1024, open);
-
-  if (!open) {
-    return (
-      <aside className={styles.collapsed} aria-label="Preview">
-        <button
-          type="button"
-          className={styles.tool}
-          aria-label="Show preview"
-          title="Show preview (Space)"
-          aria-expanded={false}
-          onClick={() => setOpen(true)}
-        >
-          <PreviewIcon />
-        </button>
-      </aside>
-    );
-  }
+  const load = usePreview(target, entry, maxSizeMb * 1024 * 1024, true);
 
   return (
     <aside className={styles.panel} aria-label="Preview">

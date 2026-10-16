@@ -17,6 +17,7 @@ import type { Entry, Preview } from "../ipc/types";
 import { useLayoutStore } from "../state/layoutStore";
 import { initialPane, usePaneStore } from "../state/paneStore";
 import { useSettingsStore } from "../state/settingsStore";
+import { HANDLE_HIDE_DELAY_MS } from "../lib/previewReveal";
 import { PreviewPanel } from "./PreviewPanel";
 
 function entry(name: string, extra: Partial<Entry> = {}): Entry {
@@ -62,13 +63,92 @@ beforeEach(() => {
 });
 
 describe("PreviewPanel", () => {
-  it("collapses to a strip with an expand button", () => {
-    useLayoutStore.getState().setPreviewOpen(false);
-    focus([entry("a.txt")], "/srv/a.txt");
-    render(<PreviewPanel />);
-    expect(preview).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Show preview" }));
-    expect(useLayoutStore.getState().previewOpen).toBe(true);
+  describe("closed", () => {
+    beforeEach(() => useLayoutStore.getState().setPreviewOpen(false));
+
+    it("renders no island or strip and reads nothing", async () => {
+      focus([entry("a.zip")], "/srv/a.zip");
+      const { container } = render(<PreviewPanel />);
+      expect(screen.queryByRole("complementary")).toBeNull();
+      await act(() => new Promise((r) => setTimeout(r, 250)));
+      expect(container).toBeEmptyDOMElement();
+      expect(preview).not.toHaveBeenCalled();
+    });
+
+    it("shows the handle for a previewable file without reading it", async () => {
+      focus([entry("a.txt")], "/srv/a.txt");
+      render(<PreviewPanel />);
+      await act(() => new Promise((r) => setTimeout(r, 250)));
+      expect(preview).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Show preview" }));
+      expect(useLayoutStore.getState().previewOpen).toBe(true);
+    });
+
+    it.each([
+      ["a folder", entry("docs", { kind: { type: "dir" } })],
+      ["a binary file", entry("a.zip")],
+      ["an empty file", entry("e.txt", { size: 0 })],
+      ["a big image", entry("p.png", { size: 50 * 1024 * 1024 })],
+    ])("hides the handle for %s", (_, e) => {
+      focus([e], e.path);
+      const { container } = render(<PreviewPanel />);
+      expect(container).toBeEmptyDOMElement();
+    });
+
+    it("slides in at the right edge and out after leaving", () => {
+      vi.useFakeTimers();
+      try {
+        focus([entry("a.zip")], "/srv/a.zip");
+        const { container } = render(<PreviewPanel />);
+        const move = (x: number) =>
+          act(() => {
+            fireEvent.mouseMove(document, { clientX: x });
+          });
+        move(window.innerWidth - 2);
+        expect(
+          screen.getByRole("button", { name: "Show preview" }),
+        ).toBeInTheDocument();
+        move(window.innerWidth / 2);
+        act(() => {
+          vi.advanceTimersByTime(HANDLE_HIDE_DELAY_MS - 50);
+        });
+        expect(container).not.toBeEmptyDOMElement();
+        act(() => {
+          vi.advanceTimersByTime(50);
+        });
+        // Slid out (closed state), then unmounted after the exit animation.
+        expect(screen.getByRole("button")).toHaveAttribute(
+          "data-state",
+          "closed",
+        );
+        act(() => {
+          vi.advanceTimersByTime(1000);
+        });
+        expect(container).toBeEmptyDOMElement();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stays while the pointer is on the handle", () => {
+      vi.useFakeTimers();
+      try {
+        focus([entry("a.zip")], "/srv/a.zip");
+        const { container } = render(<PreviewPanel />);
+        act(() => {
+          fireEvent.mouseMove(document, { clientX: window.innerWidth - 1 });
+        });
+        const handle = screen.getByRole("button", { name: "Show preview" });
+        fireEvent.pointerEnter(handle);
+        act(() => {
+          fireEvent.mouseMove(document, { clientX: window.innerWidth - 20 });
+          vi.advanceTimersByTime(2000);
+        });
+        expect(container).not.toBeEmptyDOMElement();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   const settle = () => act(() => new Promise((r) => setTimeout(r, 250)));

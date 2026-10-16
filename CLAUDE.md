@@ -200,7 +200,12 @@ standalone template:
     Trash/warning tone; Enter confirms) and `ChmodDialog` (Get Info + rwx
     grid ⇄ octal, recursive for folders). `PreviewPanel` is the island right
     of the panes (`layoutStore.previewOpen`, persisted, default **open**;
-    collapsed = slim strip) at a fixed `--preview-w` whatever it shows,
+    closed = **no layout space**: a fixed-position `RevealHandle` slides in
+    from the right edge when `lib/previewReveal.looksPreviewable` (listing-only
+    guess: image ext within the cap, known text ext, extensionless/dot file,
+    non-empty; no remote read while closed) or when the pointer is within
+    `EDGE_REVEAL_PX` of the edge, lingering `HANDLE_HIDE_DELAY_MS`) at a fixed
+    `--preview-w` whatever it shows,
     debounced 120ms, size cap from `settingsStore.preview.maxSizeMb`.
     Tests: `tests/remote.rs` covers mkdir/rename/delete/chmod/preview over
     SFTP (the `support/` server now serves open/read/mkdir/rmdir/remove/

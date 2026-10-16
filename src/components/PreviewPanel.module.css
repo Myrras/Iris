@@ -16,19 +16,39 @@
   animation: islandIn var(--dur-3) var(--ease-out);
 }
 
-/* Collapsed: a slim island holding just the expand button. */
-.collapsed {
-  width: 36px;
-  flex-shrink: 0;
+/* Closed: an overlay tab on the window's right edge; takes no layout space. */
+.handle {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  z-index: 5;
+  width: 32px;
+  height: 56px;
+  padding: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  padding-top: var(--sp-2);
+  justify-content: center;
+  color: var(--text-muted);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
+  border-right: none;
+  border-radius: var(--radius-xl) 0 0 var(--radius-xl);
   box-shadow: var(--shadow-md);
-  animation: islandIn var(--dur-3) var(--ease-out);
+  transform: translateY(-50%);
+}
+
+.handle:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.handle[data-state="open"] {
+  animation: handleIn var(--dur-3) var(--ease-out);
+}
+
+.handle[data-state="closed"] {
+  animation: handleIn var(--dur-3) var(--ease-in) reverse forwards;
+  pointer-events: none;
 }
 
 /* The panes' section-header look. */
@@ -209,6 +229,13 @@
   from {
     opacity: 0;
     transform: translateY(6px) scale(0.99);
+  }
+}
+
+@keyframes handleIn {
+  from {
+    opacity: 0;
+    transform: translate(100%, -50%);
   }
 }
 
