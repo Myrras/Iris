@@ -11,6 +11,15 @@ when it merges.
 
 ## [Unreleased]
 
+- Sync folders: the Sync button in either pane (also in the context menu,
+  ⌥⌘S / Ctrl+Alt+S) compares the Local and Remote folders and copies one
+  way, Local → Remote or Remote → Local. Update copies new and changed files;
+  Mirror also deletes what exists only on the target, after a second
+  confirm and only when every copy succeeded. Pick how files are compared
+  (size or date, newer only, size only, everything) and options (keep newer
+  target files, skip hidden files, copy empty folders, skip large files);
+  review the result per group and untick what should stay. Settings →
+  Transfers lists the names a sync leaves alone (.git, node_modules, …).
 - Transfers show their progress up to the last byte: a fast copy no longer
   sits at its first chunk until the server has finished the file.
 - After going up a folder, the folder you came from is selected, like in Finder.

@@ -5,8 +5,9 @@
 //! the public [`Core`] API end to end: password, key and agent logins,
 //! `known_hosts` handling, a jump host (ProxyJump) on a shared Docker
 //! network, the file operations and previews, parallel transfers with
-//! resume, an automatic reconnect that lets the queue carry on, and a remote
-//! edit round trip (save → upload, server change → conflict → copy).
+//! resume, an automatic reconnect that lets the queue carry on, a remote
+//! edit round trip (save → upload, server change → conflict → copy), and a
+//! folder sync (Update, then Mirror, both ways).
 //!
 //! ## Why every test is `#[ignore]`-d
 //! `just test` must stay hermetic and fast, so these need Docker and run
@@ -32,7 +33,8 @@ use std::time::Duration;
 use iris_core::{
     AgentLocation, AuthMethod, ConflictResolution, ConnectionProfile, Core, CoreError, CoreEvent,
     CoreResult, EditResolution, FsTarget, JumpHost, Opener, Preview, ProfileId, Secret, SessionId,
-    SessionState, TransferDirection, TransferItem, TransferList, TransferRequest, TransferState,
+    SessionState, SyncGroup, SyncMode, SyncOptions, SyncPlan, TransferDirection, TransferItem,
+    TransferList, TransferRequest, TransferState,
 };
 use russh::keys::{PrivateKey, PublicKey};
 use tempfile::TempDir;
@@ -1042,4 +1044,178 @@ async fn transfers_report_progress_to_the_last_byte_against_openssh() {
         );
     }
     assert_same_file(&local, &back.join("progress.bin"));
+}
+
+// -- Sync -------------------------------------------------------------------------
+
+/// Run `plan` with its defaults; returns `(copied, failed, deleted, kept)`.
+async fn run_sync(core: &Core, plan: &SyncPlan) -> (usize, usize, usize, usize) {
+    let mut rx = core.subscribe_events();
+    core.run_sync(plan.plan_id, None).await.unwrap();
+    let plan_id = plan.plan_id;
+    next_event(&mut rx, "the sync to finish", |e| match e {
+        CoreEvent::SyncFinished {
+            plan_id: id,
+            copied,
+            failed,
+            deleted,
+            kept,
+            ..
+        } if *id == plan_id => Some((*copied, *failed, *deleted, *kept)),
+        _ => None,
+    })
+    .await
+}
+
+fn sync_group(plan: &SyncPlan, path: &str) -> Option<SyncGroup> {
+    plan.items.iter().find(|i| i.path == path).map(|i| i.group)
+}
+
+#[tokio::test]
+#[ignore = "needs Docker; run with just test-integration"]
+async fn sync_update_and_mirror_against_openssh() {
+    let sshd = start_sshd(SshdOptions::default()).await;
+    // The server folder: an older changed.txt, an extra file and folder.
+    sshd.sh("mkdir -p /config/site/stale \
+         && printf 'version one\n' > /config/site/changed.txt \
+         && touch -d '2020-01-01 00:00:00' /config/site/changed.txt \
+         && echo extra > /config/site/extra.txt \
+         && echo stale > /config/site/stale/x.txt \
+         && chown -R 1000:1000 /config/site")
+        .await;
+    let f = Fixture::new();
+    let _answers = auto_answer(&f.core, true);
+    let id = f.save(HOST, sshd.port, AuthMethod::Password, None);
+    let session = f
+        .core
+        .connect(id, Some(Secret::new(PASSWORD)), None)
+        .await
+        .unwrap();
+    let home = f.core.home_dir(remote(session)).await.unwrap();
+    let site = format!("{}/site", home.trim_end_matches('/'));
+    let at = |name: &str| format!("{site}/{name}");
+
+    // The local folder (fictitious content), with an excluded .git.
+    let local = f.dir.path().join("site");
+    std::fs::create_dir_all(local.join("docs")).unwrap();
+    std::fs::create_dir_all(local.join(".git")).unwrap();
+    std::fs::write(local.join("new.txt"), "brand new\n").unwrap();
+    std::fs::write(local.join("changed.txt"), "version two, longer\n").unwrap();
+    std::fs::write(local.join("docs/deep.txt"), "deep\n").unwrap();
+    std::fs::write(local.join(".git/HEAD"), "ref: main\n").unwrap();
+    let local_dir = local.to_string_lossy().into_owned();
+
+    // Update: new and changed go up, the extras stay.
+    let plan = f
+        .core
+        .plan_sync(
+            session,
+            TransferDirection::Upload,
+            &local_dir,
+            &site,
+            SyncOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sync_group(&plan, "new.txt"), Some(SyncGroup::New));
+    assert_eq!(sync_group(&plan, "changed.txt"), Some(SyncGroup::Changed));
+    assert_eq!(sync_group(&plan, "docs/deep.txt"), Some(SyncGroup::New));
+    assert_eq!(sync_group(&plan, ".git"), Some(SyncGroup::Excluded));
+    assert_eq!(sync_group(&plan, "extra.txt"), Some(SyncGroup::TargetOnly));
+    let (copied, failed, deleted, _) = run_sync(&f.core, &plan).await;
+    assert_eq!((copied, failed, deleted), (3, 0, 0));
+    assert!(matches!(
+        f.core.preview(remote(session), &at("changed.txt"), 1024).await.unwrap(),
+        Preview::Text { text, .. } if text == "version two, longer\n"
+    ));
+    assert!(f.core.stat(remote(session), &at("extra.txt")).await.is_ok());
+    assert!(matches!(
+        f.core.stat(remote(session), &at(".git")).await,
+        Err(CoreError::NotFound(_))
+    ));
+
+    // OpenSSH kept the dates: nothing left to copy.
+    let again = f
+        .core
+        .plan_sync(
+            session,
+            TransferDirection::Upload,
+            &local_dir,
+            &site,
+            SyncOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        again
+            .items
+            .iter()
+            .all(|i| !matches!(i.group, SyncGroup::New | SyncGroup::Changed)),
+        "{:#?}",
+        again.items
+    );
+    assert_eq!(again.totals.get(SyncGroup::Same).files, 3);
+
+    // Mirror: the extras go, the excluded .git is never touched.
+    let mirror = SyncOptions {
+        mode: SyncMode::Mirror,
+        ..SyncOptions::default()
+    };
+    let plan = f
+        .core
+        .plan_sync(
+            session,
+            TransferDirection::Upload,
+            &local_dir,
+            &site,
+            mirror.clone(),
+        )
+        .await
+        .unwrap();
+    let (copied, failed, deleted, kept) = run_sync(&f.core, &plan).await;
+    assert_eq!((copied, failed, deleted, kept), (0, 0, 2, 0));
+    for gone in ["extra.txt", "stale"] {
+        assert!(
+            matches!(
+                f.core.stat(remote(session), &at(gone)).await,
+                Err(CoreError::NotFound(_))
+            ),
+            "{gone}"
+        );
+    }
+
+    // And back down into an empty folder: byte-identical, dates kept.
+    let back = f.dir.path().join("back");
+    std::fs::create_dir_all(&back).unwrap();
+    let back_dir = back.to_string_lossy().into_owned();
+    let plan = f
+        .core
+        .plan_sync(
+            session,
+            TransferDirection::Download,
+            &back_dir,
+            &site,
+            SyncOptions::default(),
+        )
+        .await
+        .unwrap();
+    let (copied, failed, _, _) = run_sync(&f.core, &plan).await;
+    assert_eq!((copied, failed), (3, 0));
+    assert_eq!(
+        std::fs::read(back.join("docs/deep.txt")).unwrap(),
+        std::fs::read(local.join("docs/deep.txt")).unwrap()
+    );
+    let again = f
+        .core
+        .plan_sync(
+            session,
+            TransferDirection::Download,
+            &back_dir,
+            &site,
+            SyncOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert!(again.items.is_empty(), "{:#?}", again.items);
+    f.core.disconnect(session).await.unwrap();
 }

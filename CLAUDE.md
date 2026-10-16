@@ -39,7 +39,7 @@ standalone template:
     broadcast bus (`Core::subscribe_events`, forwarded by
     `src-tauri/src/events.rs`), `IrisSettingsStore` (`settings.json` in the
     app data dir: `parallelTransfers`, `reconnectAttempts`,
-    `editorOverrides`; commands `get_settings` / `save_settings`), and
+    `editorOverrides`, `syncExcludes`; commands `get_settings` / `save_settings`), and
     `Core::has_active_work()` for the close guard (= active transfers since
     Phase 4).
   - UI prefs (theme, reduced motion, show hidden, preview cap) are
@@ -541,6 +541,106 @@ standalone template:
     `useNativeDrop` (own remote drag out ignored, local one uploads),
     `DragGhost` (edge clamp + progress), `Pane` (context menu "Download
     to…"), `LogoMark`.
+- ✅ **Sync — one-way folder sync.** Backend and UI done.
+  - Manual, one way, per sync: **Local → Remote** (`upload`) or **Remote →
+    Local** (`download`), comparing the active tab's Local pane folder with
+    its Remote pane folder (connected session). No saved pairs, no watch.
+    **Update** (default) copies new + changed files and never deletes;
+    **Mirror** also deletes target-only items (second confirm in the
+    dialog).
+  - Core (`sync/`): `plan_sync(sessionId, direction, localDir, remoteDir,
+    options)` walks both trees (`walk.rs`, the transfer rules: unsafe
+    names, folder links, broken links and sockets/devices are unsupported
+    with a reason; a link to a file is that file; an unlistable subfolder
+    is unsupported; excluded/hidden folders are listed, not entered) in
+    parallel (`tokio::join!`, the session's main SFTP channel), then runs
+    the **pure** `diff::diff(source, target, rules)`. Groups (`SyncGroup`):
+    `new`, `changed`, `same` (counted, not listed), `targetNewer`,
+    `differentSizeSameDate`, `targetOnly`, `typeMismatch`, `excluded`,
+    `skipped`. Excluded / skipped / mismatched paths **block** their
+    subtree (nothing under them is copied or deleted); a target-only
+    folder with something blocked inside is never deleted as a whole.
+    `typeMismatch` (file here, folder there) is reported and left alone in
+    both modes. `MTIME_TOLERANCE_SECS = 2` (SFTP whole seconds, FAT/SMB 2 s
+    steps); an unknown date never counts as newer/older.
+  - Compare rules (`CompareRule`): `sizeOrDate` (default: size differs or
+    date beyond the tolerance), `newerOnly` (source newer only; same date +
+    other size = `differentSizeSameDate`), `sizeOnly`, `everything` (every
+    source file). `new` is copied under every rule. Options
+    (`SyncOptions`, serde defaults): `protectNewer` (on; a target newer
+    beyond the tolerance → `targetNewer`, implied by `newerOnly`),
+    `skipHidden` (dotfiles + OS-hidden, both sides: `excluded`, never
+    deleted), `copyEmptyFolders` (on), `maxFileSizeMb` (`null` = off; over
+    it → `skipped` "larger than N MB"), `excludes` (`null` = the
+    `syncExcludes` setting). Default ticks (`SyncItem.selected`): new +
+    changed; targetOnly in Mirror; targetNewer / differentSizeSameDate off.
+  - Plans live in `SyncManager` (`PLAN_TTL` 10 min, `set_sync_plan_ttl`
+    for tests), dropped on `disconnect` and on a lost connection, and run
+    **once**. `run_sync(planId, ticked?)` (`None` = defaults; `InvalidInput`
+    "nothing to sync" keeps the plan; `NotFound` = gone/expired) computes
+    `actions` (pure): `mkdir -p` of the deepest destination folders first,
+    then the copies as **one pinned transfer batch**
+    (`TransferManager::enqueue_pinned`, per-item `Work::Item {dst_dir,
+    resolution}`): `new` files start without an answer (a file that appeared
+    meanwhile still prompts), the rest with `replace`. A pinned batch keeps
+    the final counts of jobs "Clear finished" removes (`BatchOutcome`)
+    until `unpin`. A spawned waiter (`finish_sync`) waits for the batch to
+    finish, then in Mirror deletes — only when no copy failed or was
+    cancelled — deepest first: files whose size + mtime are unchanged,
+    whole folders whose raw subtree equals the plan's snapshot (`Tree`),
+    and folders with kept contents only once empty (`IfEmpty`), through
+    `Core::delete` (local: Trash; remote: permanent). Then
+    `SyncFinished {planId, batchId, sessionId, direction, copied, skipped,
+    failed, cancelled, deleted, kept, note}`. `has_active_work` also counts
+    a sync that is deleting.
+  - Settings: `syncExcludes` (default `.git`, `.DS_Store`, `node_modules`,
+    `Thumbs.db`; `sync/exclude.rs`: `*` / `?` per path segment,
+    case-sensitive; normalized: trimmed, deduplicated, no `/` `\`, ≤ 100
+    patterns of ≤ 255 chars).
+  - IPC: `plan_sync(sessionId, direction, localDir, remoteDir, options?)`,
+    `run_sync(planId, ticked?)`, `discard_sync_plan(planId)`; event
+    `sync:finished`.
+  - UI: a **Sync** button (`SyncIcon`, lucide FolderSync) in **both** pane
+    toolbars next to Upload/Download — the pane you start from is the
+    source (Local → upload, Remote → download), switchable in the dialog;
+    enabled like the copy actions (connected session, both folders), no
+    selection needed. Also "Sync Folders…" in both context menus and
+    **⌥⌘S** (Ctrl+Alt+S; matched on `e.code === "KeyS"` since Option+S
+    types "ß"). `syncStore` opens `SyncDialog` (in `App`): direction
+    switch with both full paths, Update / Mirror (warning note: remote
+    deletes are permanent, local ones go to the Trash), "Copy when" rule
+    select, an **Options** disclosure (keep newer target files, skip hidden
+    — follows the source pane's show-hidden until changed — copy empty
+    folders, skip files larger than N MB). Rule and options are remembered
+    in `settingsStore.sync` (localStorage). Compare → spinner → the plan in
+    sections (New, Changed / Overwritten, Newer on target, Different size
+    same date, Will be deleted / Only on target (kept), Skipped: identical
+    count + excluded / clash / not copied with reasons) with counts and
+    bytes, a tick-all per section and per item (a folder takes its
+    contents along; `lib/sync.ts`), lists virtualised (TanStack Virtual,
+    `--sync-list-h`). Any changed choice after a comparison compares again
+    (stale answers discarded, the old plan discarded). Sync with deletes →
+    in-dialog confirm in DeleteConfirmModal's words. Progress is the
+    transfer panel (opened); `sync:finished` → toast (problems + note as
+    an error toast) and `refreshSessionPanes`. Settings → Transfers →
+    **Sync excludes** (cards, add / remove / restore defaults;
+    `lib/syncExcludes.ts` mirrors the core's checks).
+  - Tests: `sync/diff.rs` (every rule and option, tolerance boundaries,
+    nested folders, excludes per segment, hidden in Mirror, size cap,
+    unsafe names, type mismatch), `sync/mod.rs` (actions: resolutions,
+    folders, delete roots), `sync/walk.rs`, `sync/exclude.rs`;
+    `tests/sync.rs` (hermetic: upload/download Update, Mirror deletes after
+    copies, local Mirror → fake Trash, a failed copy deletes nothing,
+    unticked items, nothing ticked, disconnect/expiry/discard, a target
+    changed after planning is kept, rules + options on real folders,
+    byte-identical + mtime so a second plan has nothing to copy); Docker
+    `sync_update_and_mirror_against_openssh`; frontend `lib/sync.test.ts`,
+    `SyncDialog.test.tsx` (direction/mode, compare, groups/counts, untick,
+    mirror confirm, rule switch re-compares, options disclosure + default
+    ticks), `Pane` (button, menu, shortcut, enabled state), Settings
+    excludes editor, `settingsStore` sync prefs.
+  - Check by hand: a large tree (thousands of files) for compare time and
+    list scrolling; Mirror to the local Trash on Windows (Recycle Bin).
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":
@@ -599,7 +699,7 @@ crates/iris-core/src/
   settings.rs # IrisSettings + IrisSettingsStore (settings.json, atomic write)
   persist.rs  # shared atomic JSON write (temp file + rename)
   ids.rs      # UUID newtypes (uuid_newtype!): ProfileId, SessionId, HostKeyRequestId,
-              # TransferId, BatchId, EditId, DragOutId
+              # TransferId, BatchId, EditId, DragOutId, SyncPlanId
   secret.rs   # Secret: redacted, non-serializable, zeroized password/passphrase
   secrets.rs  # SecretStore: KeychainStore (keyring) + MemorySecretStore
   ssh_config.rs  # ~/.ssh/config: host list, resolve, ProxyJump specs
@@ -616,6 +716,8 @@ crates/iris-core/src/
               # naming.rs (keep-both / edited-copy names), progress.rs (throttle, speed)
   edit/       # remote edit: Opener trait, EditManager, watcher, upload/conflicts
   drag_out.rs # remote rows → <cacheDir>/dragout/<id>/ for an OS drag (limits, cleanup)
+  sync/       # folder sync: mod.rs (types, SyncManager, plan/run/deletes), diff.rs
+              # (the pure comparison), walk.rs (one side → list), exclude.rs (patterns)
 crates/iris-core/tests/
   core.rs     # integration test over the public API — no UI required
   remote.rs   # connect/browse against the in-process SFTP server (unix only)
@@ -624,6 +726,7 @@ crates/iris-core/tests/
   reconnect.rs  # auto/manual reconnect, retry, cancel on disconnect/quit (unix only)
   edits.rs    # remote edit: open, save → upload, conflicts, deferred, cleanup (unix only)
   drag_out.rs # drag-out preparation: download, limits, cancel, cleanup (unix only)
+  sync.rs     # folder sync: Update/Mirror both ways, failed copies, changed targets (unix only)
   ssh_integration.rs  # Docker OpenSSH servers, #[ignore]d (just test-integration)
   support/    # hermetic russh + russh-sftp test server, jump routing, agent
 src-tauri/
@@ -643,7 +746,8 @@ src-tauri/src/
               # read_link/home_dir/mkdir/rename/delete/chmod/preview),
               # transfers.rs (async: the core spawns jobs on Tokio), edit.rs
               # (open_remote/resolve_edit/list_edits/close_edit), drag_out.rs
-              # (prepare/cancel/finish_drag_out), window.rs
+              # (prepare/cancel/finish_drag_out), sync.rs (plan_sync/run_sync/
+              # discard_sync_plan), window.rs
 src/
   App.tsx     # the shell: title bar, sidebar, tab bar, Local/Remote panes,
               # preview, transfers
@@ -652,16 +756,18 @@ src/
               # EditConflictDialog),
               # Pane + Breadcrumb + FileTable, ContextMenu, DeleteConfirmModal,
               # ChmodDialog, PreviewPanel, TransferPanel + ProgressBar,
-              # DragGhost, WelcomeScreen, Modal, TabBar, TabCloseModal,
+              # DragGhost, SyncDialog, WelcomeScreen, Modal, TabBar, TabCloseModal,
               # Toasts, SettingsModal, CloseWarningModal, WindowControls,
               # StatusDot, LogoMark, icons (lucide wrapper; import from here)
   ipc/        # commands.ts (typed wrappers), types.ts (wire types), events.ts
   state/      # Zustand stores: profiles, session, prompt (queue), tabs, pane,
-              # transfer, drag, connectionForm, theme, settings (UI prefs),
+              # transfer, drag, sync (dialog request + finished toast),
+              # connectionForm, theme, settings (UI prefs),
               # backendSettings (core settings.json), settingsRequest,
               # layout, toast — mirror the backend; don't guess
   lib/        # connect flow, tabs, edit (open for edit, edit toasts),
-              # editorOverrides, useTabShortcuts, sessionStatus,
+              # editorOverrides, sync (dialog rules), syncExcludes,
+              # useTabShortcuts, sessionStatus,
               # useCoreEvents, useNativeDrop, paneDrag, dragOut (OS drag
               # out, remote preparation), downloadTo (folder picker),
               # transfer (pane → request), pure rules (entries, selection,
