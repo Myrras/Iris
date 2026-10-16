@@ -128,3 +128,18 @@ when it merges.
 - A folder transfer cut off by a dropped connection carries on with the
   folders it had not listed yet instead of failing them.
 - Choosing to quit while transfers are in progress cancels them.
+- "Retry now" while reconnecting no longer gives up when that try fails:
+  the automatic attempts that were left carry on.
+- Edit remote files in your own editor: double-click a remote file, choose
+  "Open in Editor" in its menu, or press ⌘E (Ctrl+E elsewhere). Every save is
+  uploaded back to the server, with an "Uploaded" toast; a failed upload says
+  why and is tried again on the next save.
+- When the file changed on the server since you opened it, saving asks
+  whether to overwrite the server copy, discard your changes (the server
+  version reloads in your editor), or save yours next to it as
+  `name (edited).ext`.
+- Saves made while the connection is down are uploaded once it is back.
+  Quitting while a save is not uploaded yet warns first.
+- Local copies of edited files are deleted when you disconnect or quit.
+- Settings → Editors: choose which application opens each file extension
+  (e.g. `.md` in Typora); other files open in the system's default app.

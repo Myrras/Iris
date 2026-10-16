@@ -316,8 +316,11 @@ standalone template:
     giving up → `disconnected {reason}`. `Core::reconnect(session,
     credentials)` is the manual Retry / "Retry now": cancels a waiting run,
     publishes `connecting`, logs in interactively (prompts, secrets,
-    remember), then `connected` or `disconnected {reason}` (no automatic
-    attempts after a failed manual one). Keepalive: 10 s × 3 unanswered.
+    remember), then `connected`; on failure a "Retry now" that interrupted
+    an automatic run (`ReconnectRun.interrupted = (attempt, max)`, noted in
+    the slot by `SessionManager::note_attempt`) goes back to the backoff
+    loop at `attempt + 1` (Phase 6) unless `unrecoverable()`, else
+    `disconnected {reason}`. Keepalive: 10 s × 3 unanswered.
   - **SessionState** is tagged by `status` on the wire: `connecting |
     connected | reconnecting{…} | disconnected{reason}` (`reason` null =
     user disconnect); the event has no separate `reason` any more.
@@ -362,6 +365,71 @@ standalone template:
     cancel). `support/` can cut TCP dead (`kill_all`), refuse connections
     and slow listings. Docker: a cut connection reconnects and the queue
     continues.
+- ✅ **Phase 6 — Remote edit in local editor.** Backend and UI done.
+  - `edit/` (`impl Core` + `EditManager`, owned by `Core`):
+    `open_remote(session, path)` downloads (the session's main `SftpFs`,
+    not the transfer queue) to `<cacheDir>/edit/<sessionId>/<fnv64(path)>/
+    <name>`, re-stats the remote for the **baseline** (`RemoteStamp {size,
+    mtime}`), then calls the injected `Opener` (`trait Opener { fn
+    open(&self, path, app: Option<&str>) }`) with
+    `editorOverrides[ext]` (last extension, lower-case) or `None` (OS
+    default). A file already open in the session is reopened (same
+    `EditId`, no download). Cache dir **injected**
+    (`Core::set_cache_dir`, the shell's `app_cache_dir`; it also removes
+    `<cacheDir>/edit` leftovers at startup); a `Core` without one is
+    `config`. Opener defaults to one that fails (`config`).
+  - Watching: `notify` + `notify-debouncer-mini` on the copy's **folder**
+    (debounce 500 ms, `set_edit_debounce` for tests); any event re-stats the
+    copy and only a size/mtime different from the last synced one is a
+    save — atomic rename saves and editor temp/swap files just work. One
+    tokio task per edit handles its signals in order (save, conflict
+    answer, session connected), holding the core weakly.
+  - A save: remote stat == baseline → upload (overwrite), re-baseline,
+    `EditUploaded {editId, sessionId, path}`; else (changed or deleted)
+    `EditConflict {editId, sessionId, path, remote: RemoteStamp|null,
+    baseline}` and status `conflict` (saves ignored) until
+    `resolve_edit(editId, overwrite|discard|saveCopy)`: overwrite uploads
+    anyway; discard downloads the server copy over the local one in place
+    and re-baselines; saveCopy uploads to `naming::edited_copy_name`
+    (`name (edited).ext`, then `(edited 2)`, … — same tagging helper as
+    keep-both) and the edit **follows the copy** afterwards. Failures →
+    `EditFailed {editId, sessionId, path, kind, message}`, status
+    `failed`, the next save retries. Not connected (reconnecting / down)
+    → `waitingForConnection`; `Core::install` calls
+    `EditManager::session_connected`, which flushes saves and answers.
+    `EditStatus = synced | uploading | waitingForConnection | conflict |
+    failed`.
+  - Cleanup: `close_edit` (waits ≤ 30 s for an upload in flight), user
+    `disconnect` → `close_session_edits`, quit (`RunEvent::Exit`) →
+    `close_all_edits`; each deletes the copies. `has_active_work` is also
+    true while an edit is uploading, waiting for the connection or waiting
+    for a conflict answer (not merely open).
+  - Shell: `opener.rs` (`DesktopOpener` → `tauri_plugin_opener::open_path`,
+    errors become Iris-owned `config` text). The opener **plugin is not
+    registered** and the capability grants no `opener:*` permission: the
+    webview cannot open paths/URLs itself.
+  - IPC: `open_remote(sessionId, path)`, `resolve_edit(editId,
+    resolution)`, `list_edits`, `close_edit(editId)`; events
+    `edit:uploaded`, `edit:conflict`, `edit:failed`.
+  - UI: `lib/edit.ts` (`openForEdit` with an in-flight guard and error
+    toast, `editUploaded` toast + re-list of the Remote pane showing that
+    folder, `editFailed` toast). `Pane` (remote, connected session only):
+    double-click / Enter (non-mac) / ⌘↓ / ⌘O on a file opens it for edit
+    (folders still navigate), ⌘E (Ctrl+E), context menu "Open in Editor".
+    `edit:conflict` → `promptStore` (`editConflict`) → `EditConflictDialog`
+    (ConflictDialog look; When opened vs Server now; Discard my changes /
+    Save as copy / Overwrite server; closing = Save as copy; Discard
+    disabled when the server copy was deleted); a user disconnect drops the
+    session's queued edit conflicts. Settings → **Editors**
+    (`lib/editorOverrides.ts`: normalize/validate/add/rename/remove; rows
+    in Podium's card look; app via the dialog plugin, `.app` on macOS /
+    `.exe` on Windows).
+  - Tests: `tests/edits.rs` (fake opener, temp cache, real watcher at 50
+    ms: download + override vs default app, upload, atomic rename save,
+    conflict → each answer, deleted server copy, failed upload + retry,
+    deferred upload while reconnecting, cleanup on disconnect/close/quit,
+    stale cleanup); `tests/reconnect.rs` adds the Retry-now resume cases;
+    Docker: `edit_round_trip_against_openssh`.
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":
@@ -380,7 +448,7 @@ standalone template:
   overrides the platform config's decorations.
 - ✅ **Close guard**: `CloseRequested` (red button) and `ExitRequested`
   (Cmd+Q) are blocked while `Core::has_active_work()` (any queued, running,
-  needsDecision or paused transfer); the webview gets
+  needsDecision or paused transfer, or an edit save not on the server yet); the webview gets
   `window:close-requested`, shows `CloseWarningModal`, and "Close anyway"
   calls `window_confirm_close` (cancels all transfers, arms
   `AppState::force_close`, exits).
@@ -394,6 +462,8 @@ standalone template:
 | SSH / SFTP  | `russh` 0.64 (`ring` backend) + `russh-sftp` 3, behind `ssh/` |
 | SSH config  | `ssh2-config` 0.8, behind `ssh_config.rs`                |
 | Keychain    | `keyring` 3 (macOS/Windows native, Linux Secret Service), behind `secrets.rs` |
+| File watch  | `notify` 8 + `notify-debouncer-mini` 0.7, behind `edit/`  |
+| Open in app | `tauri-plugin-opener` 2 (Rust `open_path` only), in `src-tauri/src/opener.rs` |
 | FE state    | Zustand 5 (no data-fetching lib; call IPC, then resync)  |
 | Motion      | CSS tokens (`--dur-*`/`--ease-*`), reduced-motion guard  |
 | Icons       | `lucide-react`, only via `src/components/icons.tsx`      |
@@ -417,7 +487,7 @@ crates/iris-core/src/
   settings.rs # IrisSettings + IrisSettingsStore (settings.json, atomic write)
   persist.rs  # shared atomic JSON write (temp file + rename)
   ids.rs      # UUID newtypes (uuid_newtype!): ProfileId, SessionId, HostKeyRequestId,
-              # TransferId, BatchId
+              # TransferId, BatchId, EditId
   secret.rs   # Secret: redacted, non-serializable, zeroized password/passphrase
   secrets.rs  # SecretStore: KeychainStore (keyring) + MemorySecretStore
   ssh_config.rs  # ~/.ssh/config: host list, resolve, ProxyJump specs
@@ -431,13 +501,15 @@ crates/iris-core/src/
   session_manager.rs  # SessionId → Live | Reconnecting | Down slot (ids survive drops)
   transfer/   # TransferManager: mod.rs (types, registry, scheduling), expand.rs
               # (folder walk), worker.rs (one job), side.rs (local/remote end),
-              # naming.rs (keep-both names), progress.rs (throttle, speed)
+              # naming.rs (keep-both / edited-copy names), progress.rs (throttle, speed)
+  edit/       # remote edit: Opener trait, EditManager, watcher, upload/conflicts
 crates/iris-core/tests/
   core.rs     # integration test over the public API — no UI required
   remote.rs   # connect/browse against the in-process SFTP server (unix only)
   auth.rs     # agent, ssh config, jump hosts, remembered secrets (unix only)
   transfers.rs  # transfer engine against the in-process server (unix only)
   reconnect.rs  # auto/manual reconnect, retry, cancel on disconnect/quit (unix only)
+  edits.rs    # remote edit: open, save → upload, conflicts, deferred, cleanup (unix only)
   ssh_integration.rs  # Docker OpenSSH servers, #[ignore]d (just test-integration)
   support/    # hermetic russh + russh-sftp test server, jump routing, agent
 src-tauri/
@@ -448,17 +520,20 @@ src-tauri/src/
   lib.rs      # Tauri builder, plugins, macOS menu, close guard, commands
   state.rs    # AppState: Arc<Core> + force_close flag
   error.rs    # IpcError { kind, message } ← CoreError
+  opener.rs   # DesktopOpener: iris_core::Opener over tauri_plugin_opener::open_path
   events.rs   # forwards CoreEvents to the webview (app.emit, Lagged-safe)
   commands/   # thin shims: settings.rs, connection.rs (profiles, secrets,
               # ssh config hosts), session.rs
               # (connect/reconnect/disconnect/answer_host_key), fs.rs (list_dir/stat/
               # read_link/home_dir/mkdir/rename/delete/chmod/preview),
-              # transfers.rs (async: the core spawns jobs on Tokio), window.rs
+              # transfers.rs (async: the core spawns jobs on Tokio), edit.rs
+              # (open_remote/resolve_edit/list_edits/close_edit), window.rs
 src/
   App.tsx     # the shell: title bar, sidebar, tab bar, Local/Remote panes,
               # preview, transfers
   components/ # Sidebar + ConnectionSidebar/ConnectionRow, ConnectionForm,
-              # PromptHost (SecretPrompt, HostKeyDialog, ConflictDialog),
+              # PromptHost (SecretPrompt, HostKeyDialog, ConflictDialog,
+              # EditConflictDialog),
               # Pane + Breadcrumb + FileTable, ContextMenu, DeleteConfirmModal,
               # ChmodDialog, PreviewPanel, TransferPanel + ProgressBar,
               # DragGhost, WelcomeScreen, Modal, TabBar, TabCloseModal,
@@ -469,7 +544,8 @@ src/
               # transfer, drag, connectionForm, theme, settings (UI prefs),
               # backendSettings (core settings.json), settingsRequest,
               # layout, toast — mirror the backend; don't guess
-  lib/        # connect flow, tabs, useTabShortcuts, sessionStatus,
+  lib/        # connect flow, tabs, edit (open for edit, edit toasts),
+              # editorOverrides, useTabShortcuts, sessionStatus,
               # useCoreEvents, useNativeDrop, paneDrag,
               # transfer (pane → request), pure rules (entries, selection,
               # path, fileFormat, fileName, mode, dateFormat, transferFormat,
