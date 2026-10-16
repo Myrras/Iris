@@ -55,6 +55,7 @@
   text-transform: uppercase;
   color: var(--text-faint);
   flex-shrink: 0;
+  -webkit-user-select: none;
   user-select: none;
 }
 

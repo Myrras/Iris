@@ -10,6 +10,7 @@
   font-size: var(--fs-md);
   color: var(--text);
   cursor: pointer;
+  -webkit-user-select: none;
   user-select: none;
   transition: background var(--dur-1) var(--ease-out);
 }

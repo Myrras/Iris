@@ -25,6 +25,8 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   overflow: hidden;
+  /* WKWebView (Tauri on macOS) only honours the prefixed property. */
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -68,6 +70,7 @@ button {
   /* Stay unselectable even inside a container that opts into `user-select:
      text` (chat log, comment threads, …) — a button's label is an action, not
      prose to select. */
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -130,6 +133,7 @@ select {
   border-radius: var(--radius-sm);
   padding: var(--sp-2) var(--sp-3);
   width: 100%;
+  -webkit-user-select: text;
   user-select: text;
   transition:
     border-color var(--dur-1) var(--ease-out),
@@ -255,4 +259,21 @@ html[data-reduce-motion="true"] *::after {
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
   scroll-behavior: auto !important;
+}
+
+/* Real text stays selectable inside the otherwise unselectable shell. */
+input,
+textarea,
+select,
+pre {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* While a row drag is armed or running nothing may select, not even the
+   fields above (`lib/paneDrag` sets the attribute). */
+html[data-dragging],
+html[data-dragging] * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
 }

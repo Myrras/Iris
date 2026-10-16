@@ -289,3 +289,37 @@ describe("dragging remote rows out of the window", () => {
     });
   });
 });
+
+describe("text selection during a drag", () => {
+  const start = () => {
+    beginPaneDrag("local", 10, 10, () => ["/home/a"]);
+    fireEvent.mouseMove(document.body, {
+      clientX: 40,
+      clientY: 40,
+      buttons: 1,
+    });
+  };
+  const flag = () => document.documentElement.dataset.dragging;
+
+  it("flags the document while dragging and clears it on mouseup", () => {
+    start();
+    expect(flag()).toBe("true");
+    fireEvent.mouseUp(document.body, { clientX: 40, clientY: 40 });
+    expect(flag()).toBeUndefined();
+  });
+
+  it("clears the flag on Escape", () => {
+    start();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(flag()).toBeUndefined();
+  });
+
+  it("drops an existing text selection when the drag starts", () => {
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(document.body);
+    sel?.addRange(range);
+    start();
+    expect(sel?.rangeCount).toBe(0);
+  });
+});

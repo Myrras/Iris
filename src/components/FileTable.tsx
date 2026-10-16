@@ -406,9 +406,15 @@ export function FileTable({
                 height: vr.size,
               }}
               onMouseDown={(e) => {
-                // Keep Shift-click from selecting text across rows.
-                if (e.shiftKey) e.preventDefault();
-                else if (
+                // A press on a row must never start a text selection (it
+                // would sweep across the page during a drag). Default
+                // prevented, the table no longer gets focus by itself.
+                if (editing !== entry.path) {
+                  e.preventDefault();
+                  refocus();
+                }
+                if (
+                  !e.shiftKey &&
                   e.button === 0 &&
                   !e.metaKey &&
                   !e.ctrlKey &&

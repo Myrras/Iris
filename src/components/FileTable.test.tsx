@@ -266,4 +266,17 @@ describe("FileTable", () => {
     });
     expect(handlers.onMove).not.toHaveBeenCalled();
   });
+
+  it("cancels the default of a row press and keeps the table focused", () => {
+    renderTable([entry("a.txt")]);
+    const row = screen.getByText("a.txt");
+    // fireEvent returns false when the default was prevented.
+    expect(fireEvent.mouseDown(row, { button: 0 })).toBe(false);
+    expect(screen.getByRole("grid")).toHaveFocus();
+  });
+
+  it("carries the unselectable table class (rule lives in the CSS module)", () => {
+    renderTable([entry("a.txt")]);
+    expect(screen.getByRole("grid").className).toMatch(/scroll/);
+  });
 });

@@ -141,6 +141,7 @@
 
 /* The fingerprint is compared by eye and may be copied: selectable, wraps. */
 .fingerprint {
+  -webkit-user-select: text;
   user-select: text;
   overflow-wrap: anywhere;
 }

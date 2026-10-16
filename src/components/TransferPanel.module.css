@@ -19,6 +19,7 @@
   gap: var(--sp-2);
   height: var(--statusbar-h);
   padding: 0 var(--sp-2) 0 0;
+  -webkit-user-select: none;
   user-select: none;
 }
 

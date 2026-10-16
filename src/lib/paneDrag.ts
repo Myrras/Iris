@@ -86,6 +86,8 @@ export function beginPaneDrag(
       document.body.style.cursor = "copy";
       // Sweeping across the toolbar or breadcrumb must not select text.
       document.body.style.userSelect = "none";
+      document.documentElement.dataset.dragging = "true";
+      window.getSelection()?.removeAllRanges();
     }
     held = (e.buttons & 1) === 1;
     const out = outsideWindow(e.clientX, e.clientY);
@@ -176,6 +178,7 @@ export function beginPaneDrag(
     window.removeEventListener("mouseout", onOut);
     window.removeEventListener("keydown", onKey, true);
     if (paths) {
+      delete document.documentElement.dataset.dragging;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       drag().end();
