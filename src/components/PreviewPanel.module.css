@@ -1,7 +1,10 @@
 /* The preview island: same chrome as the panes. */
 .panel {
-  width: 340px;
-  flex-shrink: 0;
+  /* Fixed width (and the row's height): content scrolls or fits inside. */
+  flex: 0 0 var(--preview-w);
+  width: var(--preview-w);
+  min-width: var(--preview-w);
+  max-width: var(--preview-w);
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -83,6 +86,7 @@
 
 .body {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -128,6 +132,7 @@
 .textWrap {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   animation: fadeIn var(--dur-2) var(--ease-out);
 }
@@ -161,6 +166,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
+  min-width: 0;
   margin: 0;
   padding: var(--sp-3);
   animation: fadeIn var(--dur-2) var(--ease-out);
@@ -169,6 +175,7 @@
 /* Transparent pixels show a checkerboard in the theme's surface tones. */
 .checker {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   display: flex;
   align-items: center;

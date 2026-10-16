@@ -199,7 +199,8 @@ standalone template:
     `DeleteConfirmModal` (remote: permanent/danger tone; local:
     Trash/warning tone; Enter confirms) and `ChmodDialog` (Get Info + rwx
     grid ⇄ octal, recursive for folders). `PreviewPanel` is the island right
-    of the panes (`layoutStore.previewOpen`; collapsed = slim strip),
+    of the panes (`layoutStore.previewOpen`, persisted, default **open**;
+    collapsed = slim strip) at a fixed `--preview-w` whatever it shows,
     debounced 120ms, size cap from `settingsStore.preview.maxSizeMb`.
     Tests: `tests/remote.rs` covers mkdir/rename/delete/chmod/preview over
     SFTP (the `support/` server now serves open/read/mkdir/rmdir/remove/

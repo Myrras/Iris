@@ -26,14 +26,21 @@ describe("layoutStore", () => {
     expect(reloaded.getState().transfersCollapsed).toBe(true);
   });
 
-  it("remembers whether the preview is open", async () => {
+  it("opens the preview by default and remembers closing it", async () => {
     const store = await freshStore();
-    expect(store.getState().previewOpen).toBe(false);
-    store.getState().togglePreview();
     expect(store.getState().previewOpen).toBe(true);
+    store.getState().togglePreview();
+    expect(store.getState().previewOpen).toBe(false);
     const reloaded = await freshStore();
-    expect(reloaded.getState().previewOpen).toBe(true);
-    reloaded.getState().setPreviewOpen(false);
+    expect(reloaded.getState().previewOpen).toBe(false);
+    reloaded.getState().setPreviewOpen(true);
+    expect((await freshStore()).getState().previewOpen).toBe(true);
+  });
+
+  it("keeps an explicitly closed preview closed and opens it for old layouts", async () => {
+    localStorage.setItem("iris.layout", JSON.stringify({ previewOpen: false }));
     expect((await freshStore()).getState().previewOpen).toBe(false);
+    localStorage.setItem("iris.layout", JSON.stringify({ sidebarWidth: 300 }));
+    expect((await freshStore()).getState().previewOpen).toBe(true);
   });
 });

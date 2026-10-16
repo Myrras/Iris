@@ -93,6 +93,7 @@
   --sidebar-w: 280px;
   --tabbar-h: 38px;
   --statusbar-h: 28px;
+  --preview-w: 340px; /* the preview island: fixed, whatever it shows */
   --checker-size: 16px; /* image preview checkerboard tile */
   --transfers-list-h: 168px; /* the transfer island's job list */
 

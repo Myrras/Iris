@@ -21,7 +21,7 @@ const STORAGE_KEY = "iris.layout";
 const DEFAULTS: LayoutPersisted = {
   sidebarWidth: 280,
   transfersCollapsed: false,
-  previewOpen: false,
+  previewOpen: true,
 };
 
 function clampWidth(width: number): number {
@@ -39,7 +39,7 @@ function load(): LayoutPersisted {
           ? clampWidth(saved.sidebarWidth)
           : DEFAULTS.sidebarWidth,
       transfersCollapsed: saved.transfersCollapsed === true,
-      previewOpen: saved.previewOpen === true,
+      previewOpen: saved.previewOpen !== false,
     };
   } catch {
     return { ...DEFAULTS };

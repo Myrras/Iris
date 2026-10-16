@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../ipc/commands", async (importOriginal) => ({
@@ -62,6 +68,57 @@ describe("PreviewPanel", () => {
     render(<PreviewPanel />);
     expect(preview).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Show preview" }));
+    expect(useLayoutStore.getState().previewOpen).toBe(true);
+  });
+
+  const settle = () => act(() => new Promise((r) => setTimeout(r, 250)));
+  const moveTo = (path: string) =>
+    act(() =>
+      usePaneStore.getState().setSelection("remote", {
+        selection: [path],
+        anchor: path,
+        cursor: path,
+      }),
+    );
+
+  it("keeps the same island (fixed width class) for every kind of content", async () => {
+    const big = entry("big.txt");
+    focus(
+      [big, entry("p.png"), entry("docs", { kind: { type: "dir" } })],
+      null,
+    );
+    render(<PreviewPanel />);
+    const island = screen.getByRole("complementary");
+    const cls = island.className;
+    expect(island).not.toHaveAttribute("style");
+    const states: [string, Preview | null][] = [
+      ["/srv/docs", null],
+      [
+        "/srv/big.txt",
+        {
+          kind: "text",
+          text: "x".repeat(5000),
+          truncated: false,
+          totalSize: 5000,
+        },
+      ],
+      [
+        "/srv/p.png",
+        { kind: "image", mime: "image/png", dataBase64: "AAAA", totalSize: 3 },
+      ],
+    ];
+    for (const [path, result] of states) {
+      if (result) answer(result);
+      moveTo(path);
+      // Loading line first, then the content.
+      expect(screen.getByRole("complementary").className).toBe(cls);
+      await settle();
+      expect(screen.getByRole("complementary").className).toBe(cls);
+      expect(screen.getByRole("complementary")).toBe(island);
+    }
+  });
+
+  it("is open by default", () => {
     expect(useLayoutStore.getState().previewOpen).toBe(true);
   });
 
