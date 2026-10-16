@@ -13,7 +13,9 @@
 //!   close callback of an old connection never touches a newer one.
 //! - **Reconnecting**: a reconnect run (automatic or manual) is under way;
 //!   `run` identifies it, so only that run may install its connection, and
-//!   `cancel` stops it (a user disconnect, or a newer run taking over).
+//!   `cancel` stops it (a user disconnect, or a newer run taking over). An
+//!   automatic run records which attempt it is at, so a manual "Retry now"
+//!   that takes over and fails can carry on with the attempts left.
 //! - **Down**: the connection is gone and nothing is retrying; a manual
 //!   reconnect may revive it.
 //!
@@ -45,11 +47,20 @@ pub struct ReconnectRun {
     pub run: u64,
     pub cancel: CancellationToken,
     pub profile_id: ProfileId,
+    /// The automatic run this one took over, as `(attempt, max_attempts)`:
+    /// the attempt it was waiting for or running. `None` when the session
+    /// was down (or a manual run was under way).
+    pub interrupted: Option<(u32, u32)>,
 }
 
 enum Slot {
     Live(Arc<LiveSession>),
-    Reconnecting { run: u64, cancel: CancellationToken },
+    Reconnecting {
+        run: u64,
+        cancel: CancellationToken,
+        /// `(attempt, max_attempts)` of an automatic run.
+        attempt: Option<(u32, u32)>,
+    },
     Down,
 }
 
@@ -168,22 +179,49 @@ impl SessionManager {
     pub fn begin_reconnect(&self, session_id: SessionId) -> Option<ReconnectRun> {
         let mut map = self.lock();
         let entry = map.get_mut(&session_id)?;
-        match &entry.slot {
+        let interrupted = match &entry.slot {
             Slot::Live(_) => return None,
-            Slot::Reconnecting { cancel, .. } => cancel.cancel(),
-            Slot::Down => {}
-        }
+            Slot::Reconnecting {
+                cancel, attempt, ..
+            } => {
+                cancel.cancel();
+                *attempt
+            }
+            Slot::Down => None,
+        };
         let run = self.next_id();
         let cancel = CancellationToken::new();
         entry.slot = Slot::Reconnecting {
             run,
             cancel: cancel.clone(),
+            attempt: None,
         };
         Some(ReconnectRun {
             run,
             cancel,
             profile_id: entry.profile_id,
+            interrupted,
         })
+    }
+
+    /// An automatic run moved on to `attempt` of `max`. Ignored when the
+    /// run is no longer current.
+    pub fn note_attempt(&self, session_id: SessionId, run: u64, attempt: u32, max: u32) {
+        let mut map = self.lock();
+        if let Some(Entry {
+            slot:
+                Slot::Reconnecting {
+                    run: current,
+                    attempt: noted,
+                    ..
+                },
+            ..
+        }) = map.get_mut(&session_id)
+        {
+            if *current == run {
+                *noted = Some((attempt, max));
+            }
+        }
     }
 
     /// Install the connection a reconnect run opened. Hands it back when the
@@ -239,6 +277,30 @@ mod tests {
         assert!(sessions.mark_lost(id, 1).is_none());
         assert!(sessions.remove(id).is_none());
         assert!(!sessions.is_known(id));
+    }
+
+    #[test]
+    fn a_run_taking_over_learns_where_the_automatic_one_was() {
+        let sessions = SessionManager::new();
+        let id = SessionId::new();
+        sessions.lock().insert(
+            id,
+            Entry {
+                profile_id: ProfileId::new(),
+                slot: Slot::Down,
+            },
+        );
+        let auto = sessions.begin_reconnect(id).unwrap();
+        assert_eq!(auto.interrupted, None);
+        sessions.note_attempt(id, auto.run, 2, 5);
+        // A stale run's progress is ignored.
+        sessions.note_attempt(id, auto.run + 100, 4, 5);
+        let manual = sessions.begin_reconnect(id).unwrap();
+        assert!(auto.cancel.is_cancelled());
+        assert_eq!(manual.interrupted, Some((2, 5)));
+        // The manual run itself records nothing, so a second takeover
+        // starts from scratch.
+        assert_eq!(sessions.begin_reconnect(id).unwrap().interrupted, None);
     }
 
     #[test]

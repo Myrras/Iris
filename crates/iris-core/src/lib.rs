@@ -432,10 +432,13 @@ impl Core {
     /// Logs in like [`Core::connect_with`], so it may prompt for an unknown
     /// host key and take `credentials` for a login that needs them. Paused
     /// transfers of the session continue once it is back. Announces
-    /// `Connecting`, then `Connected` or `Disconnected` with the reason (no
-    /// automatic attempts follow a failed manual one). A session that is
-    /// connected is left alone; one that is unknown or was disconnected by
-    /// the user is `NotConnected`.
+    /// `Connecting`, then `Connected`, or on failure: a "Retry now" that
+    /// interrupted the automatic reconnect goes back to it with the attempts
+    /// that were left (the manual try counts as the one it was waiting for)
+    /// unless the failure is one no retry can fix; otherwise the session is
+    /// `Disconnected` with the reason. The error is returned either way. A
+    /// session that is connected is left alone; one that is unknown or was
+    /// disconnected by the user is `NotConnected`.
     pub async fn reconnect(
         &self,
         session_id: SessionId,
@@ -457,7 +460,19 @@ impl Core {
             }
             Err(e) => {
                 tracing::info!(kind = e.kind(), "reconnect failed");
-                self.give_up(session_id, profile_id, run.run, e.to_string());
+                match run.interrupted {
+                    Some((attempt, max)) if unrecoverable(&e).is_none() => {
+                        // Back to the backoff loop, on this run (its cancel
+                        // token is the one the session now holds).
+                        tokio::spawn(self.clone().auto_reconnect(
+                            session_id,
+                            run,
+                            attempt + 1..=max,
+                            e.to_string(),
+                        ));
+                    }
+                    _ => self.give_up(session_id, profile_id, run.run, e.to_string()),
+                }
                 Err(e)
             }
         }
@@ -604,7 +619,10 @@ impl Core {
         };
         match run {
             Some((runtime, run)) => {
-                runtime.spawn(self.clone().auto_reconnect(session_id, run, max, reason));
+                runtime.spawn(
+                    self.clone()
+                        .auto_reconnect(session_id, run, 1..=max, reason),
+                );
             }
             None => self.publish_state(
                 session_id,
@@ -616,24 +634,29 @@ impl Core {
         }
     }
 
-    /// Up to `max` attempts with backoff ([`reconnect_delay_secs`]), each a
-    /// login without prompts (remembered secrets, the agent, key files). A
-    /// failure no retry can fix — a secret or a host key decision is needed,
-    /// the login or the host key is refused — gives up at once.
+    /// The `attempts` (of `1..=max`) with backoff ([`reconnect_delay_secs`]),
+    /// each a login without prompts (remembered secrets, the agent, key
+    /// files). A failure no retry can fix — a secret or a host key decision
+    /// is needed, the login or the host key is refused — gives up at once.
     async fn auto_reconnect(
         self,
         session_id: SessionId,
         run: ReconnectRun,
-        max: u32,
+        attempts: std::ops::RangeInclusive<u32>,
         lost_reason: String,
     ) {
         let ReconnectRun {
             run,
             cancel,
             profile_id,
+            ..
         } = run;
+        let max = *attempts.end();
         let mut last_error = lost_reason;
-        for attempt in 1..=max {
+        for attempt in attempts {
+            self.inner
+                .sessions
+                .note_attempt(session_id, run, attempt, max);
             let secs = reconnect_delay_secs(attempt);
             let reconnecting = |next_retry_in_secs| SessionState::Reconnecting {
                 attempt,

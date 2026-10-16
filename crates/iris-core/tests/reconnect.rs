@@ -439,6 +439,97 @@ async fn a_changed_host_key_stops_reconnecting() {
     assert!(reason(&down).contains("host key"), "{down:?}");
 }
 
+fn is_waiting_for(attempt: u32) -> impl Fn(&SessionState) -> bool {
+    move |s| {
+        matches!(s, SessionState::Reconnecting { attempt: a, next_retry_in_secs, .. }
+            if *a == attempt && *next_retry_in_secs > 0)
+    }
+}
+
+#[tokio::test]
+async fn a_failed_retry_now_goes_back_to_the_remaining_automatic_attempts() {
+    let server = TestServer::start(None).await;
+    let f = Fixture::new(&server, 4, true);
+    // Long enough waits to press "Retry now" during one.
+    f.core
+        .set_reconnect_backoff_unit(Duration::from_millis(200));
+    let session = f.core.connect(f.profile, None, None).await.unwrap();
+    f.states.clear_after_connect(session).await;
+
+    server.set_refusing(true);
+    server.kill_all();
+    f.states
+        .wait_for(session, "the wait for attempt 2", is_waiting_for(2))
+        .await;
+    f.states.clear();
+    let err = f
+        .core
+        .reconnect(session, Credentials::default())
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), "connectFailed", "{err:?}");
+
+    // The manual try took attempt 2's place; attempt 3 of 4 is next.
+    f.states
+        .wait_for(session, "attempt 3", is_waiting_for(3))
+        .await;
+    let states = f.states.of(session);
+    assert_eq!(states[0], SessionState::Connecting, "{states:#?}");
+    assert_eq!(
+        states[1],
+        SessionState::Reconnecting {
+            attempt: 3,
+            max_attempts: 4,
+            next_retry_in_secs: 4,
+        },
+        "{states:#?}"
+    );
+    assert!(!states.iter().any(is_disconnected), "{states:#?}");
+
+    // The loop carries on as before and gets through once it can.
+    server.set_refusing(false);
+    f.states
+        .wait_for(session, "the reconnect", |s| *s == SessionState::Connected)
+        .await;
+    assert_eq!(f.core.sessions(), vec![session]);
+}
+
+#[tokio::test]
+async fn a_failed_retry_now_on_the_last_attempt_gives_up() {
+    let server = TestServer::start(None).await;
+    let f = Fixture::new(&server, 2, true);
+    f.core
+        .set_reconnect_backoff_unit(Duration::from_millis(200));
+    let session = f.core.connect(f.profile, None, None).await.unwrap();
+    f.states.clear_after_connect(session).await;
+
+    server.set_refusing(true);
+    server.kill_all();
+    f.states
+        .wait_for(session, "the wait for attempt 2", is_waiting_for(2))
+        .await;
+    f.states.clear();
+    f.core
+        .reconnect(session, Credentials::default())
+        .await
+        .unwrap_err();
+    let down = f
+        .states
+        .wait_for(session, "giving up", is_disconnected)
+        .await;
+    assert!(
+        reason(&down).starts_with("could not reconnect after 2 attempts"),
+        "{down:?}"
+    );
+    assert!(
+        !f.states
+            .of(session)
+            .iter()
+            .any(|s| matches!(s, SessionState::Reconnecting { .. })),
+        "no attempts were left"
+    );
+}
+
 #[tokio::test]
 async fn a_folder_walk_cut_off_by_a_drop_continues_after_a_reconnect() {
     let server = TestServer::start(None).await;
