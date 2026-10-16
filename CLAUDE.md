@@ -197,8 +197,15 @@ standalone template:
     `DeleteConfirmModal` (remote: permanent/danger tone; local:
     Trash/warning tone; Enter confirms) and `ChmodDialog` (Get Info + rwx
     grid ⇄ octal, recursive for folders). `PreviewPanel` is the island right
-    of the panes (`layoutStore.previewOpen`; collapsed = slim strip),
-    debounced 120ms, size cap from `settingsStore.preview.maxSizeMb`.
+    of the panes, rendered **only when the focused entry has a preview**
+    (non-empty text or a supported image; folders, specials, binary, too
+    large, empty, errors and no selection render nothing, so the panes take
+    the full width). `layoutStore.previewOpen` stays the preference: open =
+    island, closed = slim strip, both only when previewable. It reads even
+    while collapsed (debounced 120ms, size cap from
+    `settingsStore.preview.maxSizeMb`); a pending read keeps the current
+    state and content, a hidden island stays hidden until displayable;
+    `usePresence` animates it in and out.
     Tests: `tests/remote.rs` covers mkdir/rename/delete/chmod/preview over
     SFTP (the `support/` server now serves open/read/mkdir/rmdir/remove/
     rename/setstat); `tests/core.rs` the local batch ops with a fake trash.
