@@ -7,7 +7,9 @@
  *
  * Shortcuts (Finder's on macOS, with Ctrl for Cmd elsewhere): Cmd+Shift+N new
  * folder; F2, or Enter on macOS, rename; Delete / Cmd+Backspace delete (always
- * confirmed); Cmd+I Get Info; Space preview; Cmd+Down / Cmd+O open; Cmd+Up
+ * confirmed); Cmd+I Get Info; Space preview; typing a name selects the
+ * first row starting with it (Finder's type-to-select; Space joins the
+ * typed name while typing); Cmd+Down / Cmd+O open; Cmd+Up
  * enclosing folder. Transfers: Cmd+Shift+U uploads the Local selection,
  * Cmd+Shift+D downloads the Remote selection, and F5 (Total Commander's
  * "copy to the other pane") does either, into the other pane's folder.
@@ -48,6 +50,7 @@ import { baseName, parentPath } from "../lib/path";
 import { isMac } from "../lib/platform";
 import { clickSelection, moveCursor } from "../lib/selection";
 import { requestDisconnectSession } from "../lib/tabs";
+import { createTypeAheadBuffer, matchTypeAhead } from "../lib/typeAhead";
 import { otherPane, startTransfer } from "../lib/transfer";
 import { useConnectionFormStore } from "../state/connectionFormStore";
 import { useDragStore } from "../state/dragStore";
@@ -406,6 +409,23 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     },
     [id, paths, store],
   );
+  // Type-to-select: the typed prefix lives here and starts over on a new
+  // folder or tab.
+  const typeAhead = useRef(createTypeAheadBuffer());
+  const activeTabId = useTabsStore((s) => s.activeTabId);
+  useEffect(() => {
+    typeAhead.current.reset();
+  }, [pane.target, pane.path, activeTabId]);
+  const typeSelect = (char: string) => {
+    const at = matchTypeAhead(entries, typeAhead.current.push(char));
+    if (at === null) return;
+    const path = entries[at].path;
+    store().setSelection(id, {
+      selection: [path],
+      anchor: path,
+      cursor: path,
+    });
+  };
   const onSelectAll = useCallback(() => {
     const { cursor } = store().panes[id];
     store().setSelection(id, {
@@ -501,11 +521,21 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     else if (e.key === "Delete" || (mod && e.key === "Backspace")) askDelete();
     else if (mod && key === "i") getInfo();
     else if (mod && !e.shiftKey && key === "e" && remote) editFile();
+    else if (e.key === " " && !mod && !e.altKey && typeAhead.current.active())
+      typeSelect(" ");
     else if (e.key === " " && !mod) togglePreview();
     else if (mod && (e.key === "ArrowDown" || key === "o")) openCursor();
     else if (mod && e.key === "ArrowUp") void store().up(id);
     else if ((mod && e.shiftKey && key === copyKey) || e.key === "F5")
       copyToOther();
+    else if (
+      [...e.key].length === 1 &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !e.nativeEvent.isComposing
+    )
+      typeSelect(e.key);
     else handled = false;
     if (handled) e.preventDefault();
   }

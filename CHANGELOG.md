@@ -11,6 +11,7 @@ when it merges.
 
 ## [Unreleased]
 
+- Type a file name in a pane to select it, like in Finder.
 - Island layout in Podium's look: a sidebar with a Connections section, Local
   and Remote file panes side by side, and a collapsible Transfers panel.
 - Dark, light and retro themes with a crossfade when switching.

@@ -193,7 +193,9 @@ standalone template:
     `focusedEntry`), `actionTargets` = selection or cursor. `FileTable`
     shows the inline `RenameField` (basename preselected; Enter/blur commit,
     Escape cancels) and reports right-clicks; `Pane` owns the shortcuts
-    (`isMac` picks ⌘ vs Ctrl; Enter renames on macOS), the `ContextMenu`,
+    (`isMac` picks ⌘ vs Ctrl; Enter renames on macOS; typing a name
+    selects the first visible row starting with it, `lib/typeAhead`: 1 s
+    buffer, closest match, Space joins the name while typing), the `ContextMenu`,
     `DeleteConfirmModal` (remote: permanent/danger tone; local:
     Trash/warning tone; Enter confirms) and `ChmodDialog` (Get Info + rwx
     grid ⇄ octal, recursive for folders). `PreviewPanel` is the island right
