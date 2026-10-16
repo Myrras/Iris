@@ -489,6 +489,10 @@ impl Opener for NoEditor {
     fn open(&self, _path: &std::path::Path, _app: Option<&str>) -> CoreResult<()> {
         Ok(())
     }
+
+    fn reveal(&self, _path: &std::path::Path) -> CoreResult<()> {
+        Ok(())
+    }
 }
 
 /// Wait (bounded) for the first event `pick` accepts.

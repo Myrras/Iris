@@ -18,7 +18,12 @@
  * the two panes' folders, from this pane to the other.
  * Remote files open in the local editor (`lib/edit`) with Cmd+E, the
  * context menu's "Open in Editor", or by opening them (double-click, Enter
- * off macOS, Cmd+Down / Cmd+O); folders still navigate.
+ * off macOS, Cmd+Down / Cmd+O); folders still navigate. Local files open
+ * the same way (`lib/openLocal`) in the application set for their type
+ * (Settings → Editors) or the OS default; Option+Cmd+R (Ctrl+Alt+R
+ * elsewhere) or the context menu's "Show in Finder" (Explorer / File
+ * Manager) reveals the Local selection, or the folder itself, in the OS
+ * file manager.
  *
  * Rows dragged onto the other pane (or a folder row in it) transfer too
  * (`lib/paneDrag`); the pane under the drag, and the folder row, light up.
@@ -48,6 +53,11 @@ import { connectInTab, retrySession } from "../lib/connect";
 import { downloadTo } from "../lib/downloadTo";
 import { isEditable as isEditableFile, openForEdit } from "../lib/edit";
 import { isDirLike, visibleEntries } from "../lib/entries";
+import {
+  fileManagerName,
+  openLocalFile,
+  revealLocalPath,
+} from "../lib/openLocal";
 import { startPaneDrag } from "../lib/paneDrag";
 import { baseName, parentPath } from "../lib/path";
 import { isMac } from "../lib/platform";
@@ -344,6 +354,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   const store = usePaneStore.getState;
   const remote = pane.target?.kind === "remote";
   const paneActive = usePaneStore((s) => s.active === id);
+  const isLocal = pane.target?.kind === "local";
 
   // Copying to the other pane needs a live session and both folders.
   const otherPath = usePaneStore((s) => s.panes[otherPane(id)].path);
@@ -447,9 +458,11 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
       if (isDirLike(entry)) void store().navigate(id, entry.path);
       else if (editSession && isEditableFile(entry)) {
         void openForEdit(editSession, entry.path);
+      } else if (isLocal && isEditableFile(entry)) {
+        void openLocalFile(entry.path);
       }
     },
-    [id, store, editSession],
+    [id, store, editSession, isLocal],
   );
 
   // -- Actions (shared by shortcuts, toolbar and context menu) ---------------
@@ -482,6 +495,19 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     if (editSession && list.length === 1 && isEditableFile(list[0])) {
       void openForEdit(editSession, list[0].path);
     }
+  };
+  const openDefault = (entry: Entry) => {
+    if (isLocal && isEditableFile(entry)) void openLocalFile(entry.path, true);
+  };
+  // The selection (its first row), else the folder shown.
+  const reveal = () => {
+    if (!isLocal) return;
+    const [first] = targets();
+    const path = first?.path ?? pane.path;
+    if (path) void revealLocalPath(path);
+  };
+  const revealFolder = () => {
+    if (isLocal && pane.path) void revealLocalPath(pane.path);
   };
   const openCursor = () => {
     const [entry] = targets();
@@ -544,6 +570,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
       copyToOther();
     // By code: Option+S types "ß" on a Mac keyboard.
     else if (mod && e.altKey && !e.shiftKey && e.code === "KeyS") openSync();
+    else if (mod && e.altKey && !e.shiftKey && e.code === "KeyR") reveal();
     else if (
       [...e.key].length === 1 &&
       !e.metaKey &&
@@ -583,16 +610,41 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
       disabled: !canCopy,
       onSelect: openSync,
     };
-    if (!entry) return [create, sync, refresh];
+    const showInFileManager = (onSelect: () => void): ContextMenuItem => ({
+      label: `Show in ${fileManagerName}`,
+      disabled: !hasFolder,
+      onSelect,
+    });
+    if (!entry) {
+      return [
+        create,
+        sync,
+        ...(isLocal ? [showInFileManager(revealFolder)] : []),
+        refresh,
+      ];
+    }
     const list = targets();
     const single = list.length === 1;
     const noModes = list.every((t) => t.mode === null);
     return [
       {
         label: "Open",
-        disabled: !(single && isDirLike(entry)),
+        disabled: !(
+          single &&
+          (isDirLike(entry) || (isLocal && isEditableFile(entry)))
+        ),
         onSelect: () => onOpen(entry),
       },
+      ...(isLocal
+        ? [
+            {
+              label: "Open With Default App",
+              disabled: !(single && isEditableFile(entry)),
+              onSelect: () => openDefault(entry),
+            },
+            showInFileManager(reveal),
+          ]
+        : []),
       ...(remote
         ? [
             {

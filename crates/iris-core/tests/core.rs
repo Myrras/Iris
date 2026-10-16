@@ -165,3 +165,155 @@ mod local_ops {
         ));
     }
 }
+
+// -- Open local files and reveal ----------------------------------------------
+
+mod open_local {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+
+    use iris_core::{Core, CoreResult, IrisSettings, Opener};
+
+    /// Records what it was asked to open or reveal; nothing is launched.
+    #[derive(Default)]
+    struct FakeOpener {
+        opened: Mutex<Vec<(PathBuf, Option<String>)>>,
+        revealed: Mutex<Vec<PathBuf>>,
+    }
+
+    impl Opener for FakeOpener {
+        fn open(&self, path: &Path, app: Option<&str>) -> CoreResult<()> {
+            self.opened
+                .lock()
+                .unwrap()
+                .push((path.to_path_buf(), app.map(str::to_string)));
+            Ok(())
+        }
+
+        fn reveal(&self, path: &Path) -> CoreResult<()> {
+            self.revealed.lock().unwrap().push(path.to_path_buf());
+            Ok(())
+        }
+    }
+
+    fn core() -> (Core, Arc<FakeOpener>, tempfile::TempDir) {
+        let core = Core::new();
+        let opener = Arc::new(FakeOpener::default());
+        core.set_opener(opener.clone());
+        core.save_settings(IrisSettings {
+            editor_overrides: [(
+                "csv".to_string(),
+                "/Applications/Fictional Sheets.app".into(),
+            )]
+            .into(),
+            ..IrisSettings::default()
+        })
+        .unwrap();
+        (core, opener, tempfile::tempdir().unwrap())
+    }
+
+    fn s(p: &Path) -> String {
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn opens_with_the_override_for_the_extension_or_the_os_default() {
+        let (core, opener, dir) = core();
+        let csv = dir.path().join("Data.CSV");
+        let txt = dir.path().join("notes.txt");
+        std::fs::write(&csv, "a,b\n").unwrap();
+        std::fs::write(&txt, "x").unwrap();
+
+        core.open_local(&s(&csv)).unwrap();
+        core.open_local(&s(&txt)).unwrap();
+        // "Open with default app" skips the override.
+        core.open_local_default(&s(&csv)).unwrap();
+
+        assert_eq!(
+            *opener.opened.lock().unwrap(),
+            vec![
+                (
+                    csv.clone(),
+                    Some("/Applications/Fictional Sheets.app".into())
+                ),
+                (txt, None),
+                (csv, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn opens_an_application_bundle_but_not_a_folder() {
+        let (core, opener, dir) = core();
+        let app = dir.path().join("Fictional.app");
+        let folder = dir.path().join("folder");
+        std::fs::create_dir(&app).unwrap();
+        std::fs::create_dir(&folder).unwrap();
+
+        core.open_local(&s(&app)).unwrap();
+        assert_eq!(opener.opened.lock().unwrap().len(), 1);
+
+        let err = core.open_local(&s(&folder)).unwrap_err();
+        assert_eq!(err.kind(), "invalidInput");
+        assert_eq!(opener.opened.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn refuses_missing_and_relative_paths_without_calling_the_opener() {
+        let (core, opener, dir) = core();
+        let missing = dir.path().join("gone.txt");
+
+        let err = core.open_local(&s(&missing)).unwrap_err();
+        assert_eq!(err.kind(), "notFound");
+        // The message names the file, not the folder it was in.
+        assert_eq!(err.to_string(), "not found: gone.txt");
+        assert_eq!(
+            core.open_local("notes.txt").unwrap_err().kind(),
+            "invalidInput"
+        );
+        assert_eq!(
+            core.open_local("../notes.txt").unwrap_err().kind(),
+            "invalidInput"
+        );
+        assert_eq!(
+            core.open_local_default("").unwrap_err().kind(),
+            "invalidInput"
+        );
+        assert_eq!(
+            core.reveal_local("notes.txt").unwrap_err().kind(),
+            "invalidInput"
+        );
+        assert_eq!(
+            core.reveal_local(&s(&missing)).unwrap_err().kind(),
+            "notFound"
+        );
+
+        assert!(opener.opened.lock().unwrap().is_empty());
+        assert!(opener.revealed.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn reveal_hands_files_and_folders_to_the_opener() {
+        let (core, opener, dir) = core();
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, "x").unwrap();
+
+        core.reveal_local(&s(&file)).unwrap();
+        core.reveal_local(&s(dir.path())).unwrap();
+
+        assert_eq!(
+            *opener.revealed.lock().unwrap(),
+            vec![file, dir.path().to_path_buf()]
+        );
+    }
+
+    #[test]
+    fn a_bare_core_cannot_open_or_reveal() {
+        let core = Core::new();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, "x").unwrap();
+        assert_eq!(core.open_local(&s(&file)).unwrap_err().kind(), "config");
+        assert_eq!(core.reveal_local(&s(&file)).unwrap_err().kind(), "config");
+    }
+}

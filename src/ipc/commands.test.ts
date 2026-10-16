@@ -19,8 +19,10 @@ import {
   finishDragOut,
   prepareDragOut,
   listEdits,
+  openLocal,
   openRemote,
   resolveEdit,
+  revealLocal,
   enqueueTransfers,
   hasActiveTransfers,
   listTransfers,
@@ -289,6 +291,27 @@ describe("remote edit commands", () => {
     });
     expect(invoke).toHaveBeenCalledWith("list_edits");
     expect(invoke).toHaveBeenCalledWith("close_edit", { editId: "e-1" });
+  });
+});
+
+describe("local open commands", () => {
+  beforeEach(() => vi.mocked(invoke).mockClear());
+
+  it("names the commands and keys like the Rust handlers", async () => {
+    await openLocal("/Users/alice/data.csv");
+    await openLocal("/Users/alice/data.csv", true);
+    await revealLocal("/Users/alice");
+    expect(invoke).toHaveBeenCalledWith("open_local", {
+      path: "/Users/alice/data.csv",
+      useDefault: false,
+    });
+    expect(invoke).toHaveBeenCalledWith("open_local", {
+      path: "/Users/alice/data.csv",
+      useDefault: true,
+    });
+    expect(invoke).toHaveBeenCalledWith("reveal_local", {
+      path: "/Users/alice",
+    });
   });
 });
 

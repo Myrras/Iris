@@ -5,6 +5,7 @@ pub mod connection;
 pub mod drag_out;
 pub mod edit;
 pub mod fs;
+pub mod open;
 pub mod session;
 pub mod settings;
 pub mod sync;

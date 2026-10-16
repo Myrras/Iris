@@ -18,6 +18,8 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   chmod: vi.fn(() => Promise.resolve({ succeeded: [], failed: [] })),
   enqueueTransfers: vi.fn(() => Promise.resolve("b-1")),
   openRemote: vi.fn(() => Promise.resolve("e-1")),
+  openLocal: vi.fn(() => Promise.resolve()),
+  revealLocal: vi.fn(() => Promise.resolve()),
   listTransfers: vi.fn(() => new Promise(() => undefined)),
 }));
 vi.mock("../lib/connect", () => ({
@@ -35,12 +37,15 @@ import {
   enqueueTransfers,
   listDir,
   mkdir,
+  openLocal as openLocalIpc,
   openRemote,
   rename,
+  revealLocal,
 } from "../ipc/commands";
 import type { ConnectionProfile, Entry, SessionState } from "../ipc/types";
 import { connectInTab, retrySession } from "../lib/connect";
 import { requestDisconnectSession } from "../lib/tabs";
+import { useToastStore } from "../state/toastStore";
 import { useConnectionFormStore } from "../state/connectionFormStore";
 import { useDragStore } from "../state/dragStore";
 import { useLayoutStore } from "../state/layoutStore";
@@ -444,6 +449,8 @@ describe("Pane", () => {
         .map((item) => item.textContent);
       expect(labels).toEqual([
         "Open",
+        "Open With Default App",
+        "Show in File Manager",
         "Preview",
         "Upload to Remote",
         "Sync Folders…",
@@ -462,7 +469,121 @@ describe("Pane", () => {
       fireEvent.contextMenu(grid());
       expect(
         screen.getAllByRole("menuitem").map((item) => item.textContent),
-      ).toEqual(["New Folder", "Sync Folders…", "Refresh"]);
+      ).toEqual([
+        "New Folder",
+        "Sync Folders…",
+        "Show in File Manager",
+        "Refresh",
+      ]);
+    });
+
+    it("opens a local file on double-click and Enter; folders still navigate", async () => {
+      await openLocal();
+      fireEvent.doubleClick(screen.getByText("notes.txt"));
+      await waitFor(() =>
+        expect(vi.mocked(openLocalIpc)).toHaveBeenCalledWith(
+          "/home/alice/notes.txt",
+          false,
+        ),
+      );
+      select("todo.txt");
+      fireEvent.keyDown(grid(), { key: "Enter" });
+      await waitFor(() =>
+        expect(vi.mocked(openLocalIpc)).toHaveBeenCalledWith(
+          "/home/alice/todo.txt",
+          false,
+        ),
+      );
+      expect(openRemote).not.toHaveBeenCalled();
+
+      fireEvent.doubleClick(screen.getByText("docs"));
+      await waitFor(() =>
+        expect(usePaneStore.getState().panes.local.path).toBe(
+          "/home/alice/docs",
+        ),
+      );
+      expect(vi.mocked(openLocalIpc)).toHaveBeenCalledTimes(2);
+    });
+
+    it("opens the local selection with Ctrl+O and Ctrl+Down", async () => {
+      await openLocal();
+      select("notes.txt");
+      fireEvent.keyDown(grid(), { key: "o", ctrlKey: true });
+      await waitFor(() =>
+        expect(vi.mocked(openLocalIpc)).toHaveBeenCalledWith(
+          "/home/alice/notes.txt",
+          false,
+        ),
+      );
+    });
+
+    it("toasts when the core cannot open the file", async () => {
+      vi.mocked(openLocalIpc).mockRejectedValueOnce({
+        kind: "config",
+        message: "could not open the file: no application is set for its type",
+      });
+      await openLocal();
+      fireEvent.doubleClick(screen.getByText("notes.txt"));
+      await waitFor(() =>
+        expect(useToastStore.getState().toasts.map((t) => t.message)).toContain(
+          "Could not open notes.txt",
+        ),
+      );
+    });
+
+    it("offers Open, Open With Default App and Show in File Manager for local files", async () => {
+      await openLocal();
+      fireEvent.contextMenu(screen.getByText("notes.txt"));
+      expect(screen.getByRole("menuitem", { name: "Open" })).toBeEnabled();
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Open With Default App" }),
+      );
+      await waitFor(() =>
+        expect(vi.mocked(openLocalIpc)).toHaveBeenCalledWith(
+          "/home/alice/notes.txt",
+          true,
+        ),
+      );
+
+      fireEvent.contextMenu(screen.getByText("notes.txt"));
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Show in File Manager" }),
+      );
+      await waitFor(() =>
+        expect(revealLocal).toHaveBeenCalledWith("/home/alice/notes.txt"),
+      );
+
+      // A folder navigates; it has no default app.
+      fireEvent.contextMenu(screen.getByText("docs"));
+      expect(
+        screen.getByRole("menuitem", { name: "Open With Default App" }),
+      ).toBeDisabled();
+    });
+
+    it("reveals the selection with Ctrl+Alt+R, else the folder", async () => {
+      await openLocal();
+      select("notes.txt");
+      fireEvent.keyDown(grid(), {
+        key: "®",
+        code: "KeyR",
+        ctrlKey: true,
+        altKey: true,
+      });
+      await waitFor(() =>
+        expect(revealLocal).toHaveBeenCalledWith("/home/alice/notes.txt"),
+      );
+      // A plain Ctrl+R (or Alt+R) is not the shortcut.
+      fireEvent.keyDown(grid(), { key: "r", code: "KeyR", ctrlKey: true });
+      expect(revealLocal).toHaveBeenCalledTimes(1);
+
+      // The background menu reveals the folder shown.
+      fireEvent.contextMenu(grid());
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Show in File Manager" }),
+      );
+      await waitFor(() =>
+        expect(revealLocal).toHaveBeenLastCalledWith("/home/alice"),
+      );
     });
 
     it("calls a remote delete permanent", async () => {
@@ -569,6 +690,12 @@ describe("Pane", () => {
       // A local file is not opened for editing.
       fireEvent.doubleClick(within(localPane()).getByText("notes.txt"));
       expect(openRemote).toHaveBeenCalledTimes(1);
+      // ...and a remote one is never opened as a local path.
+      expect(vi.mocked(openLocalIpc)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(openLocalIpc)).toHaveBeenCalledWith(
+        "/home/alice/notes.txt",
+        false,
+      );
 
       fireEvent.doubleClick(within(remotePane()).getByText("www"));
       await waitFor(() =>
@@ -601,6 +728,18 @@ describe("Pane", () => {
       expect(openRemote).toHaveBeenCalledTimes(1);
     });
 
+    it("does not reveal remote rows with Ctrl+Alt+R", async () => {
+      await openBoth();
+      fireEvent.click(within(remotePane()).getByText("readme.md"));
+      fireEvent.keyDown(within(remotePane()).getByRole("grid"), {
+        key: "®",
+        code: "KeyR",
+        ctrlKey: true,
+        altKey: true,
+      });
+      expect(revealLocal).not.toHaveBeenCalled();
+    });
+
     it("offers Open in Editor in the remote context menu only", async () => {
       await openBoth();
       fireEvent.contextMenu(within(remotePane()).getByText("readme.md"));
@@ -613,6 +752,13 @@ describe("Pane", () => {
       expect(
         screen.getByRole("menuitem", { name: "Open in Editor" }),
       ).toBeDisabled();
+      // Remote rows have no local-only entries.
+      expect(
+        screen.queryByRole("menuitem", { name: "Show in File Manager" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("menuitem", { name: "Open With Default App" }),
+      ).toBeNull();
       fireEvent.keyDown(document, { key: "Escape" });
 
       fireEvent.contextMenu(within(localPane()).getByText("notes.txt"));

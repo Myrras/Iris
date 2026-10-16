@@ -11,6 +11,10 @@ when it merges.
 
 ## [Unreleased]
 
+- Local files open in their application: double-click, Enter (not on macOS),
+  ⌘O / ⌘↓ or the context menu's Open use the app set in Settings → Editors,
+  else the system default. "Show in Finder" (Explorer / File Manager) in the
+  context menu or ⌥⌘R / Ctrl+Alt+R reveals the selection, or the folder.
 - Sync folders: the Sync button in either pane (also in the context menu,
   ⌥⌘S / Ctrl+Alt+S) compares the Local and Remote folders and copies one
   way, Local → Remote or Remote → Local. Update copies new and changed files;

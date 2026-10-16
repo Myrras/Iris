@@ -205,6 +205,8 @@ pub fn run() {
             commands::edit::resolve_edit,
             commands::edit::list_edits,
             commands::edit::close_edit,
+            commands::open::open_local,
+            commands::open::reveal_local,
             commands::drag_out::prepare_drag_out,
             commands::drag_out::cancel_drag_out,
             commands::drag_out::finish_drag_out,

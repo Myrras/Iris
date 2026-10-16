@@ -49,6 +49,7 @@ pub mod error;
 pub mod events;
 pub mod fs;
 pub mod ids;
+mod open_local;
 mod persist;
 pub mod preview;
 pub mod secret;

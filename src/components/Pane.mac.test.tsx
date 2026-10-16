@@ -9,9 +9,11 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   listDir: vi.fn(),
   homeDir: vi.fn(() => Promise.resolve("/Users/alice")),
   mkdir: vi.fn(() => Promise.resolve()),
+  openLocal: vi.fn(() => Promise.resolve()),
+  revealLocal: vi.fn(() => Promise.resolve()),
 }));
 
-import { listDir, mkdir } from "../ipc/commands";
+import { listDir, mkdir, openLocal, revealLocal } from "../ipc/commands";
 import type { Entry } from "../ipc/types";
 import { initialPane, usePaneStore } from "../state/paneStore";
 import { stubViewport } from "../test/viewport";
@@ -33,6 +35,7 @@ function entry(name: string, dir = false): Entry {
 }
 
 beforeEach(async () => {
+  vi.clearAllMocks();
   usePaneStore.setState({
     panes: { local: initialPane(), remote: initialPane() },
   });
@@ -80,5 +83,42 @@ describe("Pane on macOS", () => {
     expect(mkdir).not.toHaveBeenCalled();
     fireEvent.keyDown(grid, { key: "N", metaKey: true, shiftKey: true });
     await waitFor(() => expect(mkdir).toHaveBeenCalledTimes(1));
+  });
+
+  it("opens a file with Cmd+O and a double-click, not with Enter (rename)", async () => {
+    fireEvent.click(screen.getByText("todo.txt"));
+    fireEvent.keyDown(screen.getByRole("grid"), { key: "o", metaKey: true });
+    await waitFor(() =>
+      expect(openLocal).toHaveBeenCalledWith("/Users/alice/todo.txt", false),
+    );
+    fireEvent.keyDown(screen.getByRole("grid"), { key: "Enter" });
+    expect(openLocal).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(screen.getByRole("grid"), { key: "Escape" });
+  });
+
+  it("shows the selection in Finder with Option+Cmd+R and the menu", async () => {
+    fireEvent.click(screen.getByText("todo.txt"));
+    fireEvent.keyDown(screen.getByRole("grid"), {
+      key: "®",
+      code: "KeyR",
+      metaKey: true,
+      altKey: true,
+    });
+    await waitFor(() =>
+      expect(revealLocal).toHaveBeenCalledWith("/Users/alice/todo.txt"),
+    );
+    // Cmd+R alone is not the shortcut.
+    fireEvent.keyDown(screen.getByRole("grid"), {
+      key: "r",
+      code: "KeyR",
+      metaKey: true,
+    });
+    expect(revealLocal).toHaveBeenCalledTimes(1);
+
+    fireEvent.contextMenu(screen.getByText("Documents"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Show in Finder" }));
+    await waitFor(() =>
+      expect(revealLocal).toHaveBeenLastCalledWith("/Users/alice/Documents"),
+    );
   });
 });

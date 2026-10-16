@@ -80,6 +80,10 @@ pub trait Opener: Send + Sync {
     /// Open `path` with `app` (a path to an application or executable), or
     /// with the OS default when `None`. Errors are app-owned text.
     fn open(&self, path: &Path, app: Option<&str>) -> CoreResult<()>;
+
+    /// Show `path` in the OS file manager (Finder / Explorer), selected in
+    /// its folder. Errors are app-owned text.
+    fn reveal(&self, path: &Path) -> CoreResult<()>;
 }
 
 /// The opener of a core the shell did not set one on.
@@ -88,6 +92,12 @@ struct NoOpener;
 impl Opener for NoOpener {
     fn open(&self, _path: &Path, _app: Option<&str>) -> CoreResult<()> {
         Err(CoreError::Config("opening files is not configured".into()))
+    }
+
+    fn reveal(&self, _path: &Path) -> CoreResult<()> {
+        Err(CoreError::Config(
+            "showing files in the file manager is not configured".into(),
+        ))
     }
 }
 
@@ -442,8 +452,12 @@ impl Core {
     fn open_in_editor(&self, local: &Path) -> CoreResult<()> {
         let settings = self.settings();
         let app = extension(local).and_then(|ext| settings.editor_overrides.get(&ext));
-        let opener = Arc::clone(&self.inner.edits.opener.lock().expect(LOCK_POISONED));
-        opener.open(local, app.map(String::as_str))
+        self.opener().open(local, app.map(String::as_str))
+    }
+
+    /// The injected opener (the shell's; a failing one in a bare `Core`).
+    pub(crate) fn opener(&self) -> Arc<dyn Opener> {
+        Arc::clone(&self.inner.edits.opener.lock().expect(LOCK_POISONED))
     }
 
     /// The task that handles one edit's signals in order. It holds the core
@@ -750,7 +764,7 @@ fn watch_failed() -> CoreError {
 
 /// The lower-cased extension of a file name (a dotfile's leading dot is
 /// not one).
-fn extension(path: &Path) -> Option<String> {
+pub(crate) fn extension(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_string_lossy();
     match name.rfind('.') {
         Some(dot) if dot > 0 && dot + 1 < name.len() => Some(name[dot + 1..].to_lowercase()),
@@ -919,6 +933,8 @@ mod tests {
     #[test]
     fn without_an_opener_opening_is_a_config_error() {
         let err = NoOpener.open(Path::new("/x"), None).unwrap_err();
+        assert_eq!(err.kind(), "config");
+        let err = NoOpener.reveal(Path::new("/x")).unwrap_err();
         assert_eq!(err.kind(), "config");
     }
 }

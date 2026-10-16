@@ -1,6 +1,8 @@
 //! The core's [`Opener`] for the desktop: hands a file to the user's editor
 //! through tauri-plugin-opener's `open_path` (macOS `open [-a app]`,
-//! Windows `ShellExecute` / the given executable). The plugin itself is not
+//! Windows `ShellExecute` / the given executable) and shows a file in the
+//! file manager through `reveal_item_in_dir` (Finder, Explorer, or the
+//! desktop's file manager over D-Bus). The plugin itself is not
 //! registered, so the webview has no opener commands.
 
 use std::path::Path;
@@ -21,6 +23,13 @@ impl Opener for DesktopOpener {
                     "could not open the file: no application is set for its type".into(),
                 ),
             }
+        })
+    }
+
+    fn reveal(&self, path: &Path) -> CoreResult<()> {
+        tauri_plugin_opener::reveal_item_in_dir(path).map_err(|e| {
+            tracing::warn!("could not show a file in the file manager: {e}");
+            CoreError::Config("could not show the item in the file manager".into())
         })
     }
 }

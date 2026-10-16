@@ -44,6 +44,10 @@ impl Opener for FakeOpener {
             .push((path.to_path_buf(), app.map(str::to_string)));
         Ok(())
     }
+
+    fn reveal(&self, _path: &Path) -> CoreResult<()> {
+        Ok(())
+    }
 }
 
 struct Fixture {

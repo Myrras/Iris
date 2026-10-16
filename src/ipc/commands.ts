@@ -362,6 +362,24 @@ export function openRemote(
 }
 
 /**
+ * Open a local file with the application set for its extension (Settings →
+ * Editors) or the OS default; `useDefault` skips the setting. Rejects with
+ * `invalidInput` (relative path, a folder), `notFound` or `config` (nothing
+ * could open it).
+ */
+export function openLocal(path: string, useDefault = false): Promise<void> {
+  return invoke("open_local", { path, useDefault });
+}
+
+/**
+ * Show a local file or folder in Finder / Explorer / the file manager.
+ * Rejects with `invalidInput`, `notFound` or `config`.
+ */
+export function revealLocal(path: string): Promise<void> {
+  return invoke("reveal_local", { path });
+}
+
+/**
  * Answer an `edit:conflict`: `overwrite` uploads the local copy anyway,
  * `discard` reloads the server copy over it, `saveCopy` uploads it as
  * `name (edited).ext` next to the original. Rejects with `notFound`, or

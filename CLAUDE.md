@@ -419,6 +419,22 @@ standalone template:
     errors become Iris-owned `config` text). The opener **plugin is not
     registered** and the capability grants no `opener:*` permission: the
     webview cannot open paths/URLs itself.
+  - **Local files** (`open_local.rs`, `impl Core`): `Opener` also has
+    `reveal(path)` (`DesktopOpener` → `reveal_item_in_dir`, selects the item
+    in Finder / Explorer / the file manager). `Core::open_local(path)` uses
+    the same `editorOverrides[ext]` lookup as remote edit, else the OS
+    default; `open_local_default` skips the override. Both validate: absolute
+    path, exists, a file or a `*.app` bundle (folders → `invalidInput`);
+    `reveal_local` takes files and folders. Error text names the file, never
+    the folder or the OS message. IPC `open_local(path, useDefault?)`,
+    `reveal_local(path)` (`commands/open.rs`). UI: `lib/openLocal.ts`
+    (`openLocalFile` with an in-flight guard, `revealLocalPath`, error
+    toasts, `fileManagerName` = Finder / Explorer / File Manager). Local
+    `Pane`: double-click / Enter (non-mac) / ⌘↓ / ⌘O opens a file (folders
+    navigate), context menu "Open", "Open With Default App" and "Show in
+    <file manager>" (also on the pane background = the current folder), and
+    **⌥⌘R** (Ctrl+Alt+R; matched on `e.code === "KeyR"`) reveals the
+    selection, else the folder. Remote rows are unchanged.
   - IPC: `open_remote(sessionId, path)`, `resolve_edit(editId,
     resolution)`, `list_edits`, `close_edit(editId)`; events
     `edit:uploaded`, `edit:conflict`, `edit:failed`.
@@ -714,6 +730,7 @@ crates/iris-core/src/
   transfer/   # TransferManager: mod.rs (types, registry, scheduling), expand.rs
               # (folder walk), worker.rs (one job), side.rs (local/remote end),
               # naming.rs (keep-both / edited-copy names), progress.rs (throttle, speed)
+  open_local.rs  # open a local file in its app / reveal it (via the Opener)
   edit/       # remote edit: Opener trait, EditManager, watcher, upload/conflicts
   drag_out.rs # remote rows → <cacheDir>/dragout/<id>/ for an OS drag (limits, cleanup)
   sync/       # folder sync: mod.rs (types, SyncManager, plan/run/deletes), diff.rs
@@ -745,7 +762,8 @@ src-tauri/src/
               # (connect/reconnect/disconnect/answer_host_key), fs.rs (list_dir/stat/
               # read_link/home_dir/mkdir/rename/delete/chmod/preview),
               # transfers.rs (async: the core spawns jobs on Tokio), edit.rs
-              # (open_remote/resolve_edit/list_edits/close_edit), drag_out.rs
+              # (open_remote/resolve_edit/list_edits/close_edit), open.rs
+              # (open_local/reveal_local), drag_out.rs
               # (prepare/cancel/finish_drag_out), sync.rs (plan_sync/run_sync/
               # discard_sync_plan), window.rs
 src/
