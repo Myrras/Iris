@@ -430,6 +430,106 @@ standalone template:
     deferred upload while reconnecting, cleanup on disconnect/close/quit,
     stale cleanup); `tests/reconnect.rs` adds the Retry-now resume cases;
     Docker: `edit_round_trip_against_openssh`.
+- ✅ **Phase 7 — Drag out to Finder & branding.** Backend and UI done.
+  - **Spike outcome: `tauri-plugin-drag` 2.1.1 (CrabNebula) + npm
+    `@crabnebula/tauri-plugin-drag` ^2.1.0**, not file promises. It builds on
+    tauri 2.12 (deps `tauri ^2`, `drag` 2.1.1 on objc2 0.6 /
+    `windows` 0.61), drags files on disk out of the window with copy
+    semantics on macOS (NSDraggingSession, the image centred on the
+    pointer) and Windows (DoDragDrop, CF_HDROP), and keeps unsafe code
+    inside the plugin crate. `tauri-plugin-dragout` 0.1.1 (the only file
+    promise plugin, `NSFilePromiseProvider`) was rejected: one author,
+    v0.1, macOS-only (it purposely fails to compile elsewhere) and built
+    around extracting files from archives; doing promises ourselves would
+    mean objc in a `#![forbid(unsafe_code)]` workspace and a separate
+    Windows path (`IDataObject` + `CFSTR_FILEDESCRIPTOR`). Remote files are
+    therefore downloaded first (v1); file promises stay an option if the
+    wait proves annoying. Plugin quirks: the Rust side reports `Dropped` /
+    `Cancel` (its TS types say `Cancelled`), the drag image must be a PNG
+    data URL or path, folder URLs are created with `isDirectory: false`
+    (Finder still copies folders — check by hand), and its `start_drag`
+    command lets the webview drag any path (`drag:default`; the webview is
+    our own code).
+  - **When the OS drag starts**: when the pointer leaves the window during
+    a pane drag (`lib/paneDrag`: a `mousemove` outside the viewport while
+    the button is held — WebKit/WebView2 keep sending moves to the pressed
+    view — or a `mouseout` to nowhere). That is Finder's / Forklift's feel:
+    no modifier, and pane-to-pane drags inside the window stay mouse-based.
+    The in-window drag ends there (the OS owns the pointer; the webview
+    gets no mouse-up). A local drag out that comes back over the Remote pane
+    arrives as a Tauri drop and uploads; a remote one is ignored
+    (`useNativeDrop.isOwnRemoteDragOut`, by its copies' paths, kept in
+    `dragStore.dragOut` after the drag ended because the drop event may
+    come later).
+  - **Remote rows** (`lib/dragOut`): leaving the window calls
+    `prepare_drag_out(dragId, sessionId, paths)` (`dragId` =
+    `crypto.randomUUID()` from the webview, so progress and cancel work
+    before it returns). The core (`drag_out.rs`, `DragOutManager` owned by
+    `Core`) walks the selection like the transfer engine (selected links
+    followed; folder links, broken links, sockets and unsafe names inside
+    folders skipped), refuses it over `DragOutLimits` (constants: **200 MiB
+    total, 500 files**; `set_drag_out_limits` for tests) with `tooLarge`
+    before downloading anything, then downloads it over the session's main
+    SFTP channel (not the queue: the user is holding the pointer, and it
+    must not appear in the transfer list) into
+    `<cacheDir>/dragout/<dragId>/`, mtime and mode bits copied,
+    `DragOutProgress {dragId, bytesDone, totalBytes}` (≤ 10/s, last at
+    100 %). The drag chip (`DragGhost`) stays at the window edge and shows
+    "Preparing n items… 42% of 12 MB"; the OS drag starts with the copies
+    on the next move outside with the button held (or at once if the
+    pointer is still out). Released inside → `cancel_drag_out`; released
+    outside before ready, `tooLarge`, or slower than `PREPARE_TIMEOUT_MS`
+    (20 s, then cancelled) → a sticky toast offering **"Download to…"**
+    (`lib/downloadTo`: dialog plugin folder picker → `enqueue_transfers`
+    download into it), also in the Remote pane's context menu.
+    `finish_drag_out(dragId, dropped)`: cancelled → removed now; dropped →
+    removed after `DEFAULT_DROP_GRACE` (120 s; the receiving app may still
+    be copying; `set_drag_out_grace` for tests). `set_cache_dir` (startup)
+    and `clean_drag_outs` (`RunEvent::Exit`) remove the whole
+    `<cacheDir>/dragout`. New kinds: `tooLarge`, `cancelled`.
+  - **Local rows** go out as they are; local rows are draggable without a
+    session now (remote rows need a connected one).
+  - IPC: `prepare_drag_out(dragId, sessionId, paths)`,
+    `cancel_drag_out(dragId)`, `finish_drag_out(dragId, dropped)`; event
+    `dragOut:progress`; plugin command `plugin:drag|start_drag`
+    (capability `drag:default`). Drag image: `src/assets/drag-icon.png`
+    (128 px at 144 dpi = 64 pt on retina, imported `?inline`).
+  - **Branding**: Iris' own mark — a rainbow of two bands over a core
+    (Iris, the gods' messenger, travelled on the rainbow; the arch also
+    reads as a passage between two sides), on the Podium/Selene 100×100
+    grid with their opacity steps (0.45 / 0.72 / 1) and soft shadow.
+    Sources in `src-tauri/icons/source/`: `iris-mark.svg` (the mark;
+    `LogoMark.tsx` draws the same paths in `currentColor`, a test keeps
+    them in sync), `iris.svg` (app icon: the mark in the accent gradient on
+    a dark tile on Apple's 1024 grid — 824 px body, 100 px margin, like
+    Selene), `iris-1024.png` (render). `just icons` re-renders it
+    (`rsvg-convert`) and runs `pnpm tauri icon` (desktop icons only). The
+    favicon in `index.html` is the mark in `#4493f8`.
+  - **Flaky test fixed** (`a_folder_walk_cut_off_by_a_drop_continues_
+    after_a_reconnect`, ~1 in 60 runs of the reconnect binary): after
+    `kill_all` the client's reader sometimes never saw the closed socket
+    (only a write noticed it), so an SFTP request in flight timed out at
+    russh-sftp's 10 s — at the same moment as the keepalive — and the walk
+    saw a `remote` error on a session that still looked alive: the folder
+    became a `failed` placeholder instead of `paused`. The same happens for
+    real when a network dies without a FIN/RST. Fix: `CoreError::NoAnswer`
+    (wire kind still `remote`) for SFTP timeouts, and
+    `Shared::connection_gone` (walker + worker) pings the server
+    (`SshSession::probe`, 5 s) before blaming the item; no answer closes
+    the connection so the usual lost → reconnect → resume path runs.
+    600 consecutive passes of the whole reconnect binary, 6 in parallel
+    (before: 6 failures in 360).
+  - Tests: `tests/drag_out.rs` (tree download byte-exact + mtime +
+    progress, limits refused before downloading and exactly at the
+    limits, cancel mid-download, drop grace + quit cleanup, stale cleanup
+    at startup, errors, duplicate drag id); frontend: `lib/paneDrag.test.ts`
+    (leaving the window → `startDrag` with the paths, pane-to-pane still a
+    transfer, remote prepare → progress → OS drag → `finishDragOut`,
+    pointer back inside, release inside cancels, `tooLarge` / timeout /
+    early release → "Download to…" → picker → download),
+    `useNativeDrop` (own remote drag out ignored, local one uploads),
+    `DragGhost` (edge clamp + progress), `Pane` (context menu "Download
+    to…"), `LogoMark`.
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":
@@ -464,6 +564,7 @@ standalone template:
 | Keychain    | `keyring` 3 (macOS/Windows native, Linux Secret Service), behind `secrets.rs` |
 | File watch  | `notify` 8 + `notify-debouncer-mini` 0.7, behind `edit/`  |
 | Open in app | `tauri-plugin-opener` 2 (Rust `open_path` only), in `src-tauri/src/opener.rs` |
+| Drag out    | `tauri-plugin-drag` 2.1 + `@crabnebula/tauri-plugin-drag` 2.1, via `src/lib/dragOut.ts` |
 | FE state    | Zustand 5 (no data-fetching lib; call IPC, then resync)  |
 | Motion      | CSS tokens (`--dur-*`/`--ease-*`), reduced-motion guard  |
 | Icons       | `lucide-react`, only via `src/components/icons.tsx`      |
@@ -487,7 +588,7 @@ crates/iris-core/src/
   settings.rs # IrisSettings + IrisSettingsStore (settings.json, atomic write)
   persist.rs  # shared atomic JSON write (temp file + rename)
   ids.rs      # UUID newtypes (uuid_newtype!): ProfileId, SessionId, HostKeyRequestId,
-              # TransferId, BatchId, EditId
+              # TransferId, BatchId, EditId, DragOutId
   secret.rs   # Secret: redacted, non-serializable, zeroized password/passphrase
   secrets.rs  # SecretStore: KeychainStore (keyring) + MemorySecretStore
   ssh_config.rs  # ~/.ssh/config: host list, resolve, ProxyJump specs
@@ -503,6 +604,7 @@ crates/iris-core/src/
               # (folder walk), worker.rs (one job), side.rs (local/remote end),
               # naming.rs (keep-both / edited-copy names), progress.rs (throttle, speed)
   edit/       # remote edit: Opener trait, EditManager, watcher, upload/conflicts
+  drag_out.rs # remote rows → <cacheDir>/dragout/<id>/ for an OS drag (limits, cleanup)
 crates/iris-core/tests/
   core.rs     # integration test over the public API — no UI required
   remote.rs   # connect/browse against the in-process SFTP server (unix only)
@@ -510,10 +612,12 @@ crates/iris-core/tests/
   transfers.rs  # transfer engine against the in-process server (unix only)
   reconnect.rs  # auto/manual reconnect, retry, cancel on disconnect/quit (unix only)
   edits.rs    # remote edit: open, save → upload, conflicts, deferred, cleanup (unix only)
+  drag_out.rs # drag-out preparation: download, limits, cancel, cleanup (unix only)
   ssh_integration.rs  # Docker OpenSSH servers, #[ignore]d (just test-integration)
   support/    # hermetic russh + russh-sftp test server, jump routing, agent
 src-tauri/
   tauri.conf.json                # base config
+  icons/source/                  # iris-mark.svg, iris.svg (app icon) → `just icons`
   tauri.{macos,windows}.conf.json  # per-OS window chrome (merge patches)
 src-tauri/src/
   main.rs     # binary entry → iris_lib::run()
@@ -527,7 +631,8 @@ src-tauri/src/
               # (connect/reconnect/disconnect/answer_host_key), fs.rs (list_dir/stat/
               # read_link/home_dir/mkdir/rename/delete/chmod/preview),
               # transfers.rs (async: the core spawns jobs on Tokio), edit.rs
-              # (open_remote/resolve_edit/list_edits/close_edit), window.rs
+              # (open_remote/resolve_edit/list_edits/close_edit), drag_out.rs
+              # (prepare/cancel/finish_drag_out), window.rs
 src/
   App.tsx     # the shell: title bar, sidebar, tab bar, Local/Remote panes,
               # preview, transfers
@@ -546,10 +651,12 @@ src/
               # layout, toast — mirror the backend; don't guess
   lib/        # connect flow, tabs, edit (open for edit, edit toasts),
               # editorOverrides, useTabShortcuts, sessionStatus,
-              # useCoreEvents, useNativeDrop, paneDrag,
+              # useCoreEvents, useNativeDrop, paneDrag, dragOut (OS drag
+              # out, remote preparation), downloadTo (folder picker),
               # transfer (pane → request), pure rules (entries, selection,
               # path, fileFormat, fileName, mode, dateFormat, transferFormat,
               # connectionForm), log, motion, platform
+  assets/     # drag-icon.png (the OS drag image)
   styles/     # tokens.css (design tokens) + global.css (resets/primitives)
   test/       # Vitest setup + stubViewport (jsdom has no layout)
 ```

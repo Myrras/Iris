@@ -143,3 +143,13 @@ when it merges.
 - Local copies of edited files are deleted when you disconnect or quit.
 - Settings → Editors: choose which application opens each file extension
   (e.g. `.md` in Typora); other files open in the system's default app.
+- Drag files and folders out of the window to Finder or Explorer. Local
+  items go out as they are; remote items are downloaded first, with the
+  progress on the drag label, and the drag carries on once they are there.
+- Remote selections larger than 200 MB or 500 files, or that take longer
+  than 20 seconds to fetch, offer "Download to…" instead of a drag.
+- "Download to…" in the Remote pane's context menu downloads the selection
+  into a folder you pick.
+- Iris has its own logo and app icon: a rainbow arch.
+- A folder download cut off by a connection that died silently now waits
+  for the reconnect instead of failing.
