@@ -11,6 +11,8 @@ when it merges.
 
 ## [Unreleased]
 
+- Transfers show their progress up to the last byte: a fast copy no longer
+  sits at its first chunk until the server has finished the file.
 - After going up a folder, the folder you came from is selected, like in Finder.
 - The active pane is marked with an accent ring and header; selected rows in the inactive pane turn grey.
 - Type a file name in a pane to select it, like in Finder.

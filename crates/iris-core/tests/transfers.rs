@@ -197,6 +197,24 @@ impl EventLog {
             .filter(|e| matches!(e, CoreEvent::TransferProgress { job_id, .. } if *job_id == job))
             .count()
     }
+
+    /// `(bytes_done, size)` of each progress event of `job`, in order.
+    fn progress(&self, job: iris_core::TransferId) -> Vec<(u64, u64)> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                CoreEvent::TransferProgress {
+                    job_id,
+                    bytes_done,
+                    size,
+                    ..
+                } if *job_id == job => Some((*bytes_done, *size)),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// Deterministic, fictitious bytes.
@@ -283,6 +301,51 @@ async fn an_upload_is_byte_identical_and_keeps_mtime_and_mode() {
     );
     assert_eq!(list.summary.total_bytes, content.len() as u64);
     assert_eq!(list.summary.done_bytes, content.len() as u64);
+}
+
+/// The bytes copied after the last throttled progress event used to go
+/// unannounced: on a fast link the panel showed the first chunk until the job
+/// changed state, while the server still had to confirm the end of the file.
+/// The file was complete, the row showed (almost) nothing, and only a re-pull
+/// (cancel) revealed 100 %.
+#[tokio::test]
+async fn an_upload_announces_all_its_bytes_before_the_server_confirms_the_file() {
+    let server = TestServer::start(None).await;
+    let (f, session) = Fixture::new(&server).await;
+    let content = data(2_000_000, 9);
+    let src = f.local("upload.bin");
+    std::fs::write(&src, &content).unwrap();
+    server.set_close_delay(Duration::from_secs(2));
+
+    f.upload(session, &[src], "/");
+    let dst = server.root().join("upload.bin");
+    let deadline = Instant::now() + WAIT;
+    let job = loop {
+        let list = f.core.list_transfers();
+        if let Some(job) = list.jobs.first() {
+            assert_ne!(
+                job.state,
+                TransferState::Done,
+                "done before every byte was announced: {:?}",
+                f.events.progress(job.id)
+            );
+            let complete = std::fs::metadata(&dst).is_ok_and(|m| m.len() == content.len() as u64);
+            let announced = f.events.progress(job.id).last().copied();
+            if complete && announced == Some((job.size, job.size)) {
+                assert_eq!(job.state, TransferState::Running, "{job:?}");
+                break job.clone();
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "never announced the whole file: {:?}",
+            f.core.list_transfers()
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    let done = f.wait_for_state(job.id, TransferState::Done).await;
+    assert_eq!(done.bytes_done, content.len() as u64);
+    assert_eq!(std::fs::read(&dst).unwrap(), content);
 }
 
 #[tokio::test]

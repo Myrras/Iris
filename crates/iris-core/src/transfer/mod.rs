@@ -658,6 +658,17 @@ fn cancel_entry(events: &EventBus, entry: &mut JobEntry) {
     }
 }
 
+fn announce_progress(events: &EventBus, id: TransferId, entry: &mut JobEntry, now: Instant) {
+    entry.announced = entry.job.bytes_done;
+    events.publish(CoreEvent::TransferProgress {
+        job_id: id,
+        batch_id: entry.job.batch_id,
+        bytes_done: entry.job.bytes_done,
+        size: entry.job.size,
+        bytes_per_sec: entry.speed.rate(now),
+    });
+}
+
 fn publish_changed(events: &EventBus, entry: &JobEntry) {
     events.publish(CoreEvent::TransferJobChanged {
         job: entry.job.clone(),
@@ -703,6 +714,8 @@ struct JobEntry {
     append: bool,
     resolution: Option<ConflictResolution>,
     throttle: Throttle,
+    /// `bytes_done` as the last `TransferProgress` announced it.
+    announced: u64,
     speed: SpeedMeter,
     /// Set for a placeholder: what to walk to replace it.
     walk: Option<Walk>,
@@ -848,6 +861,7 @@ impl Shared {
                     append: false,
                     resolution: None,
                     throttle: Throttle::new(PROGRESS_INTERVAL),
+                    announced: 0,
                     speed: SpeedMeter::new(),
                     walk: new.walk,
                 },
@@ -931,6 +945,8 @@ impl Shared {
             }
             entry.job.state = TransferState::Running;
             entry.throttle = Throttle::new(PROGRESS_INTERVAL);
+            // The job change below carries the bytes so far.
+            entry.announced = entry.job.bytes_done;
             entry.speed = SpeedMeter::new();
             publish_changed(&self.events, entry);
             reg.running += 1;
@@ -1064,13 +1080,21 @@ impl Shared {
         entry.job.bytes_done += delta;
         entry.speed.record(now, delta);
         if entry.throttle.ready(now) {
-            self.events.publish(CoreEvent::TransferProgress {
-                job_id: id,
-                batch_id: entry.job.batch_id,
-                bytes_done: entry.job.bytes_done,
-                size: entry.job.size,
-                bytes_per_sec: entry.speed.rate(now),
-            });
+            announce_progress(&self.events, id, entry, now);
+        }
+    }
+
+    /// Announce the bytes the throttle held back. The throttle only lets the
+    /// first chunk of each interval through, so without this the chunks
+    /// after its last tick are never announced: on a fast link a whole file
+    /// copies between two ticks, and the UI would show the first chunk until
+    /// the job changes state — which waits for the server to confirm the
+    /// end of the file (CLOSE, SETSTAT), however long that takes.
+    pub fn flush_progress(&self, id: TransferId) {
+        if let Some(entry) = self.lock().jobs.get_mut(&id) {
+            if entry.job.bytes_done != entry.announced {
+                announce_progress(&self.events, id, entry, Instant::now());
+            }
         }
     }
 

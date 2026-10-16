@@ -150,6 +150,9 @@ async fn copy(shared: &Shared, ctx: &JobContext, src: &Side, dst: &Side) -> Core
         }
         shared.progress(ctx.id, n as u64);
     }
+    // Every byte is handed over: say so now, not only once the server has
+    // confirmed the file below.
+    shared.flush_progress(ctx.id);
     writer
         .shutdown()
         .await

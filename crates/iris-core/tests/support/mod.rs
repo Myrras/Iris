@@ -234,6 +234,17 @@ impl TestServer {
             .store(delay.as_micros() as u64, Ordering::SeqCst);
     }
 
+    /// Delay every CLOSE of a file by `delay`: the data is on disk, but the
+    /// server takes its time to confirm the end of the file (as one that
+    /// flushes to network storage or scans the file on close does).
+    pub fn set_close_delay(&self, delay: Duration) {
+        self.endpoint
+            .shared
+            .stats
+            .close_delay_us
+            .store(delay.as_micros() as u64, Ordering::SeqCst);
+    }
+
     /// The most files that were open at the same time since the last
     /// [`TestServer::reset_max_open_files`].
     pub fn max_open_files(&self) -> usize {
@@ -351,6 +362,8 @@ struct Stats {
     delay_us: AtomicU64,
     /// Delay per OPENDIR, in microseconds.
     list_delay_us: AtomicU64,
+    /// Delay per CLOSE of a file, in microseconds.
+    close_delay_us: AtomicU64,
 }
 
 impl Stats {
@@ -372,6 +385,13 @@ impl Stats {
 
     async fn list_delay(&self) {
         let us = self.list_delay_us.load(Ordering::SeqCst);
+        if us > 0 {
+            tokio::time::sleep(Duration::from_micros(us)).await;
+        }
+    }
+
+    async fn close_delay(&self) {
+        let us = self.close_delay_us.load(Ordering::SeqCst);
         if us > 0 {
             tokio::time::sleep(Duration::from_micros(us)).await;
         }
@@ -736,6 +756,7 @@ impl russh_sftp::server::Handler for SftpHandler {
         self.dirs.remove(&handle);
         if self.files.remove(&handle).is_some() {
             self.stats.closed();
+            self.stats.close_delay().await;
         }
         Ok(ok(id))
     }

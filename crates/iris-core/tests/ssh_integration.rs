@@ -966,3 +966,80 @@ fn assert_same_file(a: &std::path::Path, b: &std::path::Path) {
         assert!(ba[..n] == bb[..n], "the files differ");
     }
 }
+
+/// Every file reports its progress up to its last byte before it is done.
+/// The progress throttle used to drop the bytes copied after its last tick,
+/// so on a fast link the panel sat at the first chunk until the job changed
+/// state, while the file was already complete on the other side.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs Docker; run with just test-integration"]
+async fn transfers_report_progress_to_the_last_byte_against_openssh() {
+    let sshd = start_sshd(SshdOptions::default()).await;
+    let f = Fixture::new();
+    let _answers = auto_answer(&f.core, true);
+    let id = f.save(HOST, sshd.port, AuthMethod::Password, None);
+    let session = f
+        .core
+        .connect(id, Some(Secret::new(PASSWORD)), None)
+        .await
+        .unwrap();
+    let home = f.core.home_dir(remote(session)).await.unwrap();
+    let content = data(32 * 1024 * 1024, 7);
+    let local = f.dir.path().join("progress.bin");
+    std::fs::write(&local, &content).unwrap();
+    let back = f.dir.path().join("back");
+    std::fs::create_dir(&back).unwrap();
+    let size = content.len() as u64;
+
+    for (direction, src, dst_dir) in [
+        (
+            TransferDirection::Upload,
+            local.to_string_lossy().into_owned(),
+            home.clone(),
+        ),
+        (
+            TransferDirection::Download,
+            format!("{}/progress.bin", home.trim_end_matches('/')),
+            back.to_string_lossy().into_owned(),
+        ),
+    ] {
+        let mut rx = f.core.subscribe_events();
+        f.core
+            .enqueue_transfers(TransferRequest {
+                session_id: session,
+                direction,
+                items: vec![TransferItem { src }],
+                dst_dir,
+            })
+            .unwrap();
+        let mut progress = Vec::new();
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(60), rx.recv())
+                .await
+                .unwrap_or_else(|_| panic!("{direction:?} stalled after {progress:?}"))
+                .unwrap();
+            match event {
+                CoreEvent::TransferProgress { bytes_done, .. } => progress.push(bytes_done),
+                CoreEvent::TransferJobChanged { job } if job.state == TransferState::Done => {
+                    assert_eq!(job.bytes_done, size);
+                    break;
+                }
+                CoreEvent::TransferJobChanged { job } => assert!(
+                    matches!(job.state, TransferState::Queued | TransferState::Running),
+                    "{direction:?}: {job:?}"
+                ),
+                _ => {}
+            }
+        }
+        assert!(
+            progress.iter().any(|&b| b > 0 && b < size),
+            "{direction:?}: no progress on the way: {progress:?}"
+        );
+        assert_eq!(
+            progress.last(),
+            Some(&size),
+            "{direction:?}: the last bytes were never announced: {progress:?}"
+        );
+    }
+    assert_same_file(&local, &back.join("progress.bin"));
+}

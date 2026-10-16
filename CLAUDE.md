@@ -245,7 +245,10 @@ standalone template:
     kept and the job marked as owning its partial file, so `resume_paused`
     / `resume_paused_on(old, new)` append without asking.
   - Progress: `TransferProgress` throttled to one per 100 ms per job
-    (`progress::Throttle`); speeds from a 3 s moving window
+    (`progress::Throttle`, leading edge), plus `Shared::flush_progress` once
+    the last chunk is handed over, before CLOSE/SETSTAT (else a file copied
+    between two ticks showed its first chunk until the server confirmed
+    the file); speeds from a 3 s moving window
     (`progress::SpeedMeter`, also the aggregate in `list_transfers`'
     `summary`). `TransfersUpdated` is a re-pull signal (coalesced during
     expansion, on `clear_finished`, and by the shell's forwarder when the
