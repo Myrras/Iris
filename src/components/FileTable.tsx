@@ -177,7 +177,7 @@ const COLUMNS: ColumnDef<Entry, unknown>[] = [
   }),
   col.display({
     id: "mode",
-    header: "Permissions",
+    header: "Perms", // "Permissions" does not fit the 84px column
     size: 84,
     meta: { mono: true },
     cell: ({ row }) => formatPermissions(row.original.mode),

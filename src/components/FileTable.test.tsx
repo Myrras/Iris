@@ -279,4 +279,35 @@ describe("FileTable", () => {
     renderTable([entry("a.txt")]);
     expect(screen.getByRole("grid").className).toMatch(/scroll/);
   });
+
+  it("marks only the drop-target folder row, and clears it afterwards", () => {
+    const entries = [
+      entry("a", { kind: { type: "dir" } }),
+      entry("b", { kind: { type: "dir" } }),
+      entry("c.txt"),
+    ];
+    const props = {
+      entries,
+      sort: { key: "name" as const, dir: "asc" as const },
+      selection: new Set<string>(),
+      cursor: null,
+      label: "Test files list",
+      emptyText: "empty",
+      onSort: vi.fn(),
+      onRowClick: vi.fn(),
+      onOpen: vi.fn(),
+      onMove: vi.fn(),
+      onSelectAll: vi.fn(),
+    };
+    const targets = () =>
+      dataRows()
+        .filter((r) => r.getAttribute("data-drop-target") === "true")
+        .map((r) => within(r).getAllByRole("gridcell")[0].textContent);
+    const { rerender } = render(<FileTable {...props} dropDir="/srv/a" />);
+    expect(targets()).toEqual(["a"]);
+    rerender(<FileTable {...props} dropDir="/srv/b" />);
+    expect(targets()).toEqual(["b"]);
+    rerender(<FileTable {...props} dropDir={null} />);
+    expect(targets()).toEqual([]);
+  });
 });

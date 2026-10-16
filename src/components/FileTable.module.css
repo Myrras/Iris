@@ -52,6 +52,9 @@
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sortBtn[data-align="right"] {
@@ -84,7 +87,9 @@
   transition: background var(--dur-1) var(--ease-out);
 }
 
-.row:hover {
+/* Not while dragging: WebKit does not refresh :hover with the button held, so
+   it would stick to rows; only the drop target lights up then. */
+:where(html:not([data-dragging])) .row:hover {
   background: var(--surface-hover);
 }
 
