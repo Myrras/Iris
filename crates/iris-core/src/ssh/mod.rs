@@ -2,6 +2,7 @@
 //! touches russh, whose API churns between minors.
 
 pub mod agent;
+pub mod exec;
 pub mod hostkey;
 pub mod session;
 

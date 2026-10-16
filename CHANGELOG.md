@@ -11,6 +11,14 @@ when it merges.
 
 ## [Unreleased]
 
+- Sync only files changed within a time window: "Only files changed in" (last
+  hour, today, last 24 hours, last 7 days, or since a date and time) compares
+  just those files and looks them up on the other side, instead of walking
+  both folders. From the server it runs one `find` over SSH when the server
+  allows commands (GNU find), else it walks the folders with the same filter;
+  the plan says which, and notes a server clock that is off (the window then
+  follows the server's clock). The compare rule and options still apply.
+  Mirror is off while a window is set: deletions are not seen.
 - Export the transfer list to a CSV file (Transfers → Export CSV…): one row per
   transfer with its connection, paths, size, state, error, start and end time,
   duration and average speed. Opens fine in Excel and Numbers; the toast

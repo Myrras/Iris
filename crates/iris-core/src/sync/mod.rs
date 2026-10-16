@@ -29,10 +29,16 @@
 //!   reported and left alone, in either mode.
 //! - Excluded names ([`exclude`], the `syncExcludes` setting) and, on
 //!   request, hidden entries are never copied or deleted.
+//! - With a time window ([`SyncOptions::changed_within`]) only files
+//!   changed since a moment are compared: the source is searched (on the
+//!   server with one `find` when it can, see `window.rs`), the target only
+//!   looked up at the paths found, and Mirror is refused.
 
 pub(crate) mod diff;
 pub mod exclude;
+mod remote_find;
 mod walk;
+mod window;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -55,9 +61,11 @@ use crate::events::EventBus;
 use crate::fs::walk::{close_channels, is_connection, open_walk_channels};
 use crate::transfer::progress::{Throttle, PROGRESS_INTERVAL};
 use diff::{DiffRules, Listed, Node};
-use walk::{walk, Quiet, WalkProgress};
+use walk::{stat_candidates, walk, with_parents, Quiet, WalkProgress};
+use window::{now_unix, search_remote};
 
 pub use diff::MTIME_TOLERANCE_SECS;
+pub use window::{ChangedWithin, SearchMethod, SyncWindow, CLOCK_SKEW_TOLERANCE_SECS};
 
 const LOCK_POISONED: &str = "sync plan lock poisoned";
 
@@ -116,6 +124,9 @@ pub struct SyncOptions {
     /// Name patterns to leave alone; `None` uses the `syncExcludes`
     /// setting.
     pub excludes: Option<Vec<String>>,
+    /// Only compare files changed since a moment (`None`: everything).
+    /// Not with Mirror: what was deleted on the source is not seen.
+    pub changed_within: Option<ChangedWithin>,
 }
 
 impl Default for SyncOptions {
@@ -128,6 +139,7 @@ impl Default for SyncOptions {
             copy_empty_folders: true,
             max_file_size_mb: None,
             excludes: None,
+            changed_within: None,
         }
     }
 }
@@ -302,6 +314,22 @@ pub struct SyncPlan {
     /// In path order, folders before their contents; `same` files left out.
     pub items: Vec<SyncItem>,
     pub totals: SyncTotals,
+    /// For a plan limited to changed files: how they were found.
+    pub window: Option<SyncWindow>,
+}
+
+/// What a comparison is doing, in [`CoreEvent::SyncProgress`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncScanStage {
+    /// Walking folders (`foldersScanned`, `filesSeen`).
+    #[default]
+    Scanning,
+    /// The server search runs (`filesSeen`: changed files so far).
+    Searching,
+    /// Looking up the changed files on the target (`checked` of
+    /// `filesSeen`).
+    Checking,
 }
 
 /// A plan kept for `run_sync`.
@@ -469,13 +497,15 @@ fn path_on(side: &Side, root: &str, segments: &[String]) -> String {
         .fold(root.to_string(), |path, name| side.join(&path, name))
 }
 
-/// Counts both walks of a comparison and announces them, throttled, as
-/// [`CoreEvent::SyncProgress`].
-struct ScanProgress<'a> {
+/// Counts both walks of a comparison (or a windowed one's search and
+/// lookups) and announces them, throttled, as [`CoreEvent::SyncProgress`].
+pub(crate) struct ScanProgress<'a> {
     events: &'a EventBus,
     plan_id: SyncPlanId,
+    stage: Mutex<SyncScanStage>,
     folders: AtomicU64,
     files: AtomicU64,
+    checked: AtomicU64,
     throttle: Mutex<Throttle>,
 }
 
@@ -484,29 +514,58 @@ impl<'a> ScanProgress<'a> {
         Self {
             events,
             plan_id,
+            stage: Mutex::new(SyncScanStage::Scanning),
             folders: AtomicU64::new(0),
             files: AtomicU64::new(0),
+            checked: AtomicU64::new(0),
             throttle: Mutex::new(Throttle::new(PROGRESS_INTERVAL)),
+        }
+    }
+
+    /// Start a stage with `files` (the count it works through, if known);
+    /// announced at once.
+    pub(crate) fn begin(&self, stage: SyncScanStage, files: u64) {
+        *self.stage.lock().expect(LOCK_POISONED) = stage;
+        self.folders.store(0, Ordering::Relaxed);
+        self.files.store(files, Ordering::Relaxed);
+        self.checked.store(0, Ordering::Relaxed);
+        self.publish(true);
+    }
+
+    /// The search found `files` so far.
+    pub(crate) fn set_found(&self, files: u64) {
+        self.files.store(files, Ordering::Relaxed);
+        self.publish(false);
+    }
+
+    fn publish(&self, now: bool) {
+        let ready = self
+            .throttle
+            .lock()
+            .expect(LOCK_POISONED)
+            .ready(Instant::now());
+        if now || ready {
+            self.events.publish(CoreEvent::SyncProgress {
+                plan_id: self.plan_id,
+                stage: *self.stage.lock().expect(LOCK_POISONED),
+                folders_scanned: self.folders.load(Ordering::Relaxed),
+                files_seen: self.files.load(Ordering::Relaxed),
+                checked: self.checked.load(Ordering::Relaxed),
+            });
         }
     }
 }
 
 impl WalkProgress for ScanProgress<'_> {
     fn folder(&self, files: u64) {
-        let folders = self.folders.fetch_add(1, Ordering::Relaxed) + 1;
-        let files = self.files.fetch_add(files, Ordering::Relaxed) + files;
-        let ready = self
-            .throttle
-            .lock()
-            .expect(LOCK_POISONED)
-            .ready(Instant::now());
-        if ready {
-            self.events.publish(CoreEvent::SyncProgress {
-                plan_id: self.plan_id,
-                folders_scanned: folders,
-                files_seen: files,
-            });
-        }
+        self.folders.fetch_add(1, Ordering::Relaxed);
+        self.files.fetch_add(files, Ordering::Relaxed);
+        self.publish(false);
+    }
+
+    fn checked(&self, paths: u64) {
+        self.checked.fetch_add(paths, Ordering::Relaxed);
+        self.publish(false);
     }
 }
 
@@ -587,6 +646,19 @@ impl Core {
                 )));
             }
         }
+        let window = options.changed_within.map(|w| w.since_unix);
+        if let Some(since) = window {
+            if options.mode == SyncMode::Mirror {
+                return Err(CoreError::InvalidInput(
+                    "Mirror compares everything; it cannot be limited to changed files".into(),
+                ));
+            }
+            if since < 0 || since > now_unix() + CLOCK_SKEW_TOLERANCE_SECS {
+                return Err(CoreError::InvalidInput(
+                    "the start of the time window must lie in the past".into(),
+                ));
+            }
+        }
         let excludes = match options.excludes.clone() {
             Some(patterns) => normalize_excludes(patterns)?,
             None => self.settings().sync_excludes,
@@ -607,36 +679,103 @@ impl Core {
         };
         let progress = ScanProgress::new(&self.inner.events, plan_id);
         let started = Instant::now();
-        // Both sides at once, the remote one over several channels.
-        let (remote_listers, extra) = open_walk_channels(&live).await;
-        let (local_walk, remote_walk) = tokio::join!(
-            walk(
-                vec![local],
-                crate::fs::LOCAL_LISTINGS,
-                local_dir,
-                &prune,
-                &progress
-            ),
-            walk(
-                remote_listers,
-                crate::fs::REMOTE_LISTINGS,
-                remote_dir,
-                &prune,
-                &progress
-            )
-        );
-        close_channels(extra);
+        let (source, target, window) = match window {
+            None => {
+                // Both sides at once, the remote one over several channels.
+                let (remote_listers, extra) = open_walk_channels(&live).await;
+                let (local_walk, remote_walk) = tokio::join!(
+                    walk(
+                        vec![local],
+                        crate::fs::LOCAL_LISTINGS,
+                        local_dir,
+                        &prune,
+                        None,
+                        &progress
+                    ),
+                    walk(
+                        remote_listers,
+                        crate::fs::REMOTE_LISTINGS,
+                        remote_dir,
+                        &prune,
+                        None,
+                        &progress
+                    )
+                );
+                close_channels(extra);
+                let remote_walk = self.forget_if_lost(session_id, live.generation, remote_walk)?;
+                let local_walk = local_walk?;
+                let (source, target) = match direction {
+                    TransferDirection::Upload => (local_walk, remote_walk),
+                    TransferDirection::Download => (remote_walk, local_walk),
+                };
+                (source, target, None)
+            }
+            Some(since) => {
+                let (source, method, clock_skew_secs) = match direction {
+                    TransferDirection::Upload => {
+                        let found = walk(
+                            vec![local.clone()],
+                            crate::fs::LOCAL_LISTINGS,
+                            local_dir,
+                            &prune,
+                            Some(since),
+                            &progress,
+                        )
+                        .await?;
+                        (found, SearchMethod::Walk, None)
+                    }
+                    TransferDirection::Download => {
+                        let search =
+                            search_remote(&live, remote_dir, since, &rules, &progress).await;
+                        let search = self.forget_if_lost(session_id, live.generation, search)?;
+                        (search.listed, search.method, search.clock_skew_secs)
+                    }
+                };
+                let source = with_parents(source);
+                let files = source
+                    .iter()
+                    .filter(|l| matches!(l.node, Node::File { .. }))
+                    .count() as u64;
+                progress.begin(SyncScanStage::Checking, files);
+                let target = match direction {
+                    TransferDirection::Upload => {
+                        let (listers, extra) = open_walk_channels(&live).await;
+                        let found = stat_candidates(
+                            listers,
+                            crate::fs::REMOTE_LISTINGS,
+                            remote_dir,
+                            &source,
+                            &progress,
+                        )
+                        .await;
+                        close_channels(extra);
+                        self.forget_if_lost(session_id, live.generation, found)?
+                    }
+                    TransferDirection::Download => {
+                        stat_candidates(
+                            vec![local],
+                            crate::fs::LOCAL_LISTINGS,
+                            local_dir,
+                            &source,
+                            &progress,
+                        )
+                        .await?
+                    }
+                };
+                let window = SyncWindow {
+                    since_unix: since,
+                    method,
+                    clock_skew_secs,
+                };
+                (source, target, Some(window))
+            }
+        };
         tracing::debug!(
             folders = progress.folders.load(Ordering::Relaxed),
+            windowed = window.is_some(),
             elapsed_ms = started.elapsed().as_millis() as u64,
-            "sync folders walked"
+            "sync folders compared"
         );
-        let remote_walk = self.forget_if_lost(session_id, live.generation, remote_walk)?;
-        let local_walk = local_walk?;
-        let (source, target) = match direction {
-            TransferDirection::Upload => (local_walk, remote_walk),
-            TransferDirection::Download => (remote_walk, local_walk),
-        };
         let found = diff::diff(&source, &target, &rules);
         let plan = SyncPlan {
             plan_id,
@@ -647,6 +786,7 @@ impl Core {
             remote_dir: remote_dir.to_string(),
             items: found.items,
             totals: found.totals,
+            window,
         };
         tracing::info!(
             items = plan.items.len(),
@@ -957,6 +1097,7 @@ async fn tree_unchanged(
         side.walk_limit(),
         path,
         &|_, _| false,
+        None,
         &Quiet,
     )
     .await?;
@@ -1109,6 +1250,20 @@ mod tests {
         assert_eq!(o.rule, CompareRule::NewerOnly);
         assert_eq!(o.max_file_size_mb, Some(5));
         assert_eq!(o.excludes, Some(vec!["*.tmp".to_string()]));
+        assert_eq!(o.changed_within, None);
+        let o: SyncOptions = serde_json::from_value(serde_json::json!({
+            "changedWithin": { "sinceUnix": 1_700_000_000 },
+        }))
+        .unwrap();
+        assert_eq!(
+            o.changed_within,
+            Some(ChangedWithin {
+                since_unix: 1_700_000_000
+            })
+        );
+        let o: SyncOptions =
+            serde_json::from_value(serde_json::json!({ "changedWithin": null })).unwrap();
+        assert_eq!(o.changed_within, None);
     }
 
     #[test]
@@ -1126,6 +1281,7 @@ mod tests {
             remote_dir: "/srv/site".into(),
             items: vec![it],
             totals,
+            window: None,
         };
         let json = serde_json::to_value(&plan).unwrap();
         assert_eq!(json["mode"], "mirror");
@@ -1143,5 +1299,24 @@ mod tests {
         );
         assert_eq!(json["totals"].as_object().unwrap().len(), 9);
         assert_eq!(json["totals"]["targetOnly"]["files"], 0);
+        assert!(json["window"].is_null());
+
+        let window = SyncWindow {
+            since_unix: 1_700_000_000,
+            method: SearchMethod::ServerFind,
+            clock_skew_secs: Some(-600),
+        };
+        assert_eq!(
+            serde_json::to_value(window).unwrap(),
+            serde_json::json!({
+                "sinceUnix": 1_700_000_000,
+                "method": "serverFind",
+                "clockSkewSecs": -600,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(SearchMethod::Walk).unwrap(),
+            serde_json::json!("walk")
+        );
     }
 }

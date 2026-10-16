@@ -109,6 +109,7 @@ function plan(
     remoteDir: "/srv/site",
     items,
     totals,
+    window: null,
   };
 }
 
@@ -190,6 +191,7 @@ describe("SyncDialog", () => {
         skipHidden: true,
         copyEmptyFolders: true,
         maxFileSizeMb: null,
+        changedWithin: null,
       },
       expect.any(String),
     );
@@ -386,8 +388,10 @@ describe("SyncDialog", () => {
       progress.handler!({
         type: "syncProgress",
         planId: "other",
+        stage: "scanning",
         foldersScanned: 1,
         filesSeen: 1,
+        checked: 0,
       });
     });
     expect(screen.getByRole("status")).toHaveTextContent("Comparing");
@@ -395,8 +399,10 @@ describe("SyncDialog", () => {
       progress.handler!({
         type: "syncProgress",
         planId,
+        stage: "scanning",
         foldersScanned: 812,
         filesSeen: 5120,
+        checked: 0,
       });
     });
     expect(screen.getByRole("status")).toHaveTextContent(
@@ -405,6 +411,135 @@ describe("SyncDialog", () => {
     await act(async () => finish(plan("update", "upload")));
     expect(await screen.findByLabelText("Comparison")).toBeInTheDocument();
     expect(progress.handler).toBeNull();
+  });
+
+  it("limits a comparison to recently changed files, and remembers it", async () => {
+    render(<SyncDialog />);
+    act(() => useSyncStore.getState().open("download"));
+    const field = screen.getByRole("combobox", {
+      name: "Only files changed in",
+    });
+    expect(field).toHaveValue("any");
+    fireEvent.click(screen.getByRole("radio", { name: "Mirror" }));
+    expect(screen.getByRole("radio", { name: "Mirror" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    fireEvent.change(field, { target: { value: "hour" } });
+    // Mirror needs a full comparison: off, with the reason.
+    const mirror = screen.getByRole("radio", { name: "Mirror" });
+    expect(mirror).toBeDisabled();
+    expect(mirror).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("radio", { name: "Update" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(dialog()).toHaveTextContent(
+      "deletions on Remote are not seen, so Mirror is off",
+    );
+    expect(useSettingsStore.getState().sync.changedWithin).toBe("hour");
+
+    const before = Math.floor(Date.now() / 1000);
+    await compare();
+    const options = vi.mocked(planSync).mock.calls[0][4]!;
+    expect(options.mode).toBe("update");
+    const since = options.changedWithin!.sinceUnix;
+    expect(since).toBeGreaterThanOrEqual(before - 3600);
+    expect(since).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) - 3600);
+
+    // Back to any time: everything is compared again, and Mirror is back.
+    fireEvent.change(field, { target: { value: "any" } });
+    await waitFor(() => expect(planSync).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(planSync).mock.calls[1][4]!.changedWithin).toBeNull();
+    expect(screen.getByRole("radio", { name: "Mirror" })).toBeEnabled();
+  });
+
+  it("takes a date and time for Since…", async () => {
+    render(<SyncDialog />);
+    act(() => useSyncStore.getState().open("upload"));
+    expect(screen.queryByLabelText("Changed since")).not.toBeInTheDocument();
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Only files changed in" }),
+      { target: { value: "since" } },
+    );
+    const input = screen.getByLabelText("Changed since");
+    // Starts a day back.
+    expect((input as HTMLInputElement).value).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/,
+    );
+    fireEvent.change(input, { target: { value: "2026-10-01T08:30" } });
+    expect(useSettingsStore.getState().sync.changedSince).toBe(
+      "2026-10-01T08:30",
+    );
+    await compare();
+    expect(vi.mocked(planSync).mock.calls[0][4]!.changedWithin).toEqual({
+      sinceUnix: new Date(2026, 9, 1, 8, 30).getTime() / 1000,
+    });
+  });
+
+  it("says how a windowed plan was found and how its search goes", async () => {
+    useSettingsStore.setState({
+      sync: { ...DEFAULTS.sync, changedWithin: "day" },
+    });
+    let finish: (p: SyncPlan) => void = () => undefined;
+    vi.mocked(planSync).mockImplementationOnce(
+      () => new Promise<SyncPlan>((resolve) => (finish = resolve)),
+    );
+    render(<SyncDialog />);
+    act(() => useSyncStore.getState().open("download"));
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Looking for changed files on Remote…",
+    );
+    await waitFor(() => expect(progress.handler).not.toBeNull());
+    const planId = vi.mocked(planSync).mock.calls[0][5]!;
+    const event = (stage: SyncProgressEvent["stage"], checked = 0) => ({
+      type: "syncProgress" as const,
+      planId,
+      stage,
+      foldersScanned: 0,
+      filesSeen: 120,
+      checked,
+    });
+    act(() => progress.handler!(event("searching")));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Searching the server… 120 changed files",
+    );
+    act(() => progress.handler!(event("checking", 40)));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Checking 40 of 120 changed files on Local…",
+    );
+    await act(async () =>
+      finish({
+        ...plan("update", "download"),
+        window: {
+          sinceUnix: 1_700_000_000,
+          method: "serverFind",
+          clockSkewSecs: 300,
+        },
+      }),
+    );
+    const notes = await screen.findByRole("list", { name: "Search" });
+    expect(notes).toHaveTextContent("Searched on the server");
+    expect(notes).toHaveTextContent("Server clock differs by 5 min (ahead)");
+  });
+
+  it("notes a fallback when the server could not search", async () => {
+    useSettingsStore.setState({
+      sync: { ...DEFAULTS.sync, changedWithin: "week" },
+    });
+    vi.mocked(planSync).mockResolvedValueOnce({
+      ...plan("update", "download", 0),
+      items: [],
+      window: { sinceUnix: 1_700_000_000, method: "walk", clockSkewSecs: null },
+    });
+    render(<SyncDialog />);
+    act(() => useSyncStore.getState().open("download"));
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    expect(
+      await screen.findByText("Scanned folders (server search unavailable)"),
+    ).toBeInTheDocument();
+    expect(dialog()).toHaveTextContent("No files changed in this window.");
   });
 
   it("discards an unused plan when it closes", async () => {

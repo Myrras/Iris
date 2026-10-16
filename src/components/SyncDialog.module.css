@@ -82,6 +82,41 @@
   min-width: 0;
 }
 
+.windowRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.windowRow .rule {
+  flex: 1 1 260px;
+}
+
+.since {
+  flex: 0 1 220px;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* How a windowed plan was found, over the plan. */
+.notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.notes li + li::before {
+  content: "·";
+  margin-right: var(--sp-3);
+  color: var(--text-faint);
+}
+
 .hint {
   margin: 0;
   color: var(--text-muted);

@@ -10,6 +10,10 @@
 import { create } from "zustand";
 
 import type { CompareRule } from "../ipc/types";
+
+/** "Only files changed in" choices of the Sync dialog. */
+export type ChangedWithinPreset =
+  "any" | "hour" | "today" | "day" | "week" | "since";
 import type { ActionId, ShortcutOverrides } from "../lib/keymap";
 
 export interface Settings {
@@ -33,6 +37,10 @@ export interface Settings {
     /** Skip files larger than `maxSizeMb`. */
     limitSize: boolean;
     maxSizeMb: number;
+    /** Only compare files changed in this window (`any`: everything). */
+    changedWithin: ChangedWithinPreset;
+    /** The "Since…" moment, as a `datetime-local` value (local time). */
+    changedSince: string | null;
   };
   /**
    * Only the shortcuts the user changed (action → its bindings); the rest
@@ -58,6 +66,8 @@ export const DEFAULTS: Settings = {
     copyEmptyFolders: true,
     limitSize: false,
     maxSizeMb: 100,
+    changedWithin: "any",
+    changedSince: null,
   },
   shortcuts: {},
 };
@@ -78,6 +88,25 @@ function loadShortcuts(saved: unknown): ShortcutOverrides {
     }
   }
   return out;
+}
+
+const PRESETS: ChangedWithinPreset[] = [
+  "any",
+  "hour",
+  "today",
+  "day",
+  "week",
+  "since",
+];
+
+/** The saved sync choices over the defaults; an unknown window is "any". */
+function loadSync(
+  saved: Partial<Settings["sync"]> | undefined,
+): Settings["sync"] {
+  const sync = { ...DEFAULTS.sync, ...saved };
+  if (!PRESETS.includes(sync.changedWithin)) sync.changedWithin = "any";
+  if (typeof sync.changedSince !== "string") sync.changedSince = null;
+  return sync;
 }
 
 function persist(s: Settings): void {
@@ -108,7 +137,7 @@ function load(): Settings {
       appearance: { ...DEFAULTS.appearance, ...saved.appearance },
       browser: { ...DEFAULTS.browser, ...saved.browser },
       preview: { ...DEFAULTS.preview, ...saved.preview },
-      sync: { ...DEFAULTS.sync, ...saved.sync },
+      sync: loadSync(saved.sync),
       shortcuts: loadShortcuts(saved.shortcuts),
     };
   } catch {

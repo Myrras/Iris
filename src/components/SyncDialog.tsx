@@ -3,9 +3,13 @@
  * `syncStore` (pane toolbar, context menu, ⌥⌘S / Ctrl+Alt+S).
  *
  * Set up the direction (Local → Remote or Remote → Local, both full paths
- * shown), the mode (Update, or Mirror with a warning), the compare rule
- * and the options (remembered in `settingsStore.sync`), then Compare: the
- * core walks both folders (`planSync`) and the plan shows grouped — New,
+ * shown), the mode (Update, or Mirror with a warning), the compare rule,
+ * "Only files changed in" (a time window: Mirror is off while it is set)
+ * and the options (all remembered in `settingsStore.sync`), then Compare:
+ * the core walks both folders, or with a window searches the source for
+ * changed files and looks only those up on the target (`planSync`; the
+ * plan header says whether the server searched and whether its clock
+ * differs). The plan shows grouped — New,
  * Changed, Newer on target, Different size same date, Will be deleted /
  * Only on target, Skipped — with counts and bytes, collapsible
  * (virtualised) lists and a tick per item. Changing any choice after a
@@ -37,13 +41,16 @@ import type {
 import { formatModifiedFull } from "../lib/dateFormat";
 import { formatSize } from "../lib/fileFormat";
 import {
+  CHANGED_WITHIN,
   defaultTicks,
   deleteNames,
   effectiveSkipHidden,
   isActionable,
+  parseLocalDateTime,
   planOptions,
+  progressText,
   runCounts,
-  scanText,
+  type ScanProgress,
   SECTIONS,
   sectionCount,
   sectionItems,
@@ -53,12 +60,16 @@ import {
   setTick,
   sides,
   tickedPaths,
+  toLocalDateTime,
+  windowActive,
+  windowNotes,
   type SyncSection,
 } from "../lib/sync";
 import { remoteSessionId } from "../lib/transfer";
 import { useLayoutStore } from "../state/layoutStore";
 import { itemCount, TRASH_NAME, usePaneStore } from "../state/paneStore";
 import {
+  type ChangedWithinPreset,
   SYNC_MAX_SIZE_MAX_MB,
   SYNC_MAX_SIZE_MIN_MB,
   useSettingsStore,
@@ -123,6 +134,9 @@ export function SyncDialog() {
 
   const prefs = useSettingsStore((s) => s.sync);
   const setSettings = useSettingsStore((s) => s.set);
+  // Mirror needs every file of both sides: never with a time window.
+  const windowed = windowActive(prefs);
+  const activeMode: SyncMode = windowed ? "update" : mode;
   const sourcePane = direction === "upload" ? "local" : "remote";
   const paneHidden = usePaneStore((s) => s.panes[sourcePane].showHidden);
   const globalHidden = useSettingsStore((s) => s.browser.showHidden);
@@ -134,14 +148,11 @@ export function SyncDialog() {
   const token = useRef(0);
   // The running comparison's plan id, to pick its progress events.
   const scanId = useRef<string | null>(null);
-  const [scan, setScan] = useState<{ folders: number; files: number } | null>(
-    null,
-  );
+  const [scan, setScan] = useState<ScanProgress | null>(null);
   const compared = useRef(false);
   const planRef = useRef<SyncPlan | null>(null);
   planRef.current = plan;
 
-  const optionsKey = JSON.stringify(planOptions(mode, prefs, showHidden));
   const compare = useCallback(async () => {
     const sessionId = remoteSessionId();
     if (!sessionId || !localDir || !remoteDir) {
@@ -159,12 +170,13 @@ export function SyncDialog() {
     scanId.current = planId;
     setScan(null);
     try {
+      // The window's cutoff is taken now ("the last hour" of this compare).
       const next = await planSync(
         sessionId,
         direction,
         localDir,
         remoteDir,
-        JSON.parse(optionsKey),
+        planOptions(activeMode, prefs, showHidden, new Date()),
         planId,
       );
       if (mine !== token.current) {
@@ -179,7 +191,7 @@ export function SyncDialog() {
       setError(toIpcError(e).message);
       setPhase("setup");
     }
-  }, [direction, localDir, remoteDir, optionsKey]);
+  }, [direction, localDir, remoteDir, activeMode, prefs, showHidden]);
 
   // Walk progress while comparing ("Scanning… 812 folders, 5,120 files").
   useEffect(() => {
@@ -188,7 +200,12 @@ export function SyncDialog() {
     let gone = false;
     onSyncProgress((e) => {
       if (e.planId === scanId.current) {
-        setScan({ folders: e.foldersScanned, files: e.filesSeen });
+        setScan({
+          stage: e.stage,
+          folders: e.foldersScanned,
+          files: e.filesSeen,
+          checked: e.checked,
+        });
       }
     })
       .then((u) => {
@@ -363,10 +380,10 @@ export function SyncDialog() {
                   key={m}
                   type="button"
                   role="radio"
-                  aria-checked={mode === m}
+                  aria-checked={activeMode === m}
                   className={styles.segment}
-                  data-active={mode === m ? "true" : undefined}
-                  disabled={busy}
+                  data-active={activeMode === m ? "true" : undefined}
+                  disabled={busy || (m === "mirror" && windowed)}
                   onClick={() => setMode(m)}
                 >
                   {m === "update" ? "Update" : "Mirror"}
@@ -390,11 +407,17 @@ export function SyncDialog() {
               </select>
             </label>
           </div>
+          <ChangedWithinField
+            disabled={busy}
+            onWindow={() => setMode("update")}
+          />
           <p className={styles.hint}>
             {RULES.find(([r]) => r === prefs.rule)?.[2]}
-            {mode === "update" && " Update never deletes anything."}
+            {activeMode === "update" && " Update never deletes anything."}
+            {windowed &&
+              ` Only files changed in this window are compared; deletions on ${source} are not seen, so Mirror is off.`}
           </p>
-          {mode === "mirror" && (
+          {activeMode === "mirror" && (
             <p className={prompts.notice} role="note">
               <strong>Mirror</strong> also deletes files and folders that exist
               only on {target}
@@ -421,8 +444,10 @@ export function SyncDialog() {
             <p className={styles.status} role="status">
               <span className="spinner" aria-hidden />{" "}
               {scan
-                ? scanText(scan.folders, scan.files)
-                : `Comparing ${source} and ${target}…`}
+                ? progressText(scan, windowed, target)
+                : windowed
+                  ? `Looking for changed files on ${source}…`
+                  : `Comparing ${source} and ${target}…`}
             </p>
           )}
           {phase === "starting" && (
@@ -454,6 +479,64 @@ function syncLabel(
   if (counts.copies > 0) parts.push(`copy ${counts.copies}`);
   if (counts.deletes > 0) parts.push(`delete ${counts.deletes}`);
   return parts.length > 0 ? `Sync (${parts.join(", ")})` : "Sync";
+}
+
+/**
+ * "Only files changed in [Any time ▾]", with a date and time for
+ * "Since…" (remembered). `onWindow` runs when a window is chosen.
+ */
+function ChangedWithinField({
+  disabled,
+  onWindow,
+}: {
+  disabled: boolean;
+  onWindow: () => void;
+}) {
+  const prefs = useSettingsStore((s) => s.sync);
+  const set = (patch: Partial<typeof prefs>) =>
+    useSettingsStore.getState().set("sync", patch);
+  const choose = (preset: ChangedWithinPreset) => {
+    const patch: Partial<typeof prefs> = { changedWithin: preset };
+    if (preset === "since" && parseLocalDateTime(prefs.changedSince) === null) {
+      // Start from a day ago.
+      patch.changedSince = toLocalDateTime(new Date(Date.now() - 86_400_000));
+    }
+    set(patch);
+    if (preset !== "any") onWindow();
+  };
+  return (
+    <div className={styles.windowRow}>
+      <label className={styles.rule}>
+        <span>Only files changed in</span>
+        <select
+          value={prefs.changedWithin}
+          disabled={disabled}
+          onChange={(e) => choose(e.target.value as ChangedWithinPreset)}
+        >
+          {CHANGED_WITHIN.map(([preset, label]) => (
+            <option key={preset} value={preset}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {prefs.changedWithin === "since" && (
+        <input
+          type="datetime-local"
+          className={styles.since}
+          aria-label="Changed since"
+          value={prefs.changedSince ?? ""}
+          max={toLocalDateTime(new Date())}
+          disabled={disabled}
+          onChange={(e) => {
+            if (parseLocalDateTime(e.target.value) !== null) {
+              set({ changedSince: e.target.value });
+            }
+          }}
+        />
+      )}
+    </div>
+  );
 }
 
 /** The disclosure with the remembered options. */
@@ -587,78 +670,99 @@ function Review({
     else next.add(section);
     onExpanded(next);
   };
+  const notes = windowNotes(plan);
+  const noteList =
+    notes.length > 0 ? (
+      <ul className={styles.notes} aria-label="Search">
+        {notes.map((note) => (
+          <li key={note}>{note}</li>
+        ))}
+      </ul>
+    ) : null;
   if (shown.length === 0) {
-    return <p className={styles.status}>The folders are empty.</p>;
+    return (
+      <>
+        {noteList}
+        <p className={styles.status}>
+          {plan.window
+            ? "No files changed in this window."
+            : "The folders are empty."}
+        </p>
+      </>
+    );
   }
   return (
-    <div className={styles.review} aria-label="Comparison">
-      {shown.map((section) => {
-        const items = sectionItems(plan, section);
-        const label = sectionLabel(
-          section,
-          plan.mode,
-          plan.direction,
-          everything,
-        );
-        const { ticked, total } = sectionTicked(ticks, plan, section);
-        const open = expanded.has(section);
-        return (
-          <section
-            key={section}
-            className={styles.group}
-            data-section={section}
-          >
-            <div className={styles.groupHeader}>
-              {total > 0 ? (
-                <input
-                  type="checkbox"
-                  aria-label={`All of ${label}`}
-                  checked={ticked === total}
-                  ref={(el) => {
-                    if (el) el.indeterminate = ticked > 0 && ticked < total;
-                  }}
-                  onChange={(e) =>
-                    onTicks(
-                      setSectionTicks(ticks, plan, section, e.target.checked),
-                    )
-                  }
-                />
-              ) : (
-                <span className={styles.checkSpace} />
-              )}
-              <button
-                type="button"
-                className={styles.groupToggle}
-                aria-expanded={open}
-                disabled={items.length === 0}
-                onClick={() => toggle(section)}
-              >
-                <span
-                  className={styles.caret}
-                  data-open={open ? "true" : undefined}
+    <>
+      {noteList}
+      <div className={styles.review} aria-label="Comparison">
+        {shown.map((section) => {
+          const items = sectionItems(plan, section);
+          const label = sectionLabel(
+            section,
+            plan.mode,
+            plan.direction,
+            everything,
+          );
+          const { ticked, total } = sectionTicked(ticks, plan, section);
+          const open = expanded.has(section);
+          return (
+            <section
+              key={section}
+              className={styles.group}
+              data-section={section}
+            >
+              <div className={styles.groupHeader}>
+                {total > 0 ? (
+                  <input
+                    type="checkbox"
+                    aria-label={`All of ${label}`}
+                    checked={ticked === total}
+                    ref={(el) => {
+                      if (el) el.indeterminate = ticked > 0 && ticked < total;
+                    }}
+                    onChange={(e) =>
+                      onTicks(
+                        setSectionTicks(ticks, plan, section, e.target.checked),
+                      )
+                    }
+                  />
+                ) : (
+                  <span className={styles.checkSpace} />
+                )}
+                <button
+                  type="button"
+                  className={styles.groupToggle}
+                  aria-expanded={open}
+                  disabled={items.length === 0}
+                  onClick={() => toggle(section)}
                 >
-                  <CaretIcon />
-                </span>
-                <span className={styles.groupLabel}>{label}</span>
-                <span className={styles.groupCount}>
-                  {section === "skipped"
-                    ? skippedCount(plan)
-                    : sectionCount(plan, section)}
-                </span>
-              </button>
-            </div>
-            {open && items.length > 0 && (
-              <ItemList
-                items={items}
-                plan={plan}
-                ticks={ticks}
-                onTick={(item, on) => onTicks(setTick(ticks, plan, item, on))}
-              />
-            )}
-          </section>
-        );
-      })}
-    </div>
+                  <span
+                    className={styles.caret}
+                    data-open={open ? "true" : undefined}
+                  >
+                    <CaretIcon />
+                  </span>
+                  <span className={styles.groupLabel}>{label}</span>
+                  <span className={styles.groupCount}>
+                    {section === "skipped"
+                      ? skippedCount(plan)
+                      : sectionCount(plan, section)}
+                  </span>
+                </button>
+              </div>
+              {open && items.length > 0 && (
+                <ItemList
+                  items={items}
+                  plan={plan}
+                  ticks={ticks}
+                  onTick={(item, on) => onTicks(setTick(ticks, plan, item, on))}
+                />
+              )}
+            </section>
+          );
+        })}
+      </div>
+    </>
   );
 }
 

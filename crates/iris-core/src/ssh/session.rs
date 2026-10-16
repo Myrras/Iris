@@ -199,6 +199,13 @@ impl SshSession {
         }
     }
 
+    /// A new session channel on the connection (for `exec.rs`).
+    pub(super) async fn open_session_channel(
+        &self,
+    ) -> Result<russh::Channel<client::Msg>, russh::Error> {
+        self.handle.channel_open_session().await
+    }
+
     /// Whether the SSH connection has ended.
     pub fn is_closed(&self) -> bool {
         self.handle.is_closed()

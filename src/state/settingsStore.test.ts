@@ -39,12 +39,32 @@ describe("settingsStore", () => {
       copyEmptyFolders: true,
       limitSize: false,
       maxSizeMb: 100,
+      changedWithin: "any",
+      changedSince: null,
     });
     store.getState().set("sync", { rule: "sizeOnly", skipHidden: false });
     store = await freshStore();
     expect(store.getState().sync.rule).toBe("sizeOnly");
     expect(store.getState().sync.skipHidden).toBe(false);
     expect(store.getState().sync.copyEmptyFolders).toBe(true);
+  });
+
+  it("remembers the time window, and drops one it does not know", async () => {
+    let store = await freshStore();
+    store.getState().set("sync", {
+      changedWithin: "since",
+      changedSince: "2026-10-01T08:30",
+    });
+    store = await freshStore();
+    expect(store.getState().sync.changedWithin).toBe("since");
+    expect(store.getState().sync.changedSince).toBe("2026-10-01T08:30");
+    localStorage.setItem(
+      "iris.settings",
+      JSON.stringify({ sync: { changedWithin: "fortnight", changedSince: 5 } }),
+    );
+    store = await freshStore();
+    expect(store.getState().sync.changedWithin).toBe("any");
+    expect(store.getState().sync.changedSince).toBeNull();
   });
 
   it("falls back to defaults on a corrupt blob", async () => {

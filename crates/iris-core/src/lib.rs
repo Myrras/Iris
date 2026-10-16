@@ -87,8 +87,8 @@ pub use settings::{IrisSettings, IrisSettingsStore};
 pub use ssh::AgentLocation;
 pub use ssh_config::SshConfigHost;
 pub use sync::{
-    CompareRule, SyncGroup, SyncItem, SyncItemKind, SyncMode, SyncOptions, SyncPlan, SyncTotal,
-    SyncTotals,
+    ChangedWithin, CompareRule, SearchMethod, SyncGroup, SyncItem, SyncItemKind, SyncMode,
+    SyncOptions, SyncPlan, SyncScanStage, SyncTotal, SyncTotals, SyncWindow,
 };
 pub use transfer::export::{ExportReport, ExportScope};
 pub use transfer::{

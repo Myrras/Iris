@@ -17,7 +17,12 @@
 //! open at once (across all channels and connections) and can slow every
 //! read and write (and folder listing) down. For the reconnect tests it can
 //! cut its TCP connections dead (no SSH goodbye, like a dropped link) and
-//! refuse new ones. All data is fictitious.
+//! refuse new ones.
+//!
+//! `exec` requests are refused (an SFTP-only account) unless a test sets
+//! an [`ExecResponder`]: it runs nothing, it answers each command (with
+//! everything sent on its standard input) with scripted output and an exit
+//! status. All data is fictitious.
 
 #![allow(dead_code)] // Each test binary uses a different subset.
 
@@ -42,6 +47,10 @@ use tokio::sync::Mutex;
 pub const USER: &str = "demo";
 pub const PASSWORD: &str = "correct-horse-battery";
 pub const HOST: &str = "127.0.0.1";
+
+/// Answers an `exec` request: `(command, stdin)` → `(stdout, exit status)`,
+/// or `None` to refuse it.
+pub type ExecResponder = Arc<dyn Fn(&str, &[u8]) -> Option<(Vec<u8>, u32)> + Send + Sync>;
 
 /// How many names one READDIR reply carries (OpenSSH sends ~100 too).
 const READDIR_BATCH: usize = 100;
@@ -93,6 +102,7 @@ impl Endpoint {
         let handler = SshHandler {
             shared: Arc::clone(&self.shared),
             channels: Arc::new(Mutex::new(HashMap::new())),
+            execs: std::collections::HashSet::new(),
         };
         let config = Arc::clone(&self.config);
         let accepted = Arc::clone(&self.sessions);
@@ -206,6 +216,7 @@ impl TestServer {
             authorized_key,
             routes: routes.into_iter().collect(),
             stats: Arc::default(),
+            exec: std::sync::Mutex::new(None),
         });
         let endpoint = Arc::new(Endpoint {
             config,
@@ -311,6 +322,17 @@ impl TestServer {
             .stats
             .max_open_dirs
             .load(Ordering::SeqCst)
+    }
+
+    /// Answer `exec` requests with `responder` from now on (`None`: refuse
+    /// them, the default).
+    pub fn set_exec(&self, responder: Option<ExecResponder>) {
+        *self.endpoint.shared.exec.lock().unwrap() = responder;
+    }
+
+    /// `exec` commands asked for (refused ones too), in order.
+    pub fn exec_commands(&self) -> Vec<String> {
+        self.endpoint.shared.stats.execs.lock().unwrap().clone()
     }
 
     /// Folder listings (OPENDIRs) served since the last reset.
@@ -431,6 +453,7 @@ struct Shared {
     /// `direct-tcpip` destinations this server can reach.
     routes: HashMap<(String, u16), Arc<Endpoint>>,
     stats: Arc<Stats>,
+    exec: std::sync::Mutex<Option<ExecResponder>>,
 }
 
 /// Instrumentation shared by every SFTP channel of a server.
@@ -453,6 +476,8 @@ struct Stats {
     max_open_dirs: AtomicUsize,
     /// OPENDIRs served.
     listings: AtomicUsize,
+    /// `exec` commands asked for.
+    execs: std::sync::Mutex<Vec<String>>,
 }
 
 impl Stats {
@@ -490,6 +515,9 @@ impl Stats {
 struct SshHandler {
     shared: Arc<Shared>,
     channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
+    /// Channels running a scripted command: their end of input is the
+    /// command's, not a reason to close.
+    execs: std::collections::HashSet<ChannelId>,
 }
 
 impl russh::server::Handler for SshHandler {
@@ -566,7 +594,57 @@ impl russh::server::Handler for SshHandler {
         channel: ChannelId,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
-        session.close(channel)?;
+        if !self.execs.remove(&channel) {
+            session.close(channel)?;
+        }
+        Ok(())
+    }
+
+    async fn exec_request(
+        &mut self,
+        channel_id: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        let command = String::from_utf8_lossy(data).into_owned();
+        self.shared
+            .stats
+            .execs
+            .lock()
+            .unwrap()
+            .push(command.clone());
+        let responder = self.shared.exec.lock().unwrap().clone();
+        let channel = self.channels.lock().await.remove(&channel_id);
+        let (Some(responder), Some(mut channel)) = (responder, channel) else {
+            session.channel_failure(channel_id)?;
+            return Ok(());
+        };
+        session.channel_success(channel_id)?;
+        self.execs.insert(channel_id);
+        // Read the command's input to its end, then answer.
+        tokio::spawn(async move {
+            let mut stdin = Vec::new();
+            while let Some(msg) = channel.wait().await {
+                match msg {
+                    russh::ChannelMsg::Data { data } => stdin.extend_from_slice(&data),
+                    russh::ChannelMsg::Eof | russh::ChannelMsg::Close => break,
+                    _ => {}
+                }
+            }
+            match responder(&command, &stdin) {
+                Some((stdout, status)) => {
+                    if !stdout.is_empty() {
+                        let _ = channel.data_bytes(stdout).await;
+                    }
+                    let _ = channel.exit_status(status).await;
+                }
+                None => {
+                    let _ = channel.exit_status(127).await;
+                }
+            }
+            let _ = channel.eof().await;
+            let _ = channel.close().await;
+        });
         Ok(())
     }
 

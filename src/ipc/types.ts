@@ -609,6 +609,32 @@ export interface SyncOptions {
   maxFileSizeMb?: number | null;
   /** Name patterns to leave alone; omitted = the `syncExcludes` setting. */
   excludes?: string[] | null;
+  /**
+   * Only compare files changed at or after `sinceUnix` (unix seconds, our
+   * clock); `null` = everything. Refused with Mirror (`invalidInput`).
+   */
+  changedWithin?: ChangedWithin | null;
+}
+
+/** The time window of a sync (`iris_core::ChangedWithin`). */
+export interface ChangedWithin {
+  sinceUnix: number;
+}
+
+/** How a windowed plan found its files (`iris_core::SearchMethod`). */
+export type SearchMethod = "serverFind" | "walk";
+
+/** What a windowed plan reports (`iris_core::SyncWindow`). */
+export interface SyncWindow {
+  /** The cutoff asked for (our clock). */
+  sinceUnix: number;
+  /** `serverFind`: one `find` on the server; `walk`: folders walked. */
+  method: SearchMethod;
+  /**
+   * Seconds the server's clock is ahead of ours (negative: behind), when
+   * more than a minute and the cutoff was moved by it; else `null`.
+   */
+  clockSkewSecs: number | null;
 }
 
 /** Where a plan item landed (`iris_core::SyncGroup`). */
@@ -660,18 +686,31 @@ export interface SyncPlan {
   items: SyncItem[];
   /** Every group, also the empty ones. */
   totals: Record<SyncGroup, SyncTotal>;
+  /** For a plan limited to changed files: how they were found. */
+  window: SyncWindow | null;
 }
 
 /**
- * Payload of `sync:progress`: how far a comparison's walk got (both sides
- * together; at most ten a second).
+ * What a comparison is doing (`iris_core::SyncScanStage`): walking
+ * folders, searching the server, or looking up changed files on the target.
+ */
+export type SyncScanStage = "scanning" | "searching" | "checking";
+
+/**
+ * Payload of `sync:progress`: how far a comparison got (at most ten a
+ * second, one at each new stage). `scanning`: folders walked and files
+ * seen, both sides together (a windowed walk counts changed files only);
+ * `searching`: changed files the server search found so far; `checking`:
+ * `checked` of `filesSeen` changed files looked up on the target.
  */
 export interface SyncProgressEvent {
   type: "syncProgress";
   /** The id `planSync` was given. */
   planId: SyncPlanId;
+  stage: SyncScanStage;
   foldersScanned: number;
   filesSeen: number;
+  checked: number;
 }
 
 /** Payload of `sync:finished`: a run's copies and deletes are done. */

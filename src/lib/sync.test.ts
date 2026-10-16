@@ -7,7 +7,9 @@ import {
   deleteNames,
   finishedToast,
   isActionable,
+  parseLocalDateTime,
   planOptions,
+  progressText,
   runCounts,
   scanText,
   sectionCount,
@@ -16,6 +18,10 @@ import {
   setSectionTicks,
   setTick,
   tickedPaths,
+  toLocalDateTime,
+  windowActive,
+  windowCutoff,
+  windowNotes,
 } from "./sync";
 
 function item(
@@ -68,6 +74,7 @@ function plan(items: SyncItem[], mode: SyncPlan["mode"] = "update"): SyncPlan {
     remoteDir: "/srv/site",
     items,
     totals,
+    window: null,
   };
 }
 
@@ -174,6 +181,7 @@ describe("sync rules", () => {
       skipHidden: true,
       copyEmptyFolders: true,
       maxFileSizeMb: null,
+      changedWithin: null,
     });
     // "Skip hidden" follows the panes until it is changed.
     expect(planOptions("update", prefs, true).skipHidden).toBe(false);
@@ -224,5 +232,102 @@ describe("scanText", () => {
   it("counts folders and files with thousands separators", () => {
     expect(scanText(812, 5120)).toBe("Scanning… 812 folders, 5,120 files");
     expect(scanText(1, 1)).toBe("Scanning… 1 folder, 1 file");
+    expect(scanText(3, 12, true)).toBe("Scanning… 3 folders, 12 changed files");
+  });
+
+  it("words each stage of a comparison", () => {
+    const at = { folders: 4, files: 120, checked: 40 };
+    expect(progressText({ stage: "searching", ...at }, true, "Local")).toBe(
+      "Searching the server… 120 changed files",
+    );
+    expect(progressText({ stage: "checking", ...at }, true, "Remote")).toBe(
+      "Checking 40 of 120 changed files on Remote…",
+    );
+    expect(progressText({ stage: "scanning", ...at }, false, "Remote")).toBe(
+      "Scanning… 4 folders, 120 files",
+    );
+  });
+});
+
+describe("the time window", () => {
+  // A fixed moment, local time: 16 Oct 2026, 14:30.
+  const now = new Date(2026, 9, 16, 14, 30, 15);
+  const secs = Math.floor(now.getTime() / 1000);
+  const prefs = (
+    changedWithin: (typeof DEFAULTS.sync)["changedWithin"],
+    changedSince: string | null = null,
+  ) => ({ ...DEFAULTS.sync, changedWithin, changedSince });
+
+  it("turns each preset into a cutoff", () => {
+    expect(windowCutoff(prefs("any"), now)).toBeNull();
+    expect(windowCutoff(prefs("hour"), now)).toBe(secs - 3600);
+    expect(windowCutoff(prefs("day"), now)).toBe(secs - 86_400);
+    expect(windowCutoff(prefs("week"), now)).toBe(secs - 7 * 86_400);
+    expect(windowCutoff(prefs("today"), now)).toBe(
+      new Date(2026, 9, 16, 0, 0, 0).getTime() / 1000,
+    );
+    expect(windowCutoff(prefs("since", "2026-10-01T08:30"), now)).toBe(
+      new Date(2026, 9, 1, 8, 30).getTime() / 1000,
+    );
+    // "Since…" without a valid moment is no window.
+    expect(windowCutoff(prefs("since", null), now)).toBeNull();
+    expect(windowCutoff(prefs("since", "yesterday"), now)).toBeNull();
+    expect(windowActive(prefs("since", null))).toBe(false);
+    expect(windowActive(prefs("hour"))).toBe(true);
+    expect(windowActive(prefs("any"))).toBe(false);
+  });
+
+  it("reads and writes datetime-local values in local time", () => {
+    expect(toLocalDateTime(new Date(2026, 0, 5, 7, 3))).toBe(
+      "2026-01-05T07:03",
+    );
+    expect(parseLocalDateTime("2026-01-05T07:03")).toBe(
+      new Date(2026, 0, 5, 7, 3).getTime() / 1000,
+    );
+    expect(parseLocalDateTime("2026-01-05T07:03:09")).toBe(
+      new Date(2026, 0, 5, 7, 3, 9).getTime() / 1000,
+    );
+    expect(parseLocalDateTime("")).toBeNull();
+    expect(parseLocalDateTime("2026-13-45T99:99")).toBeNull();
+  });
+
+  it("sends the cutoff, always in Update", () => {
+    expect(planOptions("mirror", prefs("hour"), false, now)).toMatchObject({
+      mode: "update",
+      changedWithin: { sinceUnix: secs - 3600 },
+    });
+    expect(planOptions("mirror", prefs("any"), false, now)).toMatchObject({
+      mode: "mirror",
+      changedWithin: null,
+    });
+  });
+
+  it("notes how the files were found and the server's clock", () => {
+    const base = plan([]);
+    expect(windowNotes(base)).toEqual([]);
+    const windowed = (
+      direction: SyncPlan["direction"],
+      method: "serverFind" | "walk",
+      clockSkewSecs: number | null = null,
+    ): SyncPlan => ({
+      ...base,
+      direction,
+      window: { sinceUnix: secs, method, clockSkewSecs },
+    });
+    expect(windowNotes(windowed("download", "serverFind"))).toEqual([
+      "Searched on the server",
+    ]);
+    expect(windowNotes(windowed("download", "walk"))).toEqual([
+      "Scanned folders (server search unavailable)",
+    ]);
+    expect(windowNotes(windowed("upload", "walk"))).toEqual([
+      "Scanned the local folder",
+    ]);
+    expect(windowNotes(windowed("download", "serverFind", -600))[1]).toBe(
+      "Server clock differs by 10 min (behind); the window follows the server's clock",
+    );
+    expect(windowNotes(windowed("download", "walk", 75))[1]).toMatch(
+      /^Server clock differs by 1 min \(ahead\)/,
+    );
   });
 });

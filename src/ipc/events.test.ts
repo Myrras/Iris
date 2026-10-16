@@ -174,8 +174,10 @@ describe("sync events", () => {
     const event: SyncProgressEvent = {
       type: "syncProgress",
       planId: "p-1",
+      stage: "scanning",
       foldersScanned: 812,
       filesSeen: 5120,
+      checked: 0,
     };
     listeners["sync:progress"]({ payload: event });
     expect(handler).toHaveBeenCalledWith(event);

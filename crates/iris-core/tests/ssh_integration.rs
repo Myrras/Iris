@@ -1223,3 +1223,183 @@ async fn sync_update_and_mirror_against_openssh() {
     assert!(again.items.is_empty(), "{:#?}", again.items);
     f.core.disconnect(session).await.unwrap();
 }
+
+fn changed_within(since: i64) -> SyncOptions {
+    SyncOptions {
+        changed_within: Some(iris_core::ChangedWithin { since_unix: since }),
+        ..SyncOptions::default()
+    }
+}
+
+/// Every listed item's path with its group.
+fn sync_groups(plan: &SyncPlan) -> Vec<(String, SyncGroup)> {
+    plan.items
+        .iter()
+        .map(|i| (i.path.clone(), i.group))
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "needs Docker; run with just test-integration"]
+async fn sync_within_a_window_against_openssh() {
+    let sshd = start_sshd(SshdOptions::default()).await;
+    // Server files at controlled dates: two old ones, the rest just now;
+    // an excluded folder and a link to a fresh file.
+    sshd.sh(
+        "mkdir -p /config/site/docs /config/site/node_modules /config/site/archive \
+         && echo old > /config/site/archive/2019.txt \
+         && touch -d '2019-06-01 12:00:00' /config/site/archive/2019.txt \
+         && echo 'version one' > /config/site/stale.txt \
+         && touch -d '2020-01-01 00:00:00' /config/site/stale.txt \
+         && echo 'brand new' > /config/site/new.txt \
+         && echo 'version two, longer' > /config/site/changed.txt \
+         && echo deep > /config/site/docs/deep.txt \
+         && echo dep > /config/site/node_modules/dep.js \
+         && echo linked > /config/site/target.txt \
+         && ln -s target.txt /config/site/link.txt \
+         && chown -R -h 1000:1000 /config/site \
+         && mkdir /config/site/locked && echo secret > /config/site/locked/x.txt \
+         && chmod 000 /config/site/locked",
+    )
+    .await;
+    let f = Fixture::new();
+    let _answers = auto_answer(&f.core, true);
+    let id = f.save(HOST, sshd.port, AuthMethod::Password, None);
+    let session = f
+        .core
+        .connect(id, Some(Secret::new(PASSWORD)), None)
+        .await
+        .unwrap();
+    let home = f.core.home_dir(remote(session)).await.unwrap();
+    let site = format!("{}/site", home.trim_end_matches('/'));
+    let local = f.dir.path().join("site");
+    std::fs::create_dir_all(&local).unwrap();
+    std::fs::write(local.join("changed.txt"), "version one\n").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(local.join("changed.txt"))
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_577_836_800))
+        .unwrap();
+    let local_dir = local.to_string_lossy().into_owned();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let since = now - 3600;
+    let expected = vec![
+        ("changed.txt".to_string(), SyncGroup::Changed),
+        ("docs".into(), SyncGroup::New),
+        ("docs/deep.txt".into(), SyncGroup::New),
+        ("link.txt".into(), SyncGroup::New),
+        // Root's folder, unreadable for the user: reported, not entered.
+        ("locked".into(), SyncGroup::Skipped),
+        ("new.txt".into(), SyncGroup::New),
+        ("target.txt".into(), SyncGroup::New),
+    ];
+
+    // The image ships GNU findutils: the server search runs.
+    let plan = f
+        .core
+        .plan_sync(
+            session,
+            TransferDirection::Download,
+            &local_dir,
+            &site,
+            changed_within(since),
+        )
+        .await
+        .unwrap();
+    let window = plan.window.unwrap();
+    assert_eq!(window.method, iris_core::SearchMethod::ServerFind);
+    assert_eq!(
+        window.clock_skew_secs, None,
+        "the container shares our clock"
+    );
+    assert_eq!(sync_groups(&plan), expected);
+
+    // The compare rule still decides: a local copy newer than the server.
+    std::fs::write(local.join("new.txt"), "newer here\n").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(local.join("new.txt"))
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(now as u64 + 3600))
+        .unwrap();
+    let options = SyncOptions {
+        rule: iris_core::CompareRule::NewerOnly,
+        ..changed_within(since)
+    };
+    let plan = f
+        .core
+        .plan_sync(
+            session,
+            TransferDirection::Download,
+            &local_dir,
+            &site,
+            options,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        sync_group(&plan, "new.txt"),
+        Some(SyncGroup::TargetNewer),
+        "{:#?}",
+        plan.items
+    );
+    std::fs::remove_file(local.join("new.txt")).unwrap();
+
+    // Without `find` the folders are walked, with the same answer.
+    sshd.sh("mv /usr/bin/find /usr/bin/find.off").await;
+    let plan = f
+        .core
+        .plan_sync(
+            session,
+            TransferDirection::Download,
+            &local_dir,
+            &site,
+            changed_within(since),
+        )
+        .await
+        .unwrap();
+    assert_eq!(plan.window.unwrap().method, iris_core::SearchMethod::Walk);
+    assert_eq!(sync_groups(&plan), expected);
+    let (copied, failed, _, _) = run_sync(&f.core, &plan).await;
+    assert_eq!((copied, failed), (5, 0));
+    assert_eq!(
+        std::fs::read_to_string(local.join("changed.txt")).unwrap(),
+        "version two, longer\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(local.join("link.txt")).unwrap(),
+        "linked\n"
+    );
+    assert!(!local.join("archive").exists());
+    assert!(!local.join("stale.txt").exists());
+    assert!(!local.join("node_modules").exists());
+    sshd.sh("mv /usr/bin/find.off /usr/bin/find").await;
+
+    // An upload within the window: only the fresh local file is looked
+    // up on the server and copied.
+    std::fs::write(local.join("fresh.txt"), "fresh\n").unwrap();
+    let plan = f
+        .core
+        .plan_sync(
+            session,
+            TransferDirection::Upload,
+            &local_dir,
+            &site,
+            changed_within(now - 60),
+        )
+        .await
+        .unwrap();
+    assert_eq!(plan.window.unwrap().method, iris_core::SearchMethod::Walk);
+    assert_eq!(
+        sync_group(&plan, "fresh.txt"),
+        Some(SyncGroup::New),
+        "{:#?}",
+        plan.items
+    );
+    assert_eq!(sync_group(&plan, "stale.txt"), None);
+    f.core.disconnect(session).await.unwrap();
+}

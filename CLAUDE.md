@@ -668,6 +668,72 @@ standalone template:
     mirror confirm, rule switch re-compares, options disclosure + default
     ticks), `Pane` (button, menu, shortcut, enabled state), Settings
     excludes editor, `settingsStore` sync prefs.
+  - **Time window** ("Only files changed in", `sync/window.rs`,
+    `sync/remote_find.rs`, `ssh/exec.rs`): `SyncOptions.changedWithin:
+    {sinceUnix} | null` (our clock; the dialog computes it from the
+    remembered preset `settingsStore.sync.changedWithin` = any | hour |
+    today (local midnight) | day | week | since + `changedSince`, a
+    `datetime-local` value). Refused with Mirror (`invalidInput`: deletions
+    on the source are not seen) and for a cutoff in the future (> 60 s).
+    The source is searched, the target never walked:
+    `walk::stat_candidates` looks up (LSTAT, a link to a file also STAT)
+    only the found paths plus their folders (`with_parents`), level by
+    level, `REMOTE_LISTINGS` / `LOCAL_LISTINGS` at once over the walk
+    channels; nothing under a folder the target lacks or has as a file
+    (those are `new` / `typeMismatch` in the unchanged pure `diff`).
+    - Local source (upload): `walk(.., changed_since)` — files (links to
+      files by their target) with mtime ≥ cutoff (unknown = in), folder
+      links / broken links / sockets by their own date, unreadable folders
+      and unsafe-named folders always; pruned names (excludes, hidden with
+      skip hidden) dropped entirely; folders themselves dropped.
+    - Remote source (download): `date +%s` over an exec channel first
+      (refused → no search, walk); a clock more than
+      `CLOCK_SKEW_TOLERANCE_SECS` (60) off moves the cutoff by the skew for
+      the search *and* the walk, reported as `SyncWindow.clockSkewSecs`.
+      Then `sh` gets the script on stdin (any login shell only has to start
+      `sh`): `LC_ALL=C; printf 'IRIS-FIND\0'; find -H '<root>' -mindepth 1
+      \( -name '<exclude>' … -o -name '.*' \) -prune -o -type d \( !
+      -readable -o ! -executable \) -printf 'U\0%P\0-\0-\0' -prune -o -type
+      f -newermt @<since−1> -printf 'F\0%P\0%s\0%T@\0' -o -type l -printf
+      'L\0%P\0%Y\0%T@\0' -o ! -type d -newermt @<since−1> -printf
+      'S\0%P\0-\0%T@\0'; printf 'IRIS-END\0%s\0' "$?"`. Root and patterns
+      through `ssh::exec::sh_quote` (POSIX single quotes, NUL refused); a
+      relative root gets `./`; patterns with `?` are not passed (C-locale
+      byte vs character), `[ ] \` escaped; Iris re-checks every name.
+      Records are 4 NUL-terminated fields; names run through `is_safe_name`
+      per segment (cut at the first unsafe one, non-UTF-8 = unsafe); files
+      kept at whole seconds ≥ cutoff (the walk's rule); `L` with `%Y` = `f`
+      (or another non-folder) looked up over SFTP (target size/date
+      decide), `d` / `N L ?` = folder / broken link by own date; `U` =
+      unreadable folder. No header, no end marker, status ≠ 0 or a bad
+      record → `ParseError` → walk. Limits: 50 MB stdout
+      (`FIND_OUTPUT_LIMIT`), 120 s (`FIND_TIMEOUT`, then a probe:
+      `NotConnected` or walk), stderr never read into messages.
+      GNU findutils only (`-printf`, `-newermt`, `-readable`): BusyBox / BSD
+      find fail at once → walk. The Docker image ships GNU find 4.10.
+    - `SshSession::exec(command, stdin, ExecLimits, on_output)`
+      (`ssh/exec.rs`, russh `channel_open_session` + `exec`): refused =
+      `Remote`, too much = `TooLarge`, too long = `Remote` / `NotConnected`.
+    - Plan: `window: {sinceUnix, method: serverFind | walk, clockSkewSecs}
+      | null`. `SyncProgress` gained `stage: scanning | searching |
+      checking` and `checked`; the dialog says "Searching the server… 120
+      changed files", "Checking 40 of 120 changed files on Local…".
+    - UI: "Only files changed in [Any time ▾]" under the mode/rule row,
+      "Since…" adds a `datetime-local` (starts a day back); Mirror disabled
+      with the reason in the hint; plan header notes "Searched on the
+      server" / "Scanned folders (server search unavailable)" / "Scanned
+      the local folder" and "Server clock differs by N min".
+    - Tests: unit (`ssh/exec.rs` quoting through a real `sh`;
+      `remote_find.rs` script, parsing, odd/unsafe names, truncation, skew;
+      a real GNU find run when present; `sync/walk.rs` windowed walk,
+      parents, candidate lookups + diff), hermetic `tests/sync_window.rs`
+      (`support/` answers `exec` with an `ExecResponder` or refuses it:
+      upload with no target listing, compare rules, refused exec → walk,
+      a scripted `find` with a skewed clock and links, BusyBox / cut output
+      → walk, Mirror / future refused), Docker
+      `sync_within_a_window_against_openssh` (server find, an unreadable
+      folder, `newerOnly`, `find` moved away → walk with the same plan, an
+      upload).
   - Check by hand: a large tree (thousands of files) for compare time and
     list scrolling; Mirror to the local Trash on Windows (Recycle Bin).
 - ✅ **Fast tree walks.** `fs/walk.rs` (`FolderWalk<L: ListFolder, T>`) is
@@ -847,7 +913,8 @@ crates/iris-core/src/
   connection/ # ConnectionProfile + AuthMethod + JumpHost; store.rs = ProfileStore
               # (profiles.json); route.rs = profile → hops (jumps, config)
   ssh/        # russh wrapper: session.rs (hops/auth/SFTP), hostkey.rs
-              # (known_hosts + prompts), agent.rs (ssh-agent / Pageant)
+              # (known_hosts + prompts), agent.rs (ssh-agent / Pageant),
+              # exec.rs (one command over an exec channel, sh_quote)
   fs/         # FileSystem trait, Entry/EntryKind/FsTarget, BatchReport;
               # local.rs, sftp.rs, trash.rs (Trash trait + SystemTrash),
               # walk.rs (concurrent folder-tree walker)
@@ -861,7 +928,9 @@ crates/iris-core/src/
   edit/       # remote edit: Opener trait, EditManager, watcher, upload/conflicts
   drag_out.rs # remote rows → <cacheDir>/dragout/<id>/ for an OS drag (limits, cleanup)
   sync/       # folder sync: mod.rs (types, SyncManager, plan/run/deletes), diff.rs
-              # (the pure comparison), walk.rs (one side → list), exclude.rs (patterns)
+              # (the pure comparison), walk.rs (one side → list, target lookups),
+              # exclude.rs (patterns), window.rs (changed-within search),
+              # remote_find.rs (the server `find` script + output parser)
 crates/iris-core/tests/
   core.rs     # integration test over the public API — no UI required
   remote.rs   # connect/browse against the in-process SFTP server (unix only)
@@ -872,6 +941,7 @@ crates/iris-core/tests/
   drag_out.rs # drag-out preparation: download, limits, cancel, cleanup (unix only)
   walk.rs     # concurrent tree walks: listings in flight, progress, benchmarks (unix only)
   sync.rs     # folder sync: Update/Mirror both ways, failed copies, changed targets (unix only)
+  sync_window.rs  # changed-within syncs: lookups only, server find, fallback (unix only)
   ssh_integration.rs  # Docker OpenSSH servers, #[ignore]d (just test-integration)
   support/    # hermetic russh + russh-sftp test server, jump routing, agent
 src-tauri/

@@ -362,6 +362,7 @@ async fn a_sync_comparison_reports_its_progress() {
             plan_id: id,
             folders_scanned,
             files_seen,
+            ..
         } = event
         {
             assert_eq!(id, plan_id);

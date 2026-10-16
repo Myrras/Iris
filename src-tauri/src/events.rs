@@ -204,8 +204,10 @@ mod tests {
             (
                 CoreEvent::SyncProgress {
                     plan_id: SyncPlanId::new(),
+                    stage: iris_core::SyncScanStage::Scanning,
                     folders_scanned: 12,
                     files_seen: 340,
+                    checked: 0,
                 },
                 "sync:progress",
             ),

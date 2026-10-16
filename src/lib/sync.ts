@@ -1,7 +1,9 @@
 /**
  * Pure rules of the Sync dialog: which groups it shows and how, which items
  * can be ticked, what a folder tick means, the options sent to `planSync`
- * from the remembered prefs, and the text of the `sync:finished` toast.
+ * from the remembered prefs (the "Only files changed in" window turned into
+ * a cutoff), the progress and search notes, and the text of the
+ * `sync:finished` toast.
  *
  * Ticks are a set of item paths. Unticking a folder unticks everything
  * under it (and ticking it ticks them), so what `runSync` gets is always
@@ -15,9 +17,10 @@ import type {
   SyncMode,
   SyncOptions,
   SyncPlan,
+  SyncScanStage,
   TransferDirection,
 } from "../ipc/types";
-import type { Settings } from "../state/settingsStore";
+import type { ChangedWithinPreset, Settings } from "../state/settingsStore";
 import { formatSize } from "./fileFormat";
 
 /** The sections of the review, in order. */
@@ -112,10 +115,137 @@ export function countText(files: number, dirs: number, bytes: number): string {
     : parts.join(", ");
 }
 
+const n = (v: number) => v.toLocaleString("en-US");
+
 /** "Scanning… 812 folders, 5,120 files" while a comparison walks. */
-export function scanText(folders: number, files: number): string {
-  const n = (v: number) => v.toLocaleString("en-US");
-  return `Scanning… ${n(folders)} ${folders === 1 ? "folder" : "folders"}, ${n(files)} ${files === 1 ? "file" : "files"}`;
+export function scanText(
+  folders: number,
+  files: number,
+  changed = false,
+): string {
+  const what = changed
+    ? files === 1
+      ? "changed file"
+      : "changed files"
+    : files === 1
+      ? "file"
+      : "files";
+  return `Scanning… ${n(folders)} ${folders === 1 ? "folder" : "folders"}, ${n(files)} ${what}`;
+}
+
+/** A comparison's progress as `sync:progress` reports it. */
+export interface ScanProgress {
+  stage: SyncScanStage;
+  folders: number;
+  files: number;
+  checked: number;
+}
+
+/**
+ * The status line of a running comparison: the walk, the server search
+ * ("Searching the server… 120 changed files") or the target lookups
+ * ("Checking 40 of 120 changed files on Remote…").
+ */
+export function progressText(
+  progress: ScanProgress,
+  windowed: boolean,
+  target: string,
+): string {
+  const files = (v: number) => `${n(v)} changed ${v === 1 ? "file" : "files"}`;
+  switch (progress.stage) {
+    case "searching":
+      return `Searching the server… ${files(progress.files)}`;
+    case "checking":
+      return `Checking ${n(progress.checked)} of ${files(progress.files)} on ${target}…`;
+    case "scanning":
+      return scanText(progress.folders, progress.files, windowed);
+  }
+}
+
+/** The "Only files changed in" choices, in menu order. */
+export const CHANGED_WITHIN: [ChangedWithinPreset, string][] = [
+  ["any", "Any time"],
+  ["hour", "Last hour"],
+  ["today", "Today"],
+  ["day", "Last 24 hours"],
+  ["week", "Last 7 days"],
+  ["since", "Since…"],
+];
+
+const HOUR = 3600;
+const DAY = 24 * HOUR;
+
+/** A `datetime-local` value ("2026-10-16T08:30", local time) in unix seconds. */
+export function parseLocalDateTime(value: string | null): number | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(value)) {
+    return null;
+  }
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+
+/** `date` as a `datetime-local` value (local time, minutes). */
+export function toLocalDateTime(date: Date): string {
+  const pad = (v: number) => String(v).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * The cutoff (unix seconds) of the remembered window at `now`; `null` for
+ * "Any time", or "Since…" without a valid moment. "Today" starts at local
+ * midnight.
+ */
+export function windowCutoff(
+  prefs: Pick<Settings["sync"], "changedWithin" | "changedSince">,
+  now: Date,
+): number | null {
+  const secs = Math.floor(now.getTime() / 1000);
+  switch (prefs.changedWithin) {
+    case "any":
+      return null;
+    case "hour":
+      return secs - HOUR;
+    case "today": {
+      const midnight = new Date(now);
+      midnight.setHours(0, 0, 0, 0);
+      return Math.floor(midnight.getTime() / 1000);
+    }
+    case "day":
+      return secs - DAY;
+    case "week":
+      return secs - 7 * DAY;
+    case "since":
+      return parseLocalDateTime(prefs.changedSince);
+  }
+}
+
+/** Whether a window is set (and, for "Since…", has a valid moment). */
+export function windowActive(
+  prefs: Pick<Settings["sync"], "changedWithin" | "changedSince">,
+): boolean {
+  return windowCutoff(prefs, new Date(0)) !== null;
+}
+
+/**
+ * The notes over a windowed plan: how its files were found, and the
+ * server's clock when the window was moved by it.
+ */
+export function windowNotes(plan: SyncPlan): string[] {
+  const w = plan.window;
+  if (!w) return [];
+  const notes: string[] = [];
+  if (w.method === "serverFind") notes.push("Searched on the server");
+  else if (plan.direction === "download")
+    notes.push("Scanned folders (server search unavailable)");
+  else notes.push("Scanned the local folder");
+  if (w.clockSkewSecs !== null) {
+    const minutes = Math.max(1, Math.round(Math.abs(w.clockSkewSecs) / 60));
+    const way = w.clockSkewSecs > 0 ? "ahead" : "behind";
+    notes.push(
+      `Server clock differs by ${minutes} min (${way}); the window follows the server's clock`,
+    );
+  }
+  return notes;
 }
 
 /** The totals text of a section (the plan's totals, summed per group). */
@@ -247,19 +377,24 @@ export function deleteNames(plan: SyncPlan, ticks: Set<string>): string[] {
 /**
  * The options for `planSync` from the remembered prefs; `showHidden` is
  * the panes' setting, which "skip hidden" follows until it is changed.
+ * The window's cutoff is taken at `now`; with a window the mode is always
+ * Update (Mirror needs a full comparison).
  */
 export function planOptions(
   mode: SyncMode,
   prefs: Settings["sync"],
   showHidden: boolean,
+  now: Date = new Date(),
 ): SyncOptions {
+  const since = windowCutoff(prefs, now);
   return {
-    mode,
+    mode: since === null ? mode : "update",
     rule: prefs.rule,
     protectNewer: prefs.protectNewer,
     skipHidden: effectiveSkipHidden(prefs, showHidden),
     copyEmptyFolders: prefs.copyEmptyFolders,
     maxFileSizeMb: prefs.limitSize ? prefs.maxSizeMb : null,
+    changedWithin: since === null ? null : { sinceUnix: since },
   };
 }
 

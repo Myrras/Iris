@@ -136,13 +136,19 @@ pub enum CoreEvent {
         total_bytes: u64,
     },
 
-    /// A sync comparison walked more of the two folders (both sides
-    /// counted together). At most ten per second; the plan id is the one
-    /// `plan_sync` was given (or will return).
+    /// A sync comparison got further. At most ten per second (and one at
+    /// each new stage); the plan id is the one `plan_sync` was given (or
+    /// will return). `scanning`: folders walked and files seen, both sides
+    /// counted together (a windowed walk counts only changed files);
+    /// `searching`: changed files the server search found so far;
+    /// `checking`: `checked` of `files_seen` changed files looked up on
+    /// the target.
     SyncProgress {
         plan_id: SyncPlanId,
+        stage: crate::sync::SyncScanStage,
         folders_scanned: u64,
         files_seen: u64,
+        checked: u64,
     },
 
     /// A sync run ended: its copies (the transfer batch `batch_id`) are all
