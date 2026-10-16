@@ -66,10 +66,21 @@ impl Endpoint {
         }
         let (near, far) = tokio::io::duplex(256 * 1024);
         self.serve(far);
+        let latency = Duration::from_micros(self.shared.stats.latency_us.load(Ordering::SeqCst));
         let pump = tokio::spawn(async move {
-            let mut socket = socket;
-            let mut near = near;
-            let _ = tokio::io::copy_bidirectional(&mut socket, &mut near).await;
+            if latency.is_zero() {
+                let mut socket = socket;
+                let mut near = near;
+                let _ = tokio::io::copy_bidirectional(&mut socket, &mut near).await;
+                return;
+            }
+            // Both directions in this one task, so aborting it cuts both.
+            let (socket_rx, socket_tx) = socket.into_split();
+            let (near_rx, near_tx) = tokio::io::split(near);
+            tokio::join!(
+                delayed_copy(socket_rx, near_tx, latency),
+                delayed_copy(near_rx, socket_tx, latency),
+            );
         });
         self.pumps.lock().unwrap().push(pump);
     }
@@ -92,6 +103,42 @@ impl Endpoint {
             }
         });
     }
+}
+
+/// Copy `from` into `to`, each chunk arriving `latency` after it was read
+/// (a one-way network delay that does not limit throughput: later chunks
+/// are already on their way while one waits).
+async fn delayed_copy<R, W>(mut from: R, mut to: W, latency: Duration)
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(tokio::time::Instant, Vec<u8>)>();
+    let read = async move {
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            match from.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let due = tokio::time::Instant::now() + latency;
+                    if tx.send((due, buf[..n].to_vec())).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    };
+    let write = async move {
+        while let Some((due, data)) = rx.recv().await {
+            tokio::time::sleep_until(due).await;
+            if to.write_all(&data).await.is_err() {
+                break;
+            }
+        }
+        let _ = to.shutdown().await;
+    };
+    tokio::join!(read, write);
 }
 
 /// A running test server. Dropping it stops accepting connections.
@@ -245,6 +292,40 @@ impl TestServer {
             .store(delay.as_micros() as u64, Ordering::SeqCst);
     }
 
+    /// Give connections accepted from now on a one-way delay of `latency`
+    /// each way (a round trip of twice that), like a distant server.
+    pub fn set_latency(&self, latency: Duration) {
+        self.endpoint
+            .shared
+            .stats
+            .latency_us
+            .store(latency.as_micros() as u64, Ordering::SeqCst);
+    }
+
+    /// The most folders that were being listed at the same time (OPENDIR
+    /// to CLOSE, over every channel) since the last
+    /// [`TestServer::reset_listing_stats`].
+    pub fn max_open_dirs(&self) -> usize {
+        self.endpoint
+            .shared
+            .stats
+            .max_open_dirs
+            .load(Ordering::SeqCst)
+    }
+
+    /// Folder listings (OPENDIRs) served since the last reset.
+    pub fn listings(&self) -> usize {
+        self.endpoint.shared.stats.listings.load(Ordering::SeqCst)
+    }
+
+    pub fn reset_listing_stats(&self) {
+        let stats = &self.endpoint.shared.stats;
+        stats
+            .max_open_dirs
+            .store(stats.open_dirs.load(Ordering::SeqCst), Ordering::SeqCst);
+        stats.listings.store(0, Ordering::SeqCst);
+    }
+
     /// The most files that were open at the same time since the last
     /// [`TestServer::reset_max_open_files`].
     pub fn max_open_files(&self) -> usize {
@@ -364,6 +445,14 @@ struct Stats {
     list_delay_us: AtomicU64,
     /// Delay per CLOSE of a file, in microseconds.
     close_delay_us: AtomicU64,
+    /// One-way network delay of connections accepted from now on, in
+    /// microseconds.
+    latency_us: AtomicU64,
+    /// Folders open (OPENDIR to CLOSE) right now, and the most at once.
+    open_dirs: AtomicUsize,
+    max_open_dirs: AtomicUsize,
+    /// OPENDIRs served.
+    listings: AtomicUsize,
 }
 
 impl Stats {
@@ -612,6 +701,9 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
         let handle = self.next_handle();
         self.dirs.insert(handle.clone(), files);
+        self.stats.listings.fetch_add(1, Ordering::SeqCst);
+        let now = self.stats.open_dirs.fetch_add(1, Ordering::SeqCst) + 1;
+        self.stats.max_open_dirs.fetch_max(now, Ordering::SeqCst);
         Ok(Handle { id, handle })
     }
 
@@ -753,7 +845,9 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn close(&mut self, id: u32, handle: String) -> Result<Status, Self::Error> {
-        self.dirs.remove(&handle);
+        if self.dirs.remove(&handle).is_some() {
+            self.stats.open_dirs.fetch_sub(1, Ordering::SeqCst);
+        }
         if self.files.remove(&handle).is_some() {
             self.stats.closed();
             self.stats.close_delay().await;

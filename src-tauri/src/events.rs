@@ -48,6 +48,7 @@ fn event_name(event: &CoreEvent) -> &'static str {
         CoreEvent::EditConflict { .. } => "edit:conflict",
         CoreEvent::EditFailed { .. } => "edit:failed",
         CoreEvent::DragOutProgress { .. } => "dragOut:progress",
+        CoreEvent::SyncProgress { .. } => "sync:progress",
         CoreEvent::SyncFinished { .. } => "sync:finished",
     }
 }
@@ -187,6 +188,14 @@ mod tests {
                     total_bytes: 2,
                 },
                 "dragOut:progress",
+            ),
+            (
+                CoreEvent::SyncProgress {
+                    plan_id: SyncPlanId::new(),
+                    folders_scanned: 12,
+                    files_seen: 340,
+                },
+                "sync:progress",
             ),
             (
                 CoreEvent::SyncFinished {

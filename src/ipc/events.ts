@@ -14,6 +14,7 @@ import type {
   HostKeyPromptEvent,
   SessionStateChangedEvent,
   SyncFinishedEvent,
+  SyncProgressEvent,
   TransferConflictEvent,
   TransferJobChangedEvent,
   TransferProgressEvent,
@@ -124,6 +125,13 @@ export function onDragOutProgress(
   return listen<DragOutProgressEvent>("dragOut:progress", (e) =>
     handler(e.payload),
   );
+}
+
+/** A sync comparison walked more folders (tagged with its plan id). */
+export function onSyncProgress(
+  handler: (event: SyncProgressEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<SyncProgressEvent>("sync:progress", (e) => handler(e.payload));
 }
 
 /** A sync run is over: its copies are finished and its deletes done. */

@@ -35,7 +35,7 @@ pub mod exclude;
 mod walk;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -51,8 +51,11 @@ use crate::transfer::side::Side;
 use crate::transfer::{BatchOutcome, ConflictResolution, TransferDirection, Work};
 use crate::Core;
 
+use crate::events::EventBus;
+use crate::fs::walk::{close_channels, is_connection, open_walk_channels};
+use crate::transfer::progress::{Throttle, PROGRESS_INTERVAL};
 use diff::{DiffRules, Listed, Node};
-use walk::{is_connection, walk};
+use walk::{walk, Quiet, WalkProgress};
 
 pub use diff::MTIME_TOLERANCE_SECS;
 
@@ -466,6 +469,47 @@ fn path_on(side: &Side, root: &str, segments: &[String]) -> String {
         .fold(root.to_string(), |path, name| side.join(&path, name))
 }
 
+/// Counts both walks of a comparison and announces them, throttled, as
+/// [`CoreEvent::SyncProgress`].
+struct ScanProgress<'a> {
+    events: &'a EventBus,
+    plan_id: SyncPlanId,
+    folders: AtomicU64,
+    files: AtomicU64,
+    throttle: Mutex<Throttle>,
+}
+
+impl<'a> ScanProgress<'a> {
+    fn new(events: &'a EventBus, plan_id: SyncPlanId) -> Self {
+        Self {
+            events,
+            plan_id,
+            folders: AtomicU64::new(0),
+            files: AtomicU64::new(0),
+            throttle: Mutex::new(Throttle::new(PROGRESS_INTERVAL)),
+        }
+    }
+}
+
+impl WalkProgress for ScanProgress<'_> {
+    fn folder(&self, files: u64) {
+        let folders = self.folders.fetch_add(1, Ordering::Relaxed) + 1;
+        let files = self.files.fetch_add(files, Ordering::Relaxed) + files;
+        let ready = self
+            .throttle
+            .lock()
+            .expect(LOCK_POISONED)
+            .ready(Instant::now());
+        if ready {
+            self.events.publish(CoreEvent::SyncProgress {
+                plan_id: self.plan_id,
+                folders_scanned: folders,
+                files_seen: files,
+            });
+        }
+    }
+}
+
 /// How a run's deletes went.
 #[derive(Debug, Default)]
 struct DeleteReport {
@@ -496,6 +540,41 @@ impl Core {
         remote_dir: &str,
         options: SyncOptions,
     ) -> CoreResult<SyncPlan> {
+        self.plan_sync_as(
+            SyncPlanId::new(),
+            session_id,
+            direction,
+            local_dir,
+            remote_dir,
+            options,
+        )
+        .await
+    }
+
+    /// [`Core::plan_sync`] under a plan id the caller chose, so the
+    /// [`CoreEvent::SyncProgress`] events of the walk can be matched before
+    /// the plan is back. `InvalidInput` when a kept plan has that id.
+    pub async fn plan_sync_as(
+        &self,
+        plan_id: SyncPlanId,
+        session_id: SessionId,
+        direction: TransferDirection,
+        local_dir: &str,
+        remote_dir: &str,
+        options: SyncOptions,
+    ) -> CoreResult<SyncPlan> {
+        if self
+            .inner
+            .sync
+            .plans
+            .lock()
+            .expect(LOCK_POISONED)
+            .contains_key(&plan_id)
+        {
+            return Err(CoreError::InvalidInput(
+                "this comparison id is in use".into(),
+            ));
+        }
         if local_dir.trim().is_empty() || remote_dir.trim().is_empty() {
             return Err(CoreError::InvalidInput(
                 "a folder to sync is missing".into(),
@@ -522,14 +601,35 @@ impl Core {
         };
         let live = self.inner.sessions.get(session_id)?;
         let local = Side::Local(self.local());
-        let remote = Side::Remote(live.ssh.fs().clone());
         let prune = |name: &str, hidden: bool| {
             exclude::first_match(&rules.excludes, name).is_some()
                 || (rules.skip_hidden && (hidden || is_dotfile(name)))
         };
+        let progress = ScanProgress::new(&self.inner.events, plan_id);
+        let started = Instant::now();
+        // Both sides at once, the remote one over several channels.
+        let (remote_listers, extra) = open_walk_channels(&live).await;
         let (local_walk, remote_walk) = tokio::join!(
-            walk(&local, local_dir, &prune),
-            walk(&remote, remote_dir, &prune)
+            walk(
+                vec![local],
+                crate::fs::LOCAL_LISTINGS,
+                local_dir,
+                &prune,
+                &progress
+            ),
+            walk(
+                remote_listers,
+                crate::fs::REMOTE_LISTINGS,
+                remote_dir,
+                &prune,
+                &progress
+            )
+        );
+        close_channels(extra);
+        tracing::debug!(
+            folders = progress.folders.load(Ordering::Relaxed),
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "sync folders walked"
         );
         let remote_walk = self.forget_if_lost(session_id, live.generation, remote_walk)?;
         let local_walk = local_walk?;
@@ -539,7 +639,7 @@ impl Core {
         };
         let found = diff::diff(&source, &target, &rules);
         let plan = SyncPlan {
-            plan_id: SyncPlanId::new(),
+            plan_id,
             session_id,
             direction,
             mode: options.mode,
@@ -852,7 +952,14 @@ async fn tree_unchanged(
     if !matches!(planned.get(segments), Some(Node::Dir)) {
         return Ok(false);
     }
-    let now = walk(side, path, &|_, _| false).await?;
+    let now = walk(
+        vec![side.clone()],
+        side.walk_limit(),
+        path,
+        &|_, _| false,
+        &Quiet,
+    )
+    .await?;
     let before: HashMap<&[String], &Node> = planned
         .iter()
         .filter(|(k, _)| k.len() > segments.len() && k.starts_with(segments))

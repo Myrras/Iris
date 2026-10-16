@@ -255,6 +255,24 @@ impl LocalFs {
 
     /// Create the folder `path` and any missing parents; existing folders
     /// are fine, a file in the way is `AlreadyExists`.
+    /// Create the folder `path` (its parent exists); an existing folder is
+    /// fine.
+    pub(crate) async fn mkdir_one(&self, path: &str) -> CoreResult<()> {
+        let path = path.to_string();
+        blocking(move || match std::fs::create_dir(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if std::fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
+                    Ok(())
+                } else {
+                    Err(CoreError::AlreadyExists(path))
+                }
+            }
+            Err(e) => Err(CoreError::from_io_at(e, &path)),
+        })
+        .await
+    }
+
     pub(crate) async fn mkdir_all(&self, path: &str) -> CoreResult<()> {
         let path = path.to_string();
         blocking(move || {

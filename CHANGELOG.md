@@ -11,6 +11,11 @@ when it merges.
 
 ## [Unreleased]
 
+- Comparing folders for a sync, and starting a folder upload, download or drag
+  out, is much faster on deep trees: several folders are listed at once
+  (a 1,300-folder project compares in about 3 s instead of 40 s on a server
+  5 ms away). The Sync dialog shows how far it got ("Scanning… 812 folders,
+  5,120 files").
 - Keyboard shortcuts are configurable (Settings → Shortcuts: record a new combination, conflicts are refused or swapped, reset per row or all). New defaults: ⌘P / Ctrl+P go to path (⌘L stays; ⇧⌘G is no longer bound), ⌘R / Ctrl+R refresh, ⌘F / Ctrl+F focus the filter (Escape clears it and returns to the file list), ⌥⌘P toggles the preview. Buttons and menus show the current binding.
 - Go to a typed path in either pane: ⌘P / Ctrl+P, ⌘L / Ctrl+L, or a click on the empty part of the path bar turns it into a text field. Absolute and relative paths (`..`, `./x`) and `~` work; Tab completes folder names; a file path opens its folder with the file selected.
 - Local files open in their application: double-click, Enter (not on macOS),

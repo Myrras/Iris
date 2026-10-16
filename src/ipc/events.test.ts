@@ -17,6 +17,7 @@ import {
   onEditFailed,
   onEditUploaded,
   onSessionStateChanged,
+  onSyncProgress,
   onTransferConflict,
   onTransferJobChanged,
   onTransferProgress,
@@ -26,6 +27,7 @@ import type {
   DragOutProgressEvent,
   EditConflictEvent,
   SessionStateChangedEvent,
+  SyncProgressEvent,
   TransferConflictEvent,
   TransferJobChangedEvent,
   TransferProgressEvent,
@@ -160,5 +162,20 @@ describe("drag-out events", () => {
     };
     listeners["dragOut:progress"]({ payload: progress });
     expect(seen).toEqual([progress]);
+  });
+});
+
+describe("sync events", () => {
+  it("hands sync progress to its handler", async () => {
+    const handler = vi.fn();
+    await onSyncProgress(handler);
+    const event: SyncProgressEvent = {
+      type: "syncProgress",
+      planId: "p-1",
+      foldersScanned: 812,
+      filesSeen: 5120,
+    };
+    listeners["sync:progress"]({ payload: event });
+    expect(handler).toHaveBeenCalledWith(event);
   });
 });

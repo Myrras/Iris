@@ -26,6 +26,7 @@ import {
   runSync,
   toIpcError,
 } from "../ipc/commands";
+import { onSyncProgress } from "../ipc/events";
 import type {
   CompareRule,
   SyncItem,
@@ -42,6 +43,7 @@ import {
   isActionable,
   planOptions,
   runCounts,
+  scanText,
   SECTIONS,
   sectionCount,
   sectionItems,
@@ -130,6 +132,11 @@ export function SyncDialog() {
 
   // The newest compare; an older answer is thrown away on arrival.
   const token = useRef(0);
+  // The running comparison's plan id, to pick its progress events.
+  const scanId = useRef<string | null>(null);
+  const [scan, setScan] = useState<{ folders: number; files: number } | null>(
+    null,
+  );
   const compared = useRef(false);
   const planRef = useRef<SyncPlan | null>(null);
   planRef.current = plan;
@@ -148,6 +155,9 @@ export function SyncDialog() {
     setPlan(null);
     setPhase("comparing");
     setError(null);
+    const planId = crypto.randomUUID();
+    scanId.current = planId;
+    setScan(null);
     try {
       const next = await planSync(
         sessionId,
@@ -155,6 +165,7 @@ export function SyncDialog() {
         localDir,
         remoteDir,
         JSON.parse(optionsKey),
+        planId,
       );
       if (mine !== token.current) {
         void discardSyncPlan(next.planId).catch(() => undefined);
@@ -169,6 +180,27 @@ export function SyncDialog() {
       setPhase("setup");
     }
   }, [direction, localDir, remoteDir, optionsKey]);
+
+  // Walk progress while comparing ("Scanning… 812 folders, 5,120 files").
+  useEffect(() => {
+    if (phase !== "comparing") return;
+    let unlisten: (() => void) | undefined;
+    let gone = false;
+    onSyncProgress((e) => {
+      if (e.planId === scanId.current) {
+        setScan({ folders: e.foldersScanned, files: e.filesSeen });
+      }
+    })
+      .then((u) => {
+        if (gone) u();
+        else unlisten = u;
+      })
+      .catch(() => undefined);
+    return () => {
+      gone = true;
+      unlisten?.();
+    };
+  }, [phase]);
 
   // A changed choice after a comparison compares again.
   useEffect(() => {
@@ -387,8 +419,10 @@ export function SyncDialog() {
           )}
           {phase === "comparing" && (
             <p className={styles.status} role="status">
-              <span className="spinner" aria-hidden /> Comparing {source} and{" "}
-              {target}…
+              <span className="spinner" aria-hidden />{" "}
+              {scan
+                ? scanText(scan.folders, scan.files)
+                : `Comparing ${source} and ${target}…`}
             </p>
           )}
           {phase === "starting" && (

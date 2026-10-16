@@ -604,6 +604,18 @@ export interface SyncPlan {
   totals: Record<SyncGroup, SyncTotal>;
 }
 
+/**
+ * Payload of `sync:progress`: how far a comparison's walk got (both sides
+ * together; at most ten a second).
+ */
+export interface SyncProgressEvent {
+  type: "syncProgress";
+  /** The id `planSync` was given. */
+  planId: SyncPlanId;
+  foldersScanned: number;
+  filesSeen: number;
+}
+
 /** Payload of `sync:finished`: a run's copies and deletes are done. */
 export interface SyncFinishedEvent {
   type: "syncFinished";

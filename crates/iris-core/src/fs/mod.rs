@@ -8,6 +8,7 @@
 mod local;
 mod sftp;
 mod trash;
+pub(crate) mod walk;
 
 use std::future::Future;
 
@@ -20,6 +21,7 @@ pub use local::LocalFs;
 pub(crate) use sftp::io_err as sftp_io_error;
 pub use sftp::SftpFs;
 pub use trash::{SystemTrash, Trash};
+pub use walk::{LOCAL_LISTINGS, REMOTE_LISTINGS, REMOTE_WALK_CHANNELS};
 
 /// Which filesystem a call addresses. On the wire:
 /// `{ "kind": "local" }` or `{ "kind": "remote", "sessionId": "…" }`.

@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::CoreError;
 use crate::events::CoreEvent;
+use crate::fs::walk::{FolderWalk, REMOTE_WALK_CHANNELS};
 use crate::fs::{EntryKind, LinkTargetKind, SftpFs};
 use crate::ids::{BatchId, SessionId};
 
@@ -53,12 +54,26 @@ pub(super) async fn run(
     remote: SftpFs,
     token: CancellationToken,
 ) {
-    let remote = Side::Remote(remote);
+    // A remote source is listed over a few pooled channels besides the
+    // session's own; they go back to the pool afterwards.
+    let mut pooled = Vec::new();
+    if direction == TransferDirection::Download {
+        for _ in 1..REMOTE_WALK_CHANNELS {
+            match shared.take_channel(session_id).await {
+                Ok(channel) => pooled.push(channel),
+                Err(_) => break,
+            }
+        }
+    }
+    let remote_side = Side::Remote(remote);
     let local = Side::Local(shared.local());
     let (src, dst) = match direction {
-        TransferDirection::Upload => (local, remote),
-        TransferDirection::Download => (remote, local),
+        TransferDirection::Upload => (local, remote_side),
+        TransferDirection::Download => (remote_side, local),
     };
+    let listers: Vec<Side> = std::iter::once(src.clone())
+        .chain(pooled.iter().cloned().map(Side::Remote))
+        .collect();
     let mut walker = Walker {
         shared: &shared,
         batch_id,
@@ -66,6 +81,7 @@ pub(super) async fn run(
         direction,
         src: &src,
         dst: &dst,
+        listers,
         token: &token,
         updates: Throttle::new(PROGRESS_INTERVAL),
         stopped: false,
@@ -91,6 +107,9 @@ pub(super) async fn run(
             } => walker.folder(&src, &dst_parent, &name).await,
         }
     }
+    for channel in pooled {
+        shared.return_channel(session_id, channel);
+    }
     shared.expansion_done(batch_id);
 }
 
@@ -101,6 +120,9 @@ struct Walker<'a> {
     direction: TransferDirection,
     src: &'a Side,
     dst: &'a Side,
+    /// What folders of the source are listed from (several channels for a
+    /// remote source).
+    listers: Vec<Side>,
     token: &'a CancellationToken,
     /// Coalesces the "list changed" signal while jobs pour in.
     updates: Throttle,
@@ -167,26 +189,46 @@ impl Walker<'_> {
         }
     }
 
-    /// Walk the folder `root` into `dst_parent/name`, depth-first.
+    /// Walk the folder `root` into `dst_parent/name`, several folders at
+    /// once. A folder's destination is made before its files are queued
+    /// and its subfolders are listed.
     async fn folder(&mut self, root: &str, dst_parent: &str, name: &str) {
-        let mut stack = vec![(root.to_string(), dst_parent.to_string(), name.to_string())];
-        while let Some((src_dir, dst_parent, name)) = stack.pop() {
-            if self.token.is_cancelled() {
-                return;
-            }
+        // (destination parent, name, whether the parent was made by this
+        // walk: then a plain mkdir does)
+        let mut walk: FolderWalk<Side, (String, String, bool)> =
+            FolderWalk::new(self.listers.clone(), self.src.walk_limit())
+                .with_cancel(self.token.clone());
+        walk.push(
+            root.to_string(),
+            (dst_parent.to_string(), name.to_string(), false),
+        );
+        while let Some(listing) = walk.next().await {
+            let src_dir = listing.path;
+            let (dst_parent, name, parent_made) = listing.tag;
             let dst_dir = self.dst.join(&dst_parent, &name);
-            let listed = match self.dst.mkdir_all(&dst_dir).await {
-                Ok(()) => self.src.list(&src_dir).await,
+            let listed = match listing.entries {
+                Ok(entries) => {
+                    let made = if parent_made {
+                        self.dst.mkdir_one(&dst_dir).await
+                    } else {
+                        self.dst.mkdir_all(&dst_dir).await
+                    };
+                    made.map(|()| entries)
+                }
                 Err(e) => Err(e),
             };
             let mut entries = match listed {
                 Ok(entries) => entries,
                 Err(e) if self.lost(&e).await => {
-                    // This folder and every one still on the stack wait for
-                    // the connection to come back.
+                    // This folder and every one not listed yet wait for the
+                    // connection to come back.
                     self.stopped = true;
-                    stack.push((src_dir, dst_parent, name));
-                    while let Some((src, dst_parent, name)) = stack.pop() {
+                    self.placeholder(Work::Folder {
+                        src: src_dir,
+                        dst_parent,
+                        name,
+                    });
+                    for (src, (dst_parent, name, _)) in walk.into_pending() {
                         self.placeholder(Work::Folder {
                             src,
                             dst_parent,
@@ -200,9 +242,9 @@ impl Walker<'_> {
                     continue;
                 }
             };
-            entries.sort_by(|a, b| a.name.cmp(&b.name));
-            let mut subfolders = Vec::new();
-            for entry in entries {
+            entries.sort_by(|a, b| a.entry.name.cmp(&b.entry.name));
+            for walked in entries {
+                let entry = walked.entry;
                 if !is_safe_name(&entry.name) {
                     self.skip(&entry.path, &dst_dir, &entry.name, UNSAFE_NAME);
                     continue;
@@ -212,8 +254,15 @@ impl Walker<'_> {
                     EntryKind::Symlink {
                         target_kind: Some(LinkTargetKind::File),
                         ..
-                    } => self.file(&entry.path, &dst_dir, &entry.name, 0),
-                    EntryKind::Dir => subfolders.push(entry),
+                    } => match walked.target {
+                        Some(meta) if !meta.is_dir => {
+                            self.file(&entry.path, &dst_dir, &entry.name, meta.size)
+                        }
+                        _ => self.skip(&entry.path, &dst_dir, &entry.name, BROKEN_LINK),
+                    },
+                    EntryKind::Dir => {
+                        walk.push(entry.path, (dst_dir.clone(), entry.name, true));
+                    }
                     // Following folder links could loop back up the tree.
                     EntryKind::Symlink {
                         target_kind: Some(LinkTargetKind::Dir),
@@ -224,10 +273,6 @@ impl Walker<'_> {
                     } => self.skip(&entry.path, &dst_dir, &entry.name, BROKEN_LINK),
                     EntryKind::Other => self.skip(&entry.path, &dst_dir, &entry.name, SPECIAL),
                 }
-            }
-            // Reversed so the stack pops them in name order.
-            for sub in subfolders.into_iter().rev() {
-                stack.push((sub.path, dst_dir.clone(), sub.name));
             }
         }
     }

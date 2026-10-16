@@ -234,7 +234,8 @@ standalone template:
     is set on `failed` and on Iris' own `skipped` (folder links, broken
     links, sockets/devices, unsafe names).
   - `expand.rs`: `enqueue` validates, returns the `BatchId` and walks the
-    items in a spawned task (depth-first, names sorted); each destination
+    items in a spawned task (several folders at once, names sorted per
+    folder); each destination
     folder is created (`mkdir_all`, existing OK) before its files are
     queued. A selected link is followed; links to folders inside a tree are
     skipped (loops). Names from listings must be one plain segment
@@ -582,7 +583,8 @@ standalone template:
     names, folder links, broken links and sockets/devices are unsupported
     with a reason; a link to a file is that file; an unlistable subfolder
     is unsupported; excluded/hidden folders are listed, not entered) in
-    parallel (`tokio::join!`, the session's main SFTP channel), then runs
+    parallel (`tokio::join!`; each side with the concurrent `fs/walk.rs`
+    walker, see *Fast tree walks*), then runs
     the **pure** `diff::diff(source, target, rules)`. Groups (`SyncGroup`):
     `new`, `changed`, `same` (counted, not listed), `targetNewer`,
     `differentSizeSameDate`, `targetOnly`, `typeMismatch`, `excluded`,
@@ -626,9 +628,9 @@ standalone template:
     `Thumbs.db`; `sync/exclude.rs`: `*` / `?` per path segment,
     case-sensitive; normalized: trimmed, deduplicated, no `/` `\`, ≤ 100
     patterns of ≤ 255 chars).
-  - IPC: `plan_sync(sessionId, direction, localDir, remoteDir, options?)`,
-    `run_sync(planId, ticked?)`, `discard_sync_plan(planId)`; event
-    `sync:finished`.
+  - IPC: `plan_sync(sessionId, direction, localDir, remoteDir, options?,
+    planId?)`, `run_sync(planId, ticked?)`, `discard_sync_plan(planId)`;
+    events `sync:progress`, `sync:finished`.
   - UI: a **Sync** button (`SyncIcon`, lucide FolderSync) in **both** pane
     toolbars next to Upload/Download — the pane you start from is the
     source (Local → upload, Remote → download), switchable in the dialog;
@@ -670,6 +672,37 @@ standalone template:
     excludes editor, `settingsStore` sync prefs.
   - Check by hand: a large tree (thousands of files) for compare time and
     list scrolling; Mirror to the local Trash on Windows (Recycle Bin).
+- ✅ **Fast tree walks.** `fs/walk.rs` (`FolderWalk<L: ListFolder, T>`) is
+  the one folder-tree walker for sync comparisons (`sync/walk.rs`), transfer
+  expansion (`transfer/expand.rs`) and drag-out preparation
+  (`drag_out.rs`). Pull-based: `push(path, tag)` queues a folder, `next()`
+  returns the next finished listing (any order) with up to a limit in
+  flight — `REMOTE_LISTINGS` 16, `LOCAL_LISTINGS` 32 — as spawned tasks
+  (they keep running while the caller awaits a mkdir or a ping);
+  `with_cancel(token)` stops it, `into_pending()` hands back the folders
+  not returned yet (in-flight first; the transfer engine's paused
+  placeholders). `ListFolder for Side` lists and follows links to files
+  (`WalkEntry.target`, concurrent STATs; an unreadable target = broken; a
+  connection error fails the listing). Remote walks spread listings over
+  `REMOTE_WALK_CHANNELS` (4) SFTP channels, least busy first:
+  `open_walk_channels` (main + extra opened ones, failures to open just
+  left out — OpenSSH `MaxSessions` 10) / `close_channels` for sync and
+  drag-out; expansion borrows pooled transfer channels. Callers sort what
+  they collect (sync: by segments; drag-out: dirs/files by local path;
+  expansion: entries by name per folder), so plans and job lists stay
+  deterministic. Measured (`tests/walk.rs`, `#[ignore]`d benchmarks, a
+  delaying TCP pump in `support/` = `TestServer::set_latency`): with 5 ms
+  round trips one channel pipelining 16 requests is as fast as 4 channels;
+  with 2 ms server-side time per listing 4 channels halve it, hence 4.
+  `CoreEvent::SyncProgress {planId, foldersScanned, filesSeen}` (both sides
+  together, ≤ 10/s; `plan_sync_as(planId, …)` / `plan_sync`'s optional
+  `planId` from the webview) → `sync:progress` → SyncDialog "Scanning… 812
+  folders, 5,120 files" instead of the bare spinner. `Side::mkdir_one`
+  (create first, stat on failure) makes subfolders in one round trip.
+  Tests: unit (fake lister: max in flight, same result at every limit, a
+  failing subfolder, cancel + pending), `tests/walk.rs` (listings overlap
+  and stay ≤ 16 on the server — `max_open_dirs` — for a sync and a
+  download, progress events, an unreadable subfolder).
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":
@@ -759,7 +792,8 @@ crates/iris-core/src/
   ssh/        # russh wrapper: session.rs (hops/auth/SFTP), hostkey.rs
               # (known_hosts + prompts), agent.rs (ssh-agent / Pageant)
   fs/         # FileSystem trait, Entry/EntryKind/FsTarget, BatchReport;
-              # local.rs, sftp.rs, trash.rs (Trash trait + SystemTrash)
+              # local.rs, sftp.rs, trash.rs (Trash trait + SystemTrash),
+              # walk.rs (concurrent folder-tree walker)
   preview.rs  # Preview (text/image/binary/tooLarge) from read_range
   session_manager.rs  # SessionId → Live | Reconnecting | Down slot (ids survive drops)
   transfer/   # TransferManager: mod.rs (types, registry, scheduling), expand.rs
@@ -778,6 +812,7 @@ crates/iris-core/tests/
   reconnect.rs  # auto/manual reconnect, retry, cancel on disconnect/quit (unix only)
   edits.rs    # remote edit: open, save → upload, conflicts, deferred, cleanup (unix only)
   drag_out.rs # drag-out preparation: download, limits, cancel, cleanup (unix only)
+  walk.rs     # concurrent tree walks: listings in flight, progress, benchmarks (unix only)
   sync.rs     # folder sync: Update/Mirror both ways, failed copies, changed targets (unix only)
   ssh_integration.rs  # Docker OpenSSH servers, #[ignore]d (just test-integration)
   support/    # hermetic russh + russh-sftp test server, jump routing, agent

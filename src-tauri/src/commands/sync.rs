@@ -10,7 +10,8 @@ use crate::error::IpcError;
 use crate::state::AppState;
 
 /// Walk and compare `local_dir` and `remote_dir` for a sync in
-/// `direction`; resolves with the plan (kept for `run_sync`).
+/// `direction`; resolves with the plan (kept for `run_sync`). `plan_id`
+/// (from the webview) tags the `sync:progress` events of the walk.
 #[tauri::command]
 pub async fn plan_sync(
     state: State<'_, AppState>,
@@ -19,10 +20,12 @@ pub async fn plan_sync(
     local_dir: String,
     remote_dir: String,
     options: Option<SyncOptions>,
+    plan_id: Option<SyncPlanId>,
 ) -> Result<SyncPlan, IpcError> {
     Ok(state
         .core
-        .plan_sync(
+        .plan_sync_as(
+            plan_id.unwrap_or_default(),
             session_id,
             direction,
             &local_dir,

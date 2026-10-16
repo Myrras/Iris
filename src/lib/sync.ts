@@ -112,6 +112,12 @@ export function countText(files: number, dirs: number, bytes: number): string {
     : parts.join(", ");
 }
 
+/** "Scanning… 812 folders, 5,120 files" while a comparison walks. */
+export function scanText(folders: number, files: number): string {
+  const n = (v: number) => v.toLocaleString("en-US");
+  return `Scanning… ${n(folders)} ${folders === 1 ? "folder" : "folders"}, ${n(files)} ${files === 1 ? "file" : "files"}`;
+}
+
 /** The totals text of a section (the plan's totals, summed per group). */
 export function sectionCount(plan: SyncPlan, section: SyncSection): string {
   let files = 0;

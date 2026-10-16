@@ -371,6 +371,20 @@ impl SftpFs {
 
     /// Create the folder `path` and any missing parents; existing folders
     /// are fine, anything else in the way is `AlreadyExists`.
+    /// Create the folder `path` (its parent exists); an existing folder is
+    /// fine. Tries to create first: servers answer an existing name with a
+    /// generic failure, so only then is it looked at.
+    pub(crate) async fn mkdir_one(&self, path: &str) -> CoreResult<()> {
+        match self.sftp.create_dir(path).await {
+            Ok(()) => Ok(()),
+            Err(e) => match self.metadata(path).await? {
+                Some(meta) if meta.is_dir => Ok(()),
+                Some(_) => Err(CoreError::AlreadyExists(path.to_string())),
+                None => Err(transfer_err(e, path)),
+            },
+        }
+    }
+
     pub(crate) async fn mkdir_all(&self, path: &str) -> CoreResult<()> {
         match self.metadata(path).await? {
             Some(meta) if meta.is_dir => return Ok(()),

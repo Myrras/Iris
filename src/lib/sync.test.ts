@@ -9,6 +9,7 @@ import {
   isActionable,
   planOptions,
   runCounts,
+  scanText,
   sectionCount,
   sectionLabel,
   sectionTicked,
@@ -216,5 +217,12 @@ describe("sync rules", () => {
       "Sync finished with problems",
       "1 file copied, 1 not deleted. 1 item changed since the comparison and was kept.",
     ]);
+  });
+});
+
+describe("scanText", () => {
+  it("counts folders and files with thousands separators", () => {
+    expect(scanText(812, 5120)).toBe("Scanning… 812 folders, 5,120 files");
+    expect(scanText(1, 1)).toBe("Scanning… 1 folder, 1 file");
   });
 });

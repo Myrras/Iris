@@ -443,8 +443,9 @@ export function finishDragOut(
 /**
  * Walk and compare the local and remote folder for a one-way sync
  * (`upload`: Local → Remote); resolves with the plan, kept 10 minutes for
- * `runSync`. Rejects with `notConnected`, `notFound` (a folder is gone) or
- * `invalidInput`.
+ * `runSync`. `planId` (optional, a fresh UUID) becomes the plan's id and
+ * tags the walk's `sync:progress` events. Rejects with `notConnected`,
+ * `notFound` (a folder is gone) or `invalidInput`.
  */
 export function planSync(
   sessionId: SessionId,
@@ -452,6 +453,7 @@ export function planSync(
   localDir: string,
   remoteDir: string,
   options: SyncOptions = {},
+  planId?: SyncPlanId,
 ): Promise<SyncPlan> {
   return invoke("plan_sync", {
     sessionId,
@@ -459,6 +461,7 @@ export function planSync(
     localDir,
     remoteDir,
     options,
+    planId: planId ?? null,
   });
 }
 

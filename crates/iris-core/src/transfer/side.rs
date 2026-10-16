@@ -71,12 +71,30 @@ impl Side {
         }
     }
 
+    /// Create the folder `path` whose parent exists; a folder already
+    /// there is fine. One round trip for a new folder (where
+    /// [`Side::mkdir_all`] looks at every parent first).
+    pub async fn mkdir_one(&self, path: &str) -> CoreResult<()> {
+        match self {
+            Self::Local(fs) => fs.mkdir_one(path).await,
+            Self::Remote(fs) => fs.mkdir_one(path).await,
+        }
+    }
+
     /// Whether anything (a broken link included) is at `path`.
     pub async fn exists(&self, path: &str) -> CoreResult<bool> {
         match self.entry(path).await {
             Ok(_) => Ok(true),
             Err(crate::CoreError::NotFound(_)) => Ok(false),
             Err(e) => Err(e),
+        }
+    }
+
+    /// How many folder listings a walk of this side runs at once.
+    pub fn walk_limit(&self) -> usize {
+        match self {
+            Self::Local(_) => crate::fs::LOCAL_LISTINGS,
+            Self::Remote(_) => crate::fs::REMOTE_LISTINGS,
         }
     }
 

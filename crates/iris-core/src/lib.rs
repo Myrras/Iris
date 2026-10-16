@@ -75,7 +75,7 @@ pub use error::{CoreError, CoreResult};
 pub use events::{CoreEvent, EventBus, SessionState};
 pub use fs::{
     BatchFailure, BatchReport, Entry, EntryKind, FileSystem, FsTarget, LinkTargetKind, LocalFs,
-    SystemTrash, Trash,
+    SystemTrash, Trash, LOCAL_LISTINGS, REMOTE_LISTINGS, REMOTE_WALK_CHANNELS,
 };
 pub use ids::{
     BatchId, DragOutId, EditId, HostKeyRequestId, ProfileId, SessionId, SyncPlanId, TransferId,

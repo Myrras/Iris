@@ -11,7 +11,8 @@
 //! The download uses the session's main SFTP channel, not the transfer
 //! queue: it is a short, interactive step the user is waiting on (pointer
 //! held outside the window), it must not show up in the transfer list, and
-//! it must not wait behind queued jobs. The walk follows the transfer
+//! it must not wait behind queued jobs. The walk lists several folders at
+//! once over a few extra channels ([`crate::fs::walk`]) and follows the transfer
 //! engine's rules: a selected link is followed, links inside a folder are
 //! skipped (they could loop), sockets/devices and unsafe names are skipped.
 //!
@@ -34,10 +35,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{CoreError, CoreResult};
 use crate::events::CoreEvent;
+use crate::fs::walk::{close_channels, open_walk_channels, FolderWalk, REMOTE_LISTINGS};
 use crate::fs::{posix_name, sftp_io_error, EntryKind, FileSystem, LinkTargetKind, SftpFs};
 use crate::ids::{DragOutId, SessionId};
 use crate::transfer::naming::is_safe_name;
 use crate::transfer::progress::{Throttle, PROGRESS_INTERVAL};
+use crate::transfer::side::Side;
 use crate::Core;
 
 const LOCK_POISONED: &str = "drag-out registry lock poisoned";
@@ -210,7 +213,10 @@ impl Core {
         let limits = self.inner.drag_outs.limits();
         let fs = live.ssh.fs();
         let result = async {
-            let plan = plan(fs, &paths, limits, &token).await?;
+            let (listers, extra) = open_walk_channels(&live).await;
+            let plan = plan(fs, &listers, &paths, limits, &token).await;
+            close_channels(extra);
+            let plan = plan?;
             self.download(drag_id, fs, &plan, &dir, &token).await?;
             Ok(DragOutReady {
                 drag_id,
@@ -379,6 +385,7 @@ impl Core {
 /// `limits` (nothing is downloaded yet).
 async fn plan(
     fs: &SftpFs,
+    listers: &[Side],
     paths: &[String],
     limits: DragOutLimits,
     token: &CancellationToken,
@@ -407,7 +414,15 @@ async fn plan(
             }
         };
         if is_dir {
-            walk(fs, path, PathBuf::from(&name), &mut plan, limits, token).await?;
+            walk(
+                listers,
+                path,
+                PathBuf::from(&name),
+                &mut plan,
+                limits,
+                token,
+            )
+            .await?;
         } else {
             let meta = fs
                 .metadata(path)
@@ -429,41 +444,43 @@ async fn plan(
     Ok(plan)
 }
 
-/// Add the folder `root` (as `rel`) and everything in it, depth-first.
+/// Add the folder `root` (as `rel`) and everything in it, several folders
+/// listed at once over `listers`. Sorted afterwards, so folders come
+/// before their contents and the download order is stable.
 async fn walk(
-    fs: &SftpFs,
+    listers: &[Side],
     root: &str,
     rel: PathBuf,
     plan: &mut Plan,
     limits: DragOutLimits,
     token: &CancellationToken,
 ) -> CoreResult<()> {
-    let mut stack = vec![(root.to_string(), rel)];
-    while let Some((dir, rel)) = stack.pop() {
-        if token.is_cancelled() {
-            return Err(CoreError::Cancelled);
-        }
-        let mut entries = fs.list(&dir).await?;
-        entries.sort_by(|a, b| a.name.cmp(&b.name));
+    let first_dir = plan.dirs.len();
+    let first_file = plan.files.len();
+    let mut folders: FolderWalk<Side, PathBuf> =
+        FolderWalk::new(listers.to_vec(), REMOTE_LISTINGS).with_cancel(token.clone());
+    folders.push(root.to_string(), rel);
+    while let Some(listing) = folders.next().await {
+        let rel = listing.tag;
+        let entries = listing.entries?;
         plan.dirs.push(rel.clone());
-        let mut subfolders = Vec::new();
-        for entry in entries {
+        for walked in entries {
+            let entry = walked.entry;
             if !is_safe_name(&entry.name) {
                 continue;
             }
-            let size = match entry.kind {
-                EntryKind::File => entry.size,
-                // A link to a file is copied as the file (its own size is
-                // the link's).
+            let (size, mtime, mode) = match entry.kind {
+                EntryKind::File => (entry.size, entry.mtime, entry.mode),
+                // A link to a file is copied as the file.
                 EntryKind::Symlink {
                     target_kind: Some(LinkTargetKind::File),
                     ..
-                } => match fs.metadata(&entry.path).await? {
-                    Some(meta) => meta.size,
-                    None => continue,
+                } => match walked.target {
+                    Some(meta) if !meta.is_dir => (meta.size, meta.mtime, meta.mode),
+                    _ => continue,
                 },
                 EntryKind::Dir => {
-                    subfolders.push(entry);
+                    folders.push(entry.path, rel.join(&entry.name));
                     continue;
                 }
                 // Folder links (loops), broken links, sockets and devices.
@@ -474,17 +491,19 @@ async fn walk(
                     local: rel.join(&entry.name),
                     remote: entry.path,
                     size,
-                    mtime: entry.mtime,
-                    mode: entry.mode,
+                    mtime,
+                    mode,
                 },
                 limits,
             )?;
         }
-        // Reversed so the stack pops them in name order.
-        for sub in subfolders.into_iter().rev() {
-            stack.push((sub.path, rel.join(&sub.name)));
-        }
     }
+    if token.is_cancelled() {
+        return Err(CoreError::Cancelled);
+    }
+    // Listings finish in any order; paths sort parents first.
+    plan.dirs[first_dir..].sort();
+    plan.files[first_file..].sort_by(|a, b| a.local.cmp(&b.local));
     Ok(())
 }
 

@@ -16,11 +16,24 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   listTransfers: vi.fn(() => new Promise(() => undefined)),
 }));
 
+const progress = vi.hoisted(() => ({
+  handler: null as null | ((e: SyncProgressEvent) => void),
+}));
+vi.mock("../ipc/events", () => ({
+  onSyncProgress: vi.fn((handler: (e: SyncProgressEvent) => void) => {
+    progress.handler = handler;
+    return Promise.resolve(() => {
+      progress.handler = null;
+    });
+  }),
+}));
+
 import { discardSyncPlan, planSync, runSync } from "../ipc/commands";
 import type {
   SyncGroup,
   SyncItem,
   SyncPlan,
+  SyncProgressEvent,
   SyncTotal,
   TransferDirection,
 } from "../ipc/types";
@@ -178,6 +191,7 @@ describe("SyncDialog", () => {
         copyEmptyFolders: true,
         maxFileSizeMb: null,
       },
+      expect.any(String),
     );
     expect(section(/^New\b/)).toHaveTextContent("1 file, 1 folder · 100 B");
     expect(section(/^Changed/)).toHaveTextContent("1 file · 100 B");
@@ -352,6 +366,45 @@ describe("SyncDialog", () => {
       "not found: /srv/site",
     );
     await compare();
+  });
+
+  it("shows how far the comparison's walk got", async () => {
+    let finish: (p: SyncPlan) => void = () => undefined;
+    vi.mocked(planSync).mockImplementationOnce(
+      () => new Promise<SyncPlan>((resolve) => (finish = resolve)),
+    );
+    render(<SyncDialog />);
+    act(() => useSyncStore.getState().open("upload"));
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Comparing Local and Remote…",
+    );
+    await waitFor(() => expect(progress.handler).not.toBeNull());
+    const planId = vi.mocked(planSync).mock.calls[0][5]!;
+    act(() => {
+      // Another comparison's progress is ignored.
+      progress.handler!({
+        type: "syncProgress",
+        planId: "other",
+        foldersScanned: 1,
+        filesSeen: 1,
+      });
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Comparing");
+    act(() => {
+      progress.handler!({
+        type: "syncProgress",
+        planId,
+        foldersScanned: 812,
+        filesSeen: 5120,
+      });
+    });
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Scanning… 812 folders, 5,120 files",
+    );
+    await act(async () => finish(plan("update", "upload")));
+    expect(await screen.findByLabelText("Comparison")).toBeInTheDocument();
+    expect(progress.handler).toBeNull();
   });
 
   it("discards an unused plan when it closes", async () => {

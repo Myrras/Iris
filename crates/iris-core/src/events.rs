@@ -126,6 +126,15 @@ pub enum CoreEvent {
         total_bytes: u64,
     },
 
+    /// A sync comparison walked more of the two folders (both sides
+    /// counted together). At most ten per second; the plan id is the one
+    /// `plan_sync` was given (or will return).
+    SyncProgress {
+        plan_id: SyncPlanId,
+        folders_scanned: u64,
+        files_seen: u64,
+    },
+
     /// A sync run ended: its copies (the transfer batch `batch_id`) are all
     /// finished and, in Mirror mode, its deletes are done. `kept` counts
     /// target-only items not deleted (a copy failed or was cancelled, they
