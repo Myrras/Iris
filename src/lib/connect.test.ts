@@ -455,6 +455,8 @@ describe("disconnectSession", () => {
           state: "paused",
           error: null,
           folder: false,
+          startedAt: null,
+          finishedAt: null,
         },
       },
       order: ["j-1"],

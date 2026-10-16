@@ -120,6 +120,8 @@ mod tests {
                         state: TransferState::Queued,
                         error: None,
                         folder: false,
+                        started_at: None,
+                        finished_at: None,
                     },
                 },
                 "transfer:job-changed",

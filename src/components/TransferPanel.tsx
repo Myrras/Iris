@@ -4,7 +4,7 @@
  * Header: the collapse toggle, a live summary — "Counting… 1,234 files,
  * 56 MB" while a batch counts what it will copy (the total bar then slides
  * indeterminately), else "12 of 340 files · 3.1 MB of 56 MB · 1.5 MB/s ·
- * ~0:42" — Cancel all and Clear finished, and a total progress bar
+ * ~0:42" — Cancel all, Clear finished and Export CSV…, and a total progress bar
  * underneath whose total is fixed once a batch is counted. Body: one row per job (Podium's ProcessRow look), with
  * direction, file name (full paths in the tooltip), progress, bytes, speed,
  * a `StatusDot` + state (a failure's reason in its tooltip), a cancel
@@ -22,6 +22,7 @@ import { memo, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import type { TransferJob } from "../ipc/types";
+import { exportTransfers } from "../lib/exportTransfers";
 import { formatSize } from "../lib/fileFormat";
 import { baseName } from "../lib/path";
 import {
@@ -263,6 +264,15 @@ export function TransferPanel() {
               Clear finished
             </button>
           )}
+          <button
+            type="button"
+            className={styles.headerAction}
+            disabled={jobs.length === 0}
+            title="Save the transfer list as a CSV file"
+            onClick={() => void exportTransfers()}
+          >
+            Export CSV…
+          </button>
         </div>
       </header>
       {(jobs.length > 0 || counting) && (

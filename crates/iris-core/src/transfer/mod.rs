@@ -74,6 +74,7 @@
 //! or a socket/device, becomes a `skipped` job that says why.
 
 mod expand;
+pub mod export;
 pub(crate) use expand::Work;
 use expand::{Inventory, PausedCount, Pending};
 pub mod naming;
@@ -92,7 +93,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::{CoreError, CoreResult};
 use crate::events::{CoreEvent, EventBus};
 use crate::fs::{FileMeta, LocalFs, SftpFs};
-use crate::ids::{BatchId, SessionId, TransferId};
+use crate::ids::{BatchId, ProfileId, SessionId, TransferId};
 use crate::session_manager::SessionManager;
 
 use progress::{SpeedMeter, Throttle, PROGRESS_INTERVAL};
@@ -188,10 +189,23 @@ pub struct TransferJob {
     pub state: TransferState,
     /// Set when `failed`, and when `skipped` by Iris itself.
     pub error: Option<TransferError>,
-    /// A placeholder for a selected item or folder that was not listed yet
-    /// (its walk was cut off by a dropped connection, or failed); resuming
-    /// or retrying lists it, and it is replaced by the jobs found.
+    /// A placeholder for a folder (or selected item) that could not be
+    /// listed or made; retrying counts it again, and it is replaced by the
+    /// jobs found.
     pub folder: bool,
+    /// When it first started copying, unix milliseconds (`None` before;
+    /// reset by a retry).
+    pub started_at: Option<i64>,
+    /// When it reached a final state, unix milliseconds.
+    pub finished_at: Option<i64>,
+}
+
+/// Now, as unix milliseconds.
+pub(crate) fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 /// The answer to a [`CoreEvent::TransferConflict`].
@@ -407,6 +421,7 @@ impl TransferManager {
                     cleared: BatchOutcome::default(),
                     counted: Counted::default(),
                     paused: None,
+                    profile_id: live.profile_id,
                 },
             );
             reg.batch_order.push(batch_id);
@@ -669,6 +684,8 @@ impl TransferManager {
                 entry.job.state = TransferState::Queued;
                 entry.job.error = None;
                 entry.job.bytes_done = 0;
+                entry.job.started_at = None;
+                entry.job.finished_at = None;
                 if entry.append {
                     // Its own partial copy, from the failed attempt: start
                     // over rather than trust it as a prefix.
@@ -831,6 +848,21 @@ impl TransferManager {
             || reg.jobs.values().any(|e| e.job.state.is_active())
     }
 
+    /// The jobs in the list (every one, or only the finished ones), in
+    /// order, each with the saved connection of its batch.
+    pub(crate) fn export_rows(&self, finished_only: bool) -> Vec<(TransferJob, Option<ProfileId>)> {
+        let reg = self.shared.lock();
+        reg.order
+            .iter()
+            .filter_map(|id| reg.jobs.get(id))
+            .filter(|e| !finished_only || e.job.state.is_finished())
+            .map(|e| {
+                let profile = reg.batches.get(&e.job.batch_id).map(|b| b.profile_id);
+                (e.job.clone(), profile)
+            })
+            .collect()
+    }
+
     /// Drop the pooled SFTP channels of a session that is going away.
     pub(crate) fn forget_session(&self, session_id: SessionId) {
         self.shared.forget_pool(session_id);
@@ -845,6 +877,7 @@ fn cancel_entry(events: &EventBus, entry: &mut JobEntry) {
         state if state.is_active() => {
             entry.token.cancel();
             entry.job.state = TransferState::Cancelled;
+            entry.job.finished_at = Some(now_ms());
             publish_changed(events, entry);
         }
         _ => {}
@@ -958,6 +991,8 @@ struct BatchEntry {
     counted: Counted,
     /// A count cut off by a lost connection, waiting for a resume.
     paused: Option<PausedCount>,
+    /// The saved connection of its session (for the CSV export).
+    profile_id: ProfileId,
 }
 
 /// A count's numbers.
@@ -1091,6 +1126,7 @@ impl Shared {
                 return;
             }
             let token = batch.token.clone();
+            let now = now_ms();
             for new in jobs {
                 let id = TransferId::new();
                 let state = new.state;
@@ -1109,6 +1145,8 @@ impl Shared {
                             state,
                             error: new.error,
                             folder: new.walk.is_some(),
+                            started_at: None,
+                            finished_at: state.is_finished().then_some(now),
                         },
                         dst_dir: new.dst_dir,
                         name: new.name,
@@ -1232,6 +1270,7 @@ impl Shared {
                 continue;
             }
             entry.job.state = TransferState::Running;
+            entry.job.started_at.get_or_insert_with(now_ms);
             entry.throttle = Throttle::new(PROGRESS_INTERVAL);
             // The job change below carries the bytes so far.
             entry.announced = entry.job.bytes_done;
@@ -1310,6 +1349,9 @@ impl Shared {
                             },
                         });
                     }
+                }
+                if entry.job.state.is_finished() {
+                    entry.job.finished_at = Some(now_ms());
                 }
                 publish_changed(&self.events, entry);
             }
@@ -1471,6 +1513,8 @@ mod tests {
             state: TransferState::NeedsDecision,
             error: None,
             folder: false,
+            started_at: Some(1_700_000_000_000),
+            finished_at: None,
         };
         let json = serde_json::to_value(&job).unwrap();
         assert_eq!(json["state"], "needsDecision");
@@ -1479,6 +1523,8 @@ mod tests {
         assert!(json["batchId"].is_string());
         assert!(json["error"].is_null());
         assert_eq!(json["folder"], false);
+        assert_eq!(json["startedAt"], 1_700_000_000_000_i64);
+        assert!(json["finishedAt"].is_null());
 
         let failed = TransferJob {
             state: TransferState::Failed,

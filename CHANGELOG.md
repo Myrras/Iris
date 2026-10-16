@@ -11,6 +11,10 @@ when it merges.
 
 ## [Unreleased]
 
+- Export the transfer list to a CSV file (Transfers → Export CSV…): one row per
+  transfer with its connection, paths, size, state, error, start and end time,
+  duration and average speed. Opens fine in Excel and Numbers; the toast
+  offers to show the file in Finder.
 - Uploading or downloading a folder first counts what it will copy ("Counting…
   1,234 files, 56 MB"), then starts with the total known: the progress bar no
   longer jumps back as more files are found, and the Transfers header shows

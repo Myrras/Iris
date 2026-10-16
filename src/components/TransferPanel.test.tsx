@@ -1,6 +1,9 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../lib/exportTransfers", () => ({
+  exportTransfers: vi.fn(() => Promise.resolve(true)),
+}));
 vi.mock("../ipc/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/commands")>()),
   cancelTransfer: vi.fn(() => Promise.resolve()),
@@ -19,6 +22,7 @@ import {
   retryTransfer,
 } from "../ipc/commands";
 import type { BatchInfo, TransferJob } from "../ipc/types";
+import { exportTransfers } from "../lib/exportTransfers";
 import { summaryText, transferTotals } from "../lib/transferFormat";
 import { useLayoutStore } from "../state/layoutStore";
 import {
@@ -44,6 +48,8 @@ function job(id: string, extra: Partial<TransferJob> = {}): TransferJob {
     state: "queued",
     error: null,
     folder: false,
+    startedAt: null,
+    finishedAt: null,
     ...extra,
   };
 }
@@ -236,6 +242,16 @@ describe("TransferPanel", () => {
       within(row).getByRole("img", { name: "Folder, not listed yet" }),
     ).toBeInTheDocument();
     expect(row).toHaveTextContent("folder");
+  });
+
+  it("exports the list as CSV, once there is something to export", () => {
+    const { unmount } = render(<TransferPanel />);
+    expect(screen.getByRole("button", { name: "Export CSV…" })).toBeDisabled();
+    unmount();
+    setJobs([job("a", { state: "done", bytesDone: 2048 })]);
+    render(<TransferPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "Export CSV…" }));
+    expect(exportTransfers).toHaveBeenCalledTimes(1);
   });
 
   it("virtualises long queues", () => {

@@ -30,6 +30,8 @@ ssh2-config = "0.8.2"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 trash = "5.2.9"
 base64 = "0.22"
+# Local-time ISO 8601 timestamps in the transfer CSV export.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # `CancellationToken` for cancelling transfer jobs and batches.
 tokio-util = "0.7"
 # Watching the local copies of files opened for editing (`edit/`): the

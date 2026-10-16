@@ -258,11 +258,25 @@ export interface TransferJob {
    */
   error: TransferError | null;
   /**
-   * A placeholder for a folder whose listing was cut off by a dropped
-   * connection (`paused`) or failed (`failed`): resuming or retrying lists
-   * it, and the placeholder is replaced by its file jobs.
+   * A placeholder for a folder (or selected item) that could not be listed
+   * or made (`failed`): retrying counts it again, and the placeholder is
+   * replaced by its file jobs.
    */
   folder: boolean;
+  /** When it first started copying, unix ms; `null` before (reset by a retry). */
+  startedAt: number | null;
+  /** When it reached a final state, unix ms. */
+  finishedAt: number | null;
+}
+
+/** Which jobs `exportTransfersCsv` writes (`iris_core::ExportScope`). */
+export type ExportScope = "all" | "finished";
+
+/** What `exportTransfersCsv` wrote (`iris_core::ExportReport`). */
+export interface ExportReport {
+  path: string;
+  /** Jobs written (the header not counted). */
+  rows: number;
 }
 
 /** One selected file or folder (`iris_core::TransferItem`). */

@@ -20,6 +20,8 @@ import type {
   EditInfo,
   EditResolution,
   Entry,
+  ExportReport,
+  ExportScope,
   FsTarget,
   HostKeyRequestId,
   IpcError,
@@ -330,6 +332,19 @@ export function retryTransfer(jobId: TransferId): Promise<void> {
 /** Every transfer job (in discovery order) and the totals. */
 export function listTransfers(): Promise<TransferList> {
   return invoke("list_transfers");
+}
+
+/**
+ * Write the transfer list as a CSV file at `path` (RFC 4180, every field
+ * quoted, UTF-8 with BOM; `scope` `finished` leaves out unfinished jobs).
+ * Rejects with `invalidInput` (no absolute path), `notFound` (its folder is
+ * gone) or `io` / `permissionDenied`.
+ */
+export function exportTransfersCsv(
+  path: string,
+  scope: ExportScope = "all",
+): Promise<ExportReport> {
+  return invoke("export_transfers_csv", { path, scope });
 }
 
 /** Drop finished jobs (done, failed, cancelled, skipped) from the list. */

@@ -7,7 +7,10 @@
 
 use tauri::State;
 
-use iris_core::{BatchId, ConflictResolution, TransferId, TransferList, TransferRequest};
+use iris_core::{
+    BatchId, ConflictResolution, ExportReport, ExportScope, TransferId, TransferList,
+    TransferRequest,
+};
 
 use crate::error::IpcError;
 use crate::state::AppState;
@@ -79,4 +82,17 @@ pub async fn clear_finished(state: State<'_, AppState>) -> Result<(), IpcError> 
 #[tauri::command]
 pub async fn has_active_transfers(state: State<'_, AppState>) -> Result<bool, IpcError> {
     Ok(state.core.has_active_transfers())
+}
+
+/// Write the transfer list (`scope`: every job, or only the finished ones)
+/// as a CSV file at `path` (from the save dialog).
+#[tauri::command]
+pub async fn export_transfers_csv(
+    state: State<'_, AppState>,
+    path: String,
+    scope: Option<ExportScope>,
+) -> Result<ExportReport, IpcError> {
+    Ok(state
+        .core
+        .export_transfers_csv(&path, scope.unwrap_or_default())?)
 }

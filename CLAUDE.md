@@ -734,6 +734,32 @@ standalone template:
   a folder that cannot be made, ETA), `tests/reconnect.rs` (a count cut off
   → paused → resumed, path order), frontend `transferFormat`,
   `transferStore`, `TransferPanel`, `useCoreEvents`, `CloseWarningModal`.
+- ✅ **Transfer CSV export** (`transfer/export.rs`).
+  `Core::export_transfers_csv(path, scope: all|finished)` writes the jobs in
+  the list (cleared ones are gone) as RFC 4180 CSV: header + one row per
+  job, `,`-separated, **every field quoted** (`"` doubled), CRLF rows,
+  UTF-8 with BOM (Excel). Columns (`COLUMNS`): batch_id, job_id,
+  direction, connection (profile name), host (`host[:port]`; never a user,
+  password or key), source, destination, size_bytes, bytes_done, state,
+  error_kind, error_message, started_at, finished_at (ISO 8601 local time
+  with offset, `chrono::Local`), duration_secs (wall clock, first start →
+  end, waits included), average_bytes_per_sec. Text starting with `= + -
+  @`, tab or CR gets a leading `'` (spreadsheet formula injection: names
+  come from the server). Atomic write (`persist::write_bytes_atomic`:
+  hidden temp file next to it + rename; the folder must exist). Path must
+  be absolute (`invalidInput`). Jobs carry `startedAt` / `finishedAt`
+  (unix ms, wire too): first `running`, any final state; a retry resets
+  both. `BatchEntry.profile_id` names the connection. IPC
+  `export_transfers_csv(path, scope?)` → `{path, rows}`. UI: TransferPanel
+  "Export CSV…" (disabled without jobs) → `lib/exportTransfers` (dialog
+  plugin `save`, default `iris-transfers-YYYY-MM-DD-HHmm.csv`, `.csv`
+  filter; `dialog:default` already grants `allow-save`) → success toast
+  with "Show in Finder" (`revealLocalPath`). Tests: export.rs (BOM +
+  header, quoting of commas/quotes/newlines/unicode, times with a fixed
+  offset, errors, formula guard, no secret columns), persist.rs,
+  `tests/transfers.rs` (real jobs, both scopes, connection + host, no
+  password, relative path refused), frontend `exportTransfers.test.ts`,
+  `TransferPanel`.
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":
@@ -812,7 +838,7 @@ crates/iris-core/src/
   error.rs    # CoreError / CoreResult + CoreError::kind (app-owned text, never secrets)
   events.rs   # CoreEvent + SessionState + EventBus (tokio broadcast)
   settings.rs # IrisSettings + IrisSettingsStore (settings.json, atomic write)
-  persist.rs  # shared atomic JSON write (temp file + rename)
+  persist.rs  # shared atomic writes (JSON documents, exports): temp file + rename
   ids.rs      # UUID newtypes (uuid_newtype!): ProfileId, SessionId, HostKeyRequestId,
               # TransferId, BatchId, EditId, DragOutId, SyncPlanId
   secret.rs   # Secret: redacted, non-serializable, zeroized password/passphrase
@@ -829,7 +855,8 @@ crates/iris-core/src/
   session_manager.rs  # SessionId → Live | Reconnecting | Down slot (ids survive drops)
   transfer/   # TransferManager: mod.rs (types, registry, scheduling), expand.rs
               # (folder walk), worker.rs (one job), side.rs (local/remote end),
-              # naming.rs (keep-both / edited-copy names), progress.rs (throttle, speed)
+              # naming.rs (keep-both / edited-copy names), progress.rs (throttle, speed),
+              # export.rs (the transfer list as CSV)
   open_local.rs  # open a local file in its app / reveal it (via the Opener)
   edit/       # remote edit: Opener trait, EditManager, watcher, upload/conflicts
   drag_out.rs # remote rows → <cacheDir>/dragout/<id>/ for an OS drag (limits, cleanup)

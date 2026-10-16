@@ -49,6 +49,8 @@ function job(extra: Partial<TransferJob> = {}): TransferJob {
     state: "running",
     error: null,
     folder: false,
+    startedAt: null,
+    finishedAt: null,
     ...extra,
   };
 }

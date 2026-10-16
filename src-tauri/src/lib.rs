@@ -201,6 +201,7 @@ pub fn run() {
             commands::transfers::list_transfers,
             commands::transfers::clear_finished,
             commands::transfers::has_active_transfers,
+            commands::transfers::export_transfers_csv,
             commands::edit::open_remote,
             commands::edit::resolve_edit,
             commands::edit::list_edits,

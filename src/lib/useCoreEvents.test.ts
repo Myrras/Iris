@@ -109,6 +109,8 @@ const job: TransferJob = {
   state: "running",
   error: null,
   folder: false,
+  startedAt: null,
+  finishedAt: null,
 };
 
 describe("useCoreEvents", () => {

@@ -12,8 +12,8 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use iris_core::{
     AuthMethod, BatchId, BatchPhase, ConflictResolution, ConnectionProfile, Core, CoreError,
-    CoreEvent, IrisSettings, ProfileId, Secret, SessionId, TransferDirection, TransferItem,
-    TransferJob, TransferList, TransferRequest, TransferState,
+    CoreEvent, ExportScope, IrisSettings, ProfileId, Secret, SessionId, TransferDirection,
+    TransferItem, TransferJob, TransferList, TransferRequest, TransferState,
 };
 use tempfile::TempDir;
 
@@ -1074,4 +1074,64 @@ async fn enqueue_checks_its_request() {
         Err(CoreError::NotConnected)
     ));
     assert!(!f.core.has_active_transfers());
+}
+
+// -- CSV export -----------------------------------------------------------------
+
+#[tokio::test]
+async fn the_transfer_list_exports_to_csv() {
+    let server = TestServer::start(None).await;
+    let (f, session) = Fixture::new(&server).await;
+    std::fs::write(server.root().join("notes, final.txt"), data(4000, 1)).unwrap();
+    f.download(session, &["/notes, final.txt", "/missing.txt"]);
+    f.wait_idle().await;
+    // One more that is still copying when the list is exported.
+    std::fs::write(server.root().join("big.iso"), data(2 * 1024 * 1024, 2)).unwrap();
+    server.set_io_delay(Duration::from_millis(20));
+    f.parallel(1);
+    f.download(session, &["/big.iso"]);
+    f.wait_until("the big file running", |l| {
+        l.jobs.iter().any(|j| j.state == TransferState::Running)
+    })
+    .await;
+
+    let out = f.local("export.csv");
+    let path = out.to_string_lossy().into_owned();
+    let report = f
+        .core
+        .export_transfers_csv(&path, ExportScope::All)
+        .unwrap();
+    assert_eq!(report.rows, 3);
+    let csv = std::fs::read_to_string(&out).unwrap();
+    assert!(csv.starts_with('\u{feff}'), "BOM for Excel");
+    assert!(!csv.contains(PASSWORD), "no secrets");
+    let lines: Vec<&str> = csv.split("\r\n").filter(|l| !l.is_empty()).collect();
+    assert_eq!(lines.len(), 4, "{csv}");
+    assert!(lines[1].contains("\"/notes, final.txt\""), "{}", lines[1]);
+    assert!(lines[1].contains("\"Transfer test\""));
+    assert!(lines[1].contains(&format!("\"127.0.0.1:{}\"", server.port)));
+    assert!(lines[1].contains("\"done\""));
+    assert!(lines[2].contains("\"failed\"") && lines[2].contains("\"notFound\""));
+    assert!(lines[3].contains("\"running\""));
+
+    let finished = f
+        .core
+        .export_transfers_csv(&path, ExportScope::Finished)
+        .unwrap();
+    assert_eq!(finished.rows, 2);
+    let csv = std::fs::read_to_string(&out).unwrap();
+    assert!(!csv.contains("big.iso"));
+    // The jobs carry their times too.
+    let list = f.core.list_transfers();
+    let done = job(&list, "final.txt");
+    let (start, end) = (done.started_at.unwrap(), done.finished_at.unwrap());
+    assert!(end >= start);
+    assert!(job(&list, "big.iso").finished_at.is_none());
+
+    let err = f
+        .core
+        .export_transfers_csv("relative.csv", ExportScope::All)
+        .unwrap_err();
+    assert_eq!(err.kind(), "invalidInput");
+    f.core.cancel_all_transfers();
 }

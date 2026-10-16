@@ -90,6 +90,7 @@ pub use sync::{
     CompareRule, SyncGroup, SyncItem, SyncItemKind, SyncMode, SyncOptions, SyncPlan, SyncTotal,
     SyncTotals,
 };
+pub use transfer::export::{ExportReport, ExportScope};
 pub use transfer::{
     BatchInfo, BatchPhase, ConflictResolution, ConflictSide, TransferDirection, TransferError,
     TransferItem, TransferJob, TransferList, TransferManager, TransferRequest, TransferState,

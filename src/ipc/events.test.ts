@@ -81,6 +81,8 @@ describe("transfer events", () => {
         state: "needsDecision",
         error: null,
         folder: false,
+        startedAt: null,
+        finishedAt: null,
       },
     };
     const onProgress = vi.fn();

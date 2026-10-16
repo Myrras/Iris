@@ -54,6 +54,8 @@ describe("ConflictDialog", () => {
           state: "needsDecision",
           error: null,
           folder: false,
+          startedAt: null,
+          finishedAt: null,
         },
       },
       order: ["a"],
