@@ -121,4 +121,18 @@ describe("Pane on macOS", () => {
       expect(revealLocal).toHaveBeenLastCalledWith("/Users/alice/Documents"),
     );
   });
+
+  it("opens the go-to-path field with Cmd+Shift+G and Cmd+L, not with Ctrl", async () => {
+    const grid = screen.getByRole("grid");
+    const field = () => screen.queryByRole("textbox", { name: "Go to path" });
+    fireEvent.keyDown(grid, { key: "G", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(grid, { key: "l", ctrlKey: true });
+    expect(field()).toBeNull();
+    fireEvent.keyDown(grid, { key: "G", metaKey: true, shiftKey: true });
+    expect(field()).toHaveValue("/Users/alice");
+    fireEvent.keyDown(field()!, { key: "Escape" });
+    expect(field()).toBeNull();
+    fireEvent.keyDown(screen.getByRole("grid"), { key: "l", metaKey: true });
+    expect(field()).toHaveValue("/Users/alice");
+  });
 });

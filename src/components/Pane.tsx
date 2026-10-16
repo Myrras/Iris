@@ -10,7 +10,10 @@
  * confirmed); Cmd+I Get Info; Space preview; typing a name selects the
  * first row starting with it (Finder's type-to-select; Space joins the
  * typed name while typing); Cmd+Down / Cmd+O open; Cmd+Up
- * enclosing folder. Transfers: Cmd+Shift+U uploads the Local selection,
+ * enclosing folder; Cmd+Shift+G or Cmd+L (Ctrl+Shift+G / Ctrl+L), a click
+ * on the empty part of the breadcrumb bar or a double-click on it turn the
+ * breadcrumb into the "go to path" field (`GoToField`: absolute or relative
+ * paths, `~`, Tab completion). Transfers: Cmd+Shift+U uploads the Local selection,
  * Cmd+Shift+D downloads the Remote selection, and F5 (Total Commander's
  * "copy to the other pane") does either, into the other pane's folder.
  * Option+Cmd+S (Ctrl+Alt+S elsewhere), the toolbar's Sync button or the
@@ -60,7 +63,7 @@ import {
 } from "../lib/openLocal";
 import { startPaneDrag } from "../lib/paneDrag";
 import { baseName, parentPath } from "../lib/path";
-import { isMac } from "../lib/platform";
+import { isMac, isWindows } from "../lib/platform";
 import { clickSelection, moveCursor } from "../lib/selection";
 import { requestDisconnectSession } from "../lib/tabs";
 import { createTypeAheadBuffer, matchTypeAhead } from "../lib/typeAhead";
@@ -79,6 +82,7 @@ import { ChmodDialog, type ChmodRequest } from "./ChmodDialog";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { DeleteConfirmModal, type DeleteRequest } from "./DeleteConfirmModal";
 import { FileTable, type RowModifiers } from "./FileTable";
+import { GoToField } from "./GoToField";
 import { WelcomeScreen } from "./WelcomeScreen";
 import {
   BackIcon,
@@ -395,6 +399,32 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     (DeleteRequest & { paths: string[] }) | null
   >(null);
   const [info, setInfo] = useState<ChmodRequest | null>(null);
+  const browserRef = useRef<HTMLDivElement>(null);
+  // The "go to path" field replaces the breadcrumb while it is open. A
+  // remote pane needs a connected session (the field closes if it drops).
+  const [goToOpen, setGoToOpen] = useState(false);
+  const canGoTo = pane.path !== null && (!remote || editSession !== null);
+  const goToShown = goToOpen && canGoTo && pane.target !== null;
+  useEffect(() => {
+    if (goToOpen && !canGoTo) setGoToOpen(false);
+  }, [goToOpen, canGoTo]);
+  const activeTabId = useTabsStore((s) => s.activeTabId);
+  // Another tab or location: the typed text no longer belongs here.
+  useEffect(() => {
+    setGoToOpen(false);
+  }, [pane.target, activeTabId]);
+  const openGoTo = () => {
+    if (canGoTo) setGoToOpen(true);
+  };
+  const closeGoTo = (refocus: boolean) => {
+    setGoToOpen(false);
+    if (refocus) {
+      browserRef.current
+        ?.querySelector<HTMLElement>('[role="grid"]')
+        ?.focus({ preventScroll: true });
+    }
+  };
+  const goToHint = `Click to type a path (${isMac ? "⇧⌘G" : "Ctrl+Shift+G"})`;
 
   const entries = useMemo(
     () =>
@@ -431,7 +461,6 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   // Type-to-select: the typed prefix lives here and starts over on a new
   // folder or tab.
   const typeAhead = useRef(createTypeAheadBuffer());
-  const activeTabId = useTabsStore((s) => s.activeTabId);
   useEffect(() => {
     typeAhead.current.reset();
   }, [pane.target, pane.path, activeTabId]);
@@ -569,6 +598,8 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     else if ((mod && e.shiftKey && key === copyKey) || e.key === "F5")
       copyToOther();
     // By code: Option+S types "ß" on a Mac keyboard.
+    else if (mod && e.shiftKey && !e.altKey && key === "g") openGoTo();
+    else if (mod && !e.shiftKey && !e.altKey && key === "l") openGoTo();
     else if (mod && e.altKey && !e.shiftKey && e.code === "KeyS") openSync();
     else if (mod && e.altKey && !e.shiftKey && e.code === "KeyR") reveal();
     else if (
@@ -699,7 +730,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         : "This folder is empty.";
 
   return (
-    <div className={styles.browser} onKeyDown={onKeyDown}>
+    <div ref={browserRef} className={styles.browser} onKeyDown={onKeyDown}>
       <div className={styles.toolbar}>
         <button
           type="button"
@@ -732,10 +763,24 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         >
           <RefreshIcon />
         </button>
-        {pane.path ? (
+        {goToShown && pane.path && pane.target ? (
+          <GoToField
+            target={pane.target}
+            cwd={pane.path}
+            windows={pane.target.kind === "local" && isWindows}
+            onSubmit={async (text) => {
+              const result = await store().goTo(id, text);
+              if (result.ok) closeGoTo(true);
+              return result;
+            }}
+            onClose={closeGoTo}
+          />
+        ) : pane.path ? (
           <Breadcrumb
             path={pane.path}
             onNavigate={(path) => void store().navigate(id, path)}
+            onEdit={canGoTo ? openGoTo : undefined}
+            hint={goToHint}
           />
         ) : (
           <span className={styles.crumbPlaceholder} />

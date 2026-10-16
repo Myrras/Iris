@@ -5,6 +5,11 @@
   scrollbar-width: none;
 }
 
+/* Clicking the empty part types a path instead. */
+.editable {
+  cursor: text;
+}
+
 .crumbs::-webkit-scrollbar {
   display: none;
 }

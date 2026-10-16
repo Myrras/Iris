@@ -11,6 +11,7 @@ when it merges.
 
 ## [Unreleased]
 
+- Go to a typed path in either pane: ⇧⌘G / Ctrl+Shift+G, ⌘L / Ctrl+L, or a click on the empty part of the path bar turns it into a text field. Absolute and relative paths (`..`, `./x`) and `~` work; Tab completes folder names; a file path opens its folder with the file selected.
 - Local files open in their application: double-click, Enter (not on macOS),
   ⌘O / ⌘↓ or the context menu's Open use the app set in Settings → Editors,
   else the system default. "Show in Finder" (Explorer / File Manager) in the

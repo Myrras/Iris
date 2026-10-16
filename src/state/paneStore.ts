@@ -28,11 +28,18 @@ import {
   listDir,
   mkdir,
   rename as renamePath,
+  stat,
   toIpcError,
 } from "../ipc/commands";
 import type { BatchReport, Entry, FsTarget, IpcError } from "../ipc/types";
-import { DEFAULT_SORT, type SortKey, type SortSpec } from "../lib/entries";
+import {
+  DEFAULT_SORT,
+  isDirLike,
+  type SortKey,
+  type SortSpec,
+} from "../lib/entries";
 import { NEW_FOLDER_NAME, nameError, uniqueName } from "../lib/fileName";
+import { goToErrorMessage, resolveGoTo, usesHome } from "../lib/goToPath";
 import { formatOctalMode } from "../lib/mode";
 import { baseName, childToward, joinPath, parentPath } from "../lib/path";
 import { isWindows } from "../lib/platform";
@@ -41,6 +48,9 @@ import { useSettingsStore } from "./settingsStore";
 import { toastError, toastSuccess } from "./toastStore";
 
 export type PaneId = "local" | "remote";
+
+/** The outcome of "go to path": `message` is shown inline in the field. */
+export type GoToResult = { ok: true } | { ok: false; message: string };
 
 export interface PaneState extends SelectionState {
   /** `null` until opened; the remote pane returns to `null` when closed. */
@@ -119,6 +129,12 @@ interface PaneStoreState {
   open: (pane: PaneId, target: FsTarget, path: string | null) => Promise<void>;
   /** Open a folder, remembering the current one for Back. */
   navigate: (pane: PaneId, path: string) => Promise<void>;
+  /**
+   * Go to what the user typed: an absolute or relative path (`..`, `~`).
+   * A folder opens like `navigate` (Back works); a file opens its folder
+   * with the file selected. Nothing changes on failure.
+   */
+  goTo: (pane: PaneId, input: string) => Promise<GoToResult>;
   back: (pane: PaneId) => Promise<void>;
   up: (pane: PaneId) => Promise<void>;
   /** Re-read the current folder, keeping filter and (surviving) selection. */
@@ -172,6 +188,13 @@ const epochs: Record<PaneId, number> = { local: 0, remote: 0 };
 
 type LoadMode = "push" | "replace" | "refresh";
 
+interface LoadOptions {
+  /** Select this entry once the folder is shown (if it is visible). */
+  select?: string;
+  /** Handle a failed listing here instead of toasting it. */
+  onError?: (err: IpcError) => void;
+}
+
 export const usePaneStore = create<PaneStoreState>((set, get) => {
   const patch = (pane: PaneId, p: Partial<PaneState>) =>
     set((s) => ({ panes: { ...s.panes, [pane]: { ...s.panes[pane], ...p } } }));
@@ -189,6 +212,7 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
     path: string,
     mode: LoadMode,
     history?: string[],
+    options: LoadOptions = {},
   ): Promise<boolean> {
     const target = get().panes[pane].target;
     if (!target) return false;
@@ -221,8 +245,9 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
         const showHidden =
           current.showHidden ?? useSettingsStore.getState().browser.showHidden;
         const from = current.path ? childToward(path, current.path) : null;
-        const origin = from
-          ? entries.find((e) => e.path === from && (showHidden || !e.hidden))
+        const wanted = options.select ?? from;
+        const origin = wanted
+          ? entries.find((e) => e.path === wanted && (showHidden || !e.hidden))
           : undefined;
         patch(pane, {
           path,
@@ -246,8 +271,9 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
         loading: false,
         error: hasFolder ? null : err.message,
       });
+      if (options.onError) options.onError(err);
       // A lost session is shown by the pane itself (disconnected state).
-      if (err.kind !== "notConnected") {
+      else if (err.kind !== "notConnected") {
         toastError(`Could not open ${path}`, err.message);
       }
       return false;
@@ -288,6 +314,58 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
 
     navigate: async (pane, path) => {
       await load(pane, path, "push");
+    },
+
+    goTo: async (pane, input) => {
+      const { target, path } = get().panes[pane];
+      if (!target || path === null) {
+        return { ok: false, message: "Nothing to go to" };
+      }
+      const epoch = epochs[pane];
+      const windows = target.kind === "local" && isWindows;
+      const refused = (e: unknown): GoToResult => {
+        const err = toIpcError(e);
+        return { ok: false, message: goToErrorMessage(err.kind, err.message) };
+      };
+      let home: string | null = null;
+      if (usesHome(input, windows)) {
+        try {
+          home = await homeDir(target);
+        } catch (e) {
+          return refused(e);
+        }
+      }
+      const resolved = resolveGoTo(input, { cwd: path, home, windows });
+      if (resolved === null) return { ok: true };
+      let entry: Entry;
+      try {
+        entry = await stat(target, resolved);
+      } catch (e) {
+        return refused(e);
+      }
+      // The pane moved on (tab switch, disconnect) while we were asking.
+      if (epoch !== epochs[pane]) return { ok: true };
+
+      let folder = resolved;
+      let select: string | undefined;
+      if (!isDirLike(entry)) {
+        const broken =
+          entry.kind.type === "symlink" && entry.kind.targetKind === null;
+        const parent = parentPath(resolved);
+        if (broken || parent === null) {
+          return { ok: false, message: "No such folder" };
+        }
+        folder = parent;
+        select = resolved;
+      }
+      const failure: { err: IpcError | null } = { err: null };
+      await load(pane, folder, "push", undefined, {
+        select,
+        onError: (err) => {
+          failure.err = err;
+        },
+      });
+      return failure.err ? refused(failure.err) : { ok: true };
     },
 
     back: async (pane) => {

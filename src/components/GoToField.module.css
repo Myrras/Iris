@@ -1,0 +1,76 @@
+/* The breadcrumb's editable twin: a text field plus a dropdown under it. */
+.field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.input {
+  padding: 3px var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.input[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+/* Error line and suggestion list share the slot under the field. */
+.error,
+.list {
+  position: absolute;
+  top: calc(100% + var(--sp-1));
+  left: 0;
+  right: 0;
+  z-index: 5;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  font-size: var(--fs-sm);
+  animation: dropIn var(--dur-2) var(--ease-out);
+}
+
+.error {
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.list {
+  margin: 0;
+  padding: var(--sp-1);
+  max-height: 200px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.option {
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.option:hover,
+.option[aria-selected="true"] {
+  background: var(--surface-hover);
+}
+
+.option[aria-selected="true"] {
+  color: var(--accent);
+}
+
+@keyframes dropIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}

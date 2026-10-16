@@ -195,7 +195,14 @@ standalone template:
     Escape cancels) and reports right-clicks; `Pane` owns the shortcuts
     (`isMac` picks ⌘ vs Ctrl; Enter renames on macOS; typing a name
     selects the first visible row starting with it, `lib/typeAhead`: 1 s
-    buffer, closest match, Space joins the name while typing), the `ContextMenu`,
+    buffer, closest match, Space joins the name while typing; ⇧⌘G / ⌘L
+    (Ctrl+Shift+G / Ctrl+L), a click on the empty breadcrumb bar or a
+    double-click on it turn the breadcrumb into `GoToField`: absolute or
+    relative paths, `~` (`homeDir`), `stat` → folder opens with Back, file
+    opens its folder selected (`paneStore.goTo`), errors stay inline; Tab
+    completes folders from a per-open cached listing; closed while the
+    remote session is not connected; every pane shortcut and the type-ahead
+    ignore keys from inputs via `isEditable`), the `ContextMenu`,
     `DeleteConfirmModal` (remote: permanent/danger tone; local:
     Trash/warning tone; Enter confirms) and `ChmodDialog` (Get Info + rwx
     grid ⇄ octal, recursive for folders). `PreviewPanel` is the island right
@@ -772,7 +779,8 @@ src/
   components/ # Sidebar + ConnectionSidebar/ConnectionRow, ConnectionForm,
               # PromptHost (SecretPrompt, HostKeyDialog, ConflictDialog,
               # EditConflictDialog),
-              # Pane + Breadcrumb + FileTable, ContextMenu, DeleteConfirmModal,
+              # Pane + Breadcrumb + GoToField + FileTable, ContextMenu,
+              # DeleteConfirmModal,
               # ChmodDialog, PreviewPanel, TransferPanel + ProgressBar,
               # DragGhost, SyncDialog, WelcomeScreen, Modal, TabBar, TabCloseModal,
               # Toasts, SettingsModal, CloseWarningModal, WindowControls,
@@ -789,8 +797,8 @@ src/
               # useCoreEvents, useNativeDrop, paneDrag, dragOut (OS drag
               # out, remote preparation), downloadTo (folder picker),
               # transfer (pane → request), pure rules (entries, selection,
-              # path, fileFormat, fileName, mode, dateFormat, transferFormat,
-              # connectionForm), log, motion, platform
+              # path, goToPath, fileFormat, fileName, mode, dateFormat,
+              # transferFormat, connectionForm), log, motion, platform
   assets/     # drag-icon.png (the OS drag image)
   styles/     # tokens.css (design tokens) + global.css (resets/primitives)
   test/       # Vitest setup + stubViewport (jsdom has no layout)
