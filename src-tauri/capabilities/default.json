@@ -1,11 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window: core APIs, the native open-file dialog (key file, editor application), the logging plugin, window-state persistence, and the custom-title-bar window controls (Windows). No opener permissions: remote edit opens files from Rust (tauri_plugin_opener::open_path) and the opener plugin is not registered, so the webview cannot open paths or URLs itself.",
-  "windows": ["main"],
+  "description": "Capability for the main window: core APIs, the native open-file dialog (key file, editor application, Download to\u2026 folder), native drag of files out of the window (drag:default = start_drag), the logging plugin, window-state persistence, and the custom-title-bar window controls (Windows). No opener permissions: remote edit opens files from Rust (tauri_plugin_opener::open_path) and the opener plugin is not registered, so the webview cannot open paths or URLs itself.",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "dialog:default",
+    "drag:default",
     "log:default",
     "window-state:default",
     "core:window:allow-minimize",

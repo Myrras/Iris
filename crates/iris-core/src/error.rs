@@ -107,6 +107,14 @@ pub enum CoreError {
     /// caller can check the connection before blaming the item.
     #[error("remote error: the server did not answer in time")]
     NoAnswer,
+
+    /// More than an operation takes on (a drag out over its limits).
+    #[error("too large: {0}")]
+    TooLarge(String),
+
+    /// The user cancelled the operation.
+    #[error("cancelled")]
+    Cancelled,
 }
 
 impl CoreError {
@@ -131,6 +139,8 @@ impl CoreError {
             Self::HostKeyRejected => "hostKeyRejected",
             Self::NotConnected => "notConnected",
             Self::Remote(_) | Self::NoAnswer => "remote",
+            Self::TooLarge(_) => "tooLarge",
+            Self::Cancelled => "cancelled",
         }
     }
 
@@ -185,6 +195,8 @@ mod tests {
             (CoreError::NotConnected, "notConnected"),
             (CoreError::Remote("x".into()), "remote"),
             (CoreError::NoAnswer, "remote"),
+            (CoreError::TooLarge("x".into()), "tooLarge"),
+            (CoreError::Cancelled, "cancelled"),
         ];
         for (err, kind) in cases {
             assert_eq!(err.kind(), kind);

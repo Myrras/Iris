@@ -10,7 +10,7 @@ use serde::Serialize;
 use tokio::sync::broadcast;
 
 use crate::edit::RemoteStamp;
-use crate::ids::{BatchId, EditId, HostKeyRequestId, ProfileId, SessionId, TransferId};
+use crate::ids::{BatchId, DragOutId, EditId, HostKeyRequestId, ProfileId, SessionId, TransferId};
 use crate::transfer::{ConflictSide, TransferJob};
 
 /// Room for bursts: a folder of small files finishes many jobs a second,
@@ -114,6 +114,14 @@ pub enum CoreEvent {
         path: String,
         kind: String,
         message: String,
+    },
+
+    /// A drag out of the window downloaded more of its files. At most ten
+    /// per second, the last one with `bytes_done == total_bytes`.
+    DragOutProgress {
+        drag_id: DragOutId,
+        bytes_done: u64,
+        total_bytes: u64,
     },
 }
 

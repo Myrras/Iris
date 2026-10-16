@@ -47,6 +47,7 @@ fn event_name(event: &CoreEvent) -> &'static str {
         CoreEvent::EditUploaded { .. } => "edit:uploaded",
         CoreEvent::EditConflict { .. } => "edit:conflict",
         CoreEvent::EditFailed { .. } => "edit:failed",
+        CoreEvent::DragOutProgress { .. } => "dragOut:progress",
     }
 }
 
@@ -68,8 +69,8 @@ fn forward(app: &AppHandle, event: CoreEvent) {
 mod tests {
     use super::*;
     use iris_core::{
-        BatchId, ConflictSide, EditId, HostKeyRequestId, ProfileId, RemoteStamp, SessionId,
-        SessionState, TransferDirection, TransferId, TransferJob, TransferState,
+        BatchId, ConflictSide, DragOutId, EditId, HostKeyRequestId, ProfileId, RemoteStamp,
+        SessionId, SessionState, TransferDirection, TransferId, TransferJob, TransferState,
     };
 
     #[test]
@@ -176,6 +177,14 @@ mod tests {
                     message: "remote error: write failed".into(),
                 },
                 "edit:failed",
+            ),
+            (
+                CoreEvent::DragOutProgress {
+                    drag_id: DragOutId::new(),
+                    bytes_done: 1,
+                    total_bytes: 2,
+                },
+                "dragOut:progress",
             ),
         ];
         for (event, name) in cases {

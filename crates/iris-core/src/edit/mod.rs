@@ -228,6 +228,11 @@ impl EditManager {
         self.registry.lock().expect(LOCK_POISONED)
     }
 
+    /// The app cache dir (shared with `drag_out`).
+    pub(crate) fn cache_dir(&self) -> Option<PathBuf> {
+        self.cache_dir.lock().expect(LOCK_POISONED).clone()
+    }
+
     fn edit_root(&self) -> Option<PathBuf> {
         self.cache_dir
             .lock()
@@ -287,14 +292,16 @@ enum Synced {
 }
 
 impl Core {
-    /// Keep local copies of files opened for editing under `dir` (the
-    /// shell passes its app cache dir; tests a temp dir). Removes what an
-    /// earlier run left in `<dir>/edit`.
+    /// Keep local copies of files opened for editing (and files prepared
+    /// for a drag out) under `dir` (the shell passes its app cache dir;
+    /// tests a temp dir). Removes what an earlier run left in `<dir>/edit`
+    /// and `<dir>/dragout`.
     pub fn set_cache_dir(&self, dir: PathBuf) {
         let edits = &self.inner.edits;
         // Watch events carry canonical paths (`/private/var/…` for
         // `/var/…` on macOS); resolving it once keeps every path alike.
         let dir = std::fs::canonicalize(&dir).unwrap_or(dir);
+        crate::drag_out::remove_dir(&dir.join(crate::drag_out::DRAG_OUT_DIR));
         *edits.cache_dir.lock().expect(LOCK_POISONED) = Some(dir);
         if edits.lock().edits.is_empty() {
             if let Some(root) = edits.edit_root() {

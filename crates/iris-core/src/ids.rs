@@ -82,6 +82,13 @@ uuid_newtype!(
     EditId
 );
 
+uuid_newtype!(
+    /// One drag of remote files out of the window (`drag_out`). Chosen by
+    /// the caller, so it can match progress events and cancel before
+    /// `prepare_drag_out` returns.
+    DragOutId
+);
+
 #[cfg(test)]
 mod tests {
 

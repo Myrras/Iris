@@ -47,8 +47,13 @@ pub fn run() {
                 )
                 .build(),
         )
-        // Native open-file picker (the connection form's key-file field).
+        // Native open-file picker (the connection form's key-file field,
+        // editor apps, the "Download to…" folder).
         .plugin(tauri_plugin_dialog::init())
+        // Native drag of files out of the window (Finder / Explorer). The
+        // webview starts it once rows leave the window: local files as they
+        // are, remote ones after `prepare_drag_out` downloaded them.
+        .plugin(tauri_plugin_drag::init())
         // Logging sinks: stdout (dev), the per-OS log directory (support), and
         // the webview console (in-app diagnostics).
         .plugin(
@@ -153,9 +158,9 @@ pub fn run() {
             state
                 .core
                 .set_secret_store(Arc::new(iris_core::KeychainStore::new()));
-            // Remote edit: local copies live in the app cache dir (leftovers
-            // of an earlier run are removed here) and open in the user's
-            // editor.
+            // Remote edit and drag out: local copies live in the app cache
+            // dir (leftovers of an earlier run are removed here); edited
+            // files open in the user's editor.
             match app.path().app_cache_dir() {
                 Ok(dir) => state.core.set_cache_dir(dir),
                 Err(e) => tracing::warn!("no cache dir; remote edit is unavailable: {e}"),
@@ -200,6 +205,9 @@ pub fn run() {
             commands::edit::resolve_edit,
             commands::edit::list_edits,
             commands::edit::close_edit,
+            commands::drag_out::prepare_drag_out,
+            commands::drag_out::cancel_drag_out,
+            commands::drag_out::finish_drag_out,
             commands::window::window_confirm_close,
         ])
         .build(tauri::generate_context!())
@@ -207,9 +215,11 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         // Quitting: stop watching edited files and delete their local
-        // copies.
+        // copies, and the files downloaded for drags out of the window.
         if let RunEvent::Exit = event {
-            app_handle.state::<AppState>().core.close_all_edits();
+            let core = &app_handle.state::<AppState>().core;
+            core.close_all_edits();
+            core.clean_drag_outs();
             return;
         }
         // Cmd+Q / app-quit path (the window's CloseRequested guard covers the

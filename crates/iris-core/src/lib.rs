@@ -24,6 +24,9 @@
 //!
 //! [`Core::open_remote`] opens a remote file in a local editor and uploads
 //! every save, asking when the server copy changed meanwhile ([`edit`]).
+//! [`Core::prepare_drag_out`] downloads a remote selection to the cache so
+//! the UI can drag it out to Finder / Explorer as local files
+//! ([`drag_out`]).
 //!
 //! ## Sessions outlive their connections
 //! A connection that drops unexpectedly (keepalives notice a dead link) is
@@ -38,6 +41,7 @@
 #![forbid(unsafe_code)]
 
 pub mod connection;
+pub mod drag_out;
 pub mod edit;
 pub mod error;
 pub mod events;
@@ -61,6 +65,7 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 
 pub use connection::{AuthMethod, ConnectionProfile, JumpHost, ProfileStore};
+pub use drag_out::{DragOutLimits, DragOutReady};
 pub use edit::{EditInfo, EditResolution, EditStatus, Opener, RemoteStamp};
 pub use error::{CoreError, CoreResult};
 pub use events::{CoreEvent, EventBus, SessionState};
@@ -68,7 +73,7 @@ pub use fs::{
     BatchFailure, BatchReport, Entry, EntryKind, FileSystem, FsTarget, LinkTargetKind, LocalFs,
     SystemTrash, Trash,
 };
-pub use ids::{BatchId, EditId, HostKeyRequestId, ProfileId, SessionId, TransferId};
+pub use ids::{BatchId, DragOutId, EditId, HostKeyRequestId, ProfileId, SessionId, TransferId};
 pub use preview::Preview;
 pub use secret::Secret;
 pub use secrets::{KeychainStore, MemorySecretStore, SecretKind, SecretStore};
@@ -135,6 +140,8 @@ struct CoreInner {
     transfers: TransferManager,
     /// Remote files open in a local editor.
     edits: edit::EditManager,
+    /// Remote files downloaded for a drag out of the window.
+    drag_outs: drag_out::DragOutManager,
     /// One step of the reconnect backoff ([`reconnect_delay_secs`] of them
     /// before each attempt); a second, shortened by tests.
     reconnect_unit: Mutex<Duration>,
@@ -158,6 +165,7 @@ impl Default for Core {
                 sessions,
                 transfers,
                 edits: edit::EditManager::default(),
+                drag_outs: drag_out::DragOutManager::default(),
                 host_key_prompts: Arc::default(),
                 known_hosts: Mutex::default(),
                 ssh_config: Mutex::default(),

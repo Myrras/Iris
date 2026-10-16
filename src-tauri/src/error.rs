@@ -101,6 +101,8 @@ mod tests {
             (CoreError::NotConnected, "notConnected"),
             (CoreError::Remote("x".into()), "remote"),
             (CoreError::NoAnswer, "remote"),
+            (CoreError::TooLarge("x".into()), "tooLarge"),
+            (CoreError::Cancelled, "cancelled"),
         ];
         for (err, kind) in cases {
             let message = err.to_string();
