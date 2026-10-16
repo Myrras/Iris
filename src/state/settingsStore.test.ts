@@ -30,6 +30,23 @@ describe("settingsStore", () => {
     expect(s.appearance.reduceMotion).toBe(false);
   });
 
+  it("remembers the sync choices, following show-hidden by default", async () => {
+    let store = await freshStore();
+    expect(store.getState().sync).toEqual({
+      rule: "sizeOrDate",
+      protectNewer: true,
+      skipHidden: null,
+      copyEmptyFolders: true,
+      limitSize: false,
+      maxSizeMb: 100,
+    });
+    store.getState().set("sync", { rule: "sizeOnly", skipHidden: false });
+    store = await freshStore();
+    expect(store.getState().sync.rule).toBe("sizeOnly");
+    expect(store.getState().sync.skipHidden).toBe(false);
+    expect(store.getState().sync.copyEmptyFolders).toBe(true);
+  });
+
   it("falls back to defaults on a corrupt blob", async () => {
     localStorage.setItem("iris.settings", "{not json");
     const s = (await freshStore()).getState();

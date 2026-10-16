@@ -13,6 +13,9 @@
  * enclosing folder. Transfers: Cmd+Shift+U uploads the Local selection,
  * Cmd+Shift+D downloads the Remote selection, and F5 (Total Commander's
  * "copy to the other pane") does either, into the other pane's folder.
+ * Option+Cmd+S (Ctrl+Alt+S elsewhere), the toolbar's Sync button or the
+ * context menu's "Sync Folders…" open the Sync dialog (`SyncDialog`) for
+ * the two panes' folders, from this pane to the other.
  * Remote files open in the local editor (`lib/edit`) with Cmd+E, the
  * context menu's "Open in Editor", or by opening them (double-click, Enter
  * off macOS, Cmd+Down / Cmd+O); folders still navigate.
@@ -59,6 +62,7 @@ import { actionTargets, usePaneStore, type PaneId } from "../state/paneStore";
 import { useProfilesStore } from "../state/profilesStore";
 import { useSessionStore } from "../state/sessionStore";
 import { useSettingsStore } from "../state/settingsStore";
+import { useSyncStore } from "../state/syncStore";
 import { useTabsStore, type Tab } from "../state/tabsStore";
 import { Breadcrumb } from "./Breadcrumb";
 import { ChmodDialog, type ChmodRequest } from "./ChmodDialog";
@@ -77,6 +81,7 @@ import {
   PreviewIcon,
   RefreshIcon,
   ShowHiddenIcon,
+  SyncIcon,
   UploadIcon,
 } from "./icons";
 import styles from "./Pane.module.css";
@@ -491,6 +496,12 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
       );
     }
   };
+  // Syncing compares the two panes' folders: same needs as copying.
+  const openSync = () => {
+    if (canCopy)
+      useSyncStore.getState().open(id === "local" ? "upload" : "download");
+  };
+  const syncShortcut = isMac ? "⌥⌘S" : "Ctrl+Alt+S";
   const copyVerb = id === "local" ? "Upload" : "Download";
   const copyKey = id === "local" ? "u" : "d";
   const copyShortcut = isMac
@@ -531,6 +542,8 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     else if (mod && e.key === "ArrowUp") void store().up(id);
     else if ((mod && e.shiftKey && key === copyKey) || e.key === "F5")
       copyToOther();
+    // By code: Option+S types "ß" on a Mac keyboard.
+    else if (mod && e.altKey && !e.shiftKey && e.code === "KeyS") openSync();
     else if (
       [...e.key].length === 1 &&
       !e.metaKey &&
@@ -565,7 +578,12 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
       disabled: !hasFolder,
       onSelect: newFolder,
     };
-    if (!entry) return [create, refresh];
+    const sync: ContextMenuItem = {
+      label: "Sync Folders…",
+      disabled: !canCopy,
+      onSelect: openSync,
+    };
+    if (!entry) return [create, sync, refresh];
     const list = targets();
     const single = list.length === 1;
     const noModes = list.every((t) => t.mode === null);
@@ -603,6 +621,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
             },
           ]
         : []),
+      sync,
       create,
       { label: "Rename", disabled: !single, onSelect: () => rename(entry) },
       {
@@ -699,6 +718,16 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
           onClick={copyToOther}
         >
           {id === "local" ? <UploadIcon /> : <DownloadIcon />}
+        </button>
+        <button
+          type="button"
+          className={styles.tool}
+          aria-label="Sync folders"
+          title={`Sync ${id === "local" ? "Local → Remote" : "Remote → Local"}… (${syncShortcut})`}
+          disabled={!canCopy}
+          onClick={openSync}
+        >
+          <SyncIcon />
         </button>
         <button
           type="button"

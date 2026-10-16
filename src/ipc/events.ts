@@ -13,6 +13,7 @@ import type {
   EditUploadedEvent,
   HostKeyPromptEvent,
   SessionStateChangedEvent,
+  SyncFinishedEvent,
   TransferConflictEvent,
   TransferJobChangedEvent,
   TransferProgressEvent,
@@ -123,6 +124,13 @@ export function onDragOutProgress(
   return listen<DragOutProgressEvent>("dragOut:progress", (e) =>
     handler(e.payload),
   );
+}
+
+/** A sync run is over: its copies are finished and its deletes done. */
+export function onSyncFinished(
+  handler: (event: SyncFinishedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<SyncFinishedEvent>("sync:finished", (e) => handler(e.payload));
 }
 
 /** The native macOS menu's Settings… item (⌘,) was activated (`lib.rs`). */

@@ -4,7 +4,8 @@
  * transfer conflicts join the prompt queue, session states update
  * `sessionStore`, transfer events update `transferStore`, and settings
  * changes re-pull `backendSettingsStore`, and remote edit reports its saves
- * (a toast per upload or failure; a conflict joins the prompt queue). Also
+ * (a toast per upload or failure; a conflict joins the prompt queue), and a
+ * finished sync toasts and re-lists its tab's panes. Also
  * does the initial profile and
  * transfer load, and turns restored tabs of deleted profiles into blank ones.
  *
@@ -25,6 +26,7 @@ import {
   onProfilesChanged,
   onSessionStateChanged,
   onSettingsChanged,
+  onSyncFinished,
   onTransferConflict,
   onTransferJobChanged,
   onTransferProgress,
@@ -35,6 +37,7 @@ import { useBackendSettingsStore } from "../state/backendSettingsStore";
 import { useProfilesStore } from "../state/profilesStore";
 import { usePromptStore } from "../state/promptStore";
 import { useSessionStore } from "../state/sessionStore";
+import { syncFinished } from "../state/syncStore";
 import { useTabsStore } from "../state/tabsStore";
 import { toastError, toastSuccess } from "../state/toastStore";
 import { useTransferStore } from "../state/transferStore";
@@ -99,6 +102,7 @@ export function useCoreEvents(): void {
         usePromptStore.getState().push({ kind: "editConflict", event }),
       ),
       onDragOutProgress(dragOutProgress),
+      onSyncFinished(syncFinished),
     ];
     const forgetMissing = (profiles: { id: string }[], loaded: boolean) => {
       if (loaded) {

@@ -14,6 +14,7 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
       parallelTransfers: 15,
       reconnectAttempts: 3,
       editorOverrides: {},
+      syncExcludes: [".git"],
     }),
   ),
   saveSettings: vi.fn((s: unknown) => Promise.resolve(s)),
@@ -129,6 +130,7 @@ describe("SettingsModal — Transfers tab", () => {
       parallelTransfers: 16,
       reconnectAttempts: 3,
       editorOverrides: {},
+      syncExcludes: [".git"],
     });
     expect(
       screen.getByRole("button", { name: "Increase parallel transfers" }),
@@ -158,6 +160,7 @@ describe("SettingsModal — Transfers tab", () => {
       parallelTransfers: 15,
       reconnectAttempts: 0,
       editorOverrides: {},
+      syncExcludes: [".git"],
     });
     expect(fewer).toBeDisabled();
 
@@ -167,6 +170,7 @@ describe("SettingsModal — Transfers tab", () => {
           parallelTransfers: 15,
           reconnectAttempts: 20,
           editorOverrides: {},
+          syncExcludes: [".git"],
         },
       }),
     );
@@ -185,11 +189,83 @@ describe("SettingsModal — Transfers tab", () => {
   });
 });
 
+describe("SettingsModal — Sync excludes", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useBackendSettingsStore.setState({ settings: null });
+    useSettingsRequestStore.getState().clear();
+  });
+
+  async function openTransfers() {
+    render(<SettingsModal open onClose={() => undefined} />);
+    fireEvent.click(screen.getByRole("tab", { name: "Transfers" }));
+    await screen.findByText(".git");
+  }
+
+  it("lists, adds and removes patterns", async () => {
+    await openTransfers();
+    expect(screen.getByText("Sync excludes")).toBeInTheDocument();
+    const input = screen.getByRole("textbox", {
+      name: "Name or pattern to exclude",
+    });
+    fireEvent.change(input, { target: { value: " *.log " } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() =>
+      expect(saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ syncExcludes: [".git", "*.log"] }),
+      ),
+    );
+    expect(await screen.findByText("*.log")).toBeInTheDocument();
+    expect(input).toHaveValue("");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove the sync exclude .git" }),
+    );
+    await waitFor(() =>
+      expect(saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ syncExcludes: ["*.log"] }),
+      ),
+    );
+  });
+
+  it("refuses separators and repeats", async () => {
+    await openTransfers();
+    const input = screen.getByRole("textbox", {
+      name: "Name or pattern to exclude",
+    });
+    fireEvent.change(input, { target: { value: "build/out" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("no / or \\");
+    fireEvent.change(input, { target: { value: ".git" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("already excluded");
+    expect(saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("restores the defaults", async () => {
+    await openTransfers();
+    fireEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
+    await waitFor(() =>
+      expect(saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          syncExcludes: [".git", ".DS_Store", "node_modules", "Thumbs.db"],
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Restore defaults" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+});
+
 describe("SettingsModal — Editors tab", () => {
   const settings = (editorOverrides: Record<string, string>) => ({
     parallelTransfers: 15,
     reconnectAttempts: 3,
     editorOverrides,
+    syncExcludes: [".git"],
   });
 
   beforeEach(() => {

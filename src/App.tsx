@@ -8,8 +8,8 @@
  * panes (each tab its own pane pair and session, `tabsStore`). This
  * component also owns the app-level wiring: the backend events
  * (`useCoreEvents`), files dragged in from the OS (`useNativeDrop`), the
- * pane-drag chip (`DragGhost`), opening the active tab's panes and the tab
- * shortcuts, settings access (native menu on
+ * pane-drag chip (`DragGhost`), the Sync dialog (`SyncDialog`), opening
+ * the active tab's panes and the tab shortcuts, settings access (native menu on
  * macOS, title-bar gear elsewhere), the close-warning event, and suppressing
  * webview-only behaviour (reload shortcuts, the browser context menu).
  */
@@ -32,6 +32,7 @@ import { Pane } from "./components/Pane";
 import { PreviewPanel } from "./components/PreviewPanel";
 import { PromptHost } from "./components/PromptHost";
 import { SettingsModal } from "./components/SettingsModal";
+import { SyncDialog } from "./components/SyncDialog";
 import { Sidebar } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { TabCloseModal } from "./components/TabCloseModal";
@@ -204,6 +205,7 @@ export default function App() {
           useSettingsRequestStore.getState().clear();
         }}
       />
+      <SyncDialog />
       <TabCloseModal />
       <CloseWarningModal
         open={closeWarnOpen}

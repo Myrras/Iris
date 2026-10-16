@@ -36,6 +36,7 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  FolderSync,
   HardDrive,
   House,
   ImageOff,
@@ -115,6 +116,7 @@ export const FilterIcon = icon(Search, { size: 13 });
 export const NewFolderIcon = icon(FolderPlus);
 export const UploadIcon = icon(Upload);
 export const DownloadIcon = icon(Download);
+export const SyncIcon = icon(FolderSync);
 export const ConnectIcon = icon(Plug);
 export const DisconnectIcon = icon(Unplug);
 export const EditIcon = icon(Pencil, { size: 13 });

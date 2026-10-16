@@ -24,6 +24,7 @@ vi.mock("../ipc/events", () => {
     onEditFailed: sub("editFailed"),
     onEditConflict: sub("editConflict"),
     onDragOutProgress: sub("dragOutProgress"),
+    onSyncFinished: sub("syncFinished"),
   };
 });
 vi.mock("../ipc/commands", async (importOriginal) => ({
@@ -49,6 +50,7 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
       parallelTransfers: 4,
       reconnectAttempts: 3,
       editorOverrides: {},
+      syncExcludes: [".git"],
     }),
   ),
 }));
@@ -208,6 +210,43 @@ describe("useCoreEvents", () => {
       );
     });
 
+    it("toasts a finished sync and re-lists its panes", () => {
+      renderHook(() => useCoreEvents());
+      const finished = {
+        type: "syncFinished",
+        planId: "plan-1",
+        batchId: "b-1",
+        sessionId: "s-1",
+        direction: "upload",
+        copied: 3,
+        skipped: 0,
+        failed: 0,
+        cancelled: 0,
+        deleted: 1,
+        kept: 0,
+        note: null,
+      } as const;
+      handlers.syncFinished(finished);
+      expect(toastSuccess).toHaveBeenCalledWith(
+        "Sync finished: 3 files copied, 1 deleted",
+      );
+      expect(listDir).toHaveBeenCalledWith(
+        { kind: "remote", sessionId: "s-1" },
+        "/srv",
+      );
+      handlers.syncFinished({
+        ...finished,
+        failed: 1,
+        deleted: 0,
+        kept: 2,
+        note: "a copy failed or was cancelled, so nothing was deleted",
+      });
+      expect(toastError).toHaveBeenCalledWith(
+        "Sync finished with problems",
+        "3 files copied, 1 failed, 2 not deleted. A copy failed or was cancelled, so nothing was deleted.",
+      );
+    });
+
     it("toasts why when the reconnect gave up", () => {
       renderHook(() => useCoreEvents());
       state(reconnecting);
@@ -251,7 +290,7 @@ describe("useCoreEvents", () => {
   it("unsubscribes on unmount", async () => {
     const { unmount } = renderHook(() => useCoreEvents());
     unmount();
-    await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(12));
+    await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(13));
   });
 
   it("loads the transfers and feeds transfer events into the stores", async () => {
@@ -291,6 +330,7 @@ describe("useCoreEvents", () => {
         parallelTransfers: 2,
         reconnectAttempts: 3,
         editorOverrides: {},
+        syncExcludes: [".git"],
       },
     });
     handlers.settings();

@@ -5,7 +5,8 @@
  *   prefs from `themeStore` / `settingsStore`.
  * - Transfers: parallel transfers and reconnect attempts, from the core's
  *   `settings.json` via `backendSettingsStore` (`getSettings` /
- *   `saveSettings`).
+ *   `saveSettings`), and the names a sync leaves alone (`syncExcludes`,
+ *   cards in Podium's look; `lib/syncExcludes`).
  * - Editors: which application opens a remote file for editing, per
  *   extension (`editorOverrides` in the same `settings.json`); rows in
  *   Podium's card look, the app picked with the native dialog.
@@ -25,6 +26,13 @@ import {
   withoutOverride,
 } from "../lib/editorOverrides";
 import { isMac, isWindows } from "../lib/platform";
+import {
+  DEFAULT_SYNC_EXCLUDES,
+  excludeError,
+  isDefaultExcludes,
+  withExclude,
+  withoutExclude,
+} from "../lib/syncExcludes";
 
 import { Modal } from "./Modal";
 import {
@@ -164,7 +172,12 @@ function TabBody({ tab }: { tab: SettingsTabId }) {
     case "general":
       return <GeneralTab />;
     case "transfers":
-      return <TransfersTab />;
+      return (
+        <>
+          <TransfersTab />
+          <SyncExcludes />
+        </>
+      );
     case "editors":
       return <EditorsTab />;
   }
@@ -255,6 +268,103 @@ function TransfersTab() {
           onChange={(n) => void save({ reconnectAttempts: n })}
         />
       </div>
+    </section>
+  );
+}
+
+function SyncExcludes() {
+  const settings = useBackendSettingsStore((s) => s.settings);
+  const save = useBackendSettingsStore((s) => s.save);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const list = settings?.syncExcludes ?? [];
+
+  const add = () => {
+    const problem = excludeError(draft, list);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    setDraft("");
+    setError(null);
+    void save({ syncExcludes: withExclude(list, draft) });
+  };
+
+  return (
+    <section className={styles.section}>
+      <h3 className={styles.sectionLabel}>Sync excludes</h3>
+      <small className={styles.rowHelp}>
+        Names a sync never copies or deletes, wherever they are in the folder.
+        Use * for any characters and ? for one, e.g. *.log.
+      </small>
+      {settings && list.length === 0 && (
+        <p className={styles.empty}>
+          Nothing is excluded: a sync takes everything.
+        </p>
+      )}
+      {list.map((pattern) => (
+        <div key={pattern} className={`${styles.card} ${styles.cardCompact}`}>
+          <div className={styles.cardHeader}>
+            <span className={styles.cardName}>{pattern}</span>
+            <div className={`${styles.cardActions} ${styles.pushRight}`}>
+              <button
+                type="button"
+                aria-label={`Remove the sync exclude ${pattern}`}
+                onClick={() =>
+                  void save({ syncExcludes: withoutExclude(list, pattern) })
+                }
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        </div>
+      ))}
+      <form
+        className={styles.fieldRow}
+        aria-label="New sync exclude"
+        onSubmit={(e) => {
+          e.preventDefault();
+          add();
+        }}
+      >
+        <input
+          type="text"
+          value={draft}
+          placeholder="*.tmp"
+          aria-label="Name or pattern to exclude"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          disabled={!settings}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setError(null);
+          }}
+        />
+        <button type="submit" disabled={!settings}>
+          Add
+        </button>
+      </form>
+      {error && (
+        <p className={styles.error} role="alert">
+          {error}
+        </p>
+      )}
+      {settings && !isDefaultExcludes(list) && (
+        <div className={styles.editActions}>
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              void save({ syncExcludes: [...DEFAULT_SYNC_EXCLUDES] });
+            }}
+          >
+            Restore defaults
+          </button>
+        </div>
+      )}
     </section>
   );
 }

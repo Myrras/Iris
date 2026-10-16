@@ -16,6 +16,7 @@ const stored: IrisSettings = {
   parallelTransfers: 4,
   reconnectAttempts: 3,
   editorOverrides: {},
+  syncExcludes: [".git"],
 };
 
 beforeEach(() => {

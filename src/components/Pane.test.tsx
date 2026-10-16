@@ -47,6 +47,7 @@ import { useLayoutStore } from "../state/layoutStore";
 import { initialPane, usePaneStore } from "../state/paneStore";
 import { useProfilesStore } from "../state/profilesStore";
 import { useSessionStore } from "../state/sessionStore";
+import { useSyncStore } from "../state/syncStore";
 import { useSettingsStore } from "../state/settingsStore";
 import { resetTabs, useTabsStore } from "../state/tabsStore";
 import { stubViewport } from "../test/viewport";
@@ -445,6 +446,7 @@ describe("Pane", () => {
         "Open",
         "Preview",
         "Upload to Remote",
+        "Sync Folders…",
         "New Folder",
         "Rename",
         "Get Info…",
@@ -460,7 +462,7 @@ describe("Pane", () => {
       fireEvent.contextMenu(grid());
       expect(
         screen.getAllByRole("menuitem").map((item) => item.textContent),
-      ).toEqual(["New Folder", "Refresh"]);
+      ).toEqual(["New Folder", "Sync Folders…", "Refresh"]);
     });
 
     it("calls a remote delete permanent", async () => {
@@ -669,6 +671,52 @@ describe("Pane", () => {
       expect(openRemote).not.toHaveBeenCalled();
     });
 
+    it("opens the Sync dialog from the toolbar, the menu and Ctrl+Alt+S", async () => {
+      await openBoth();
+      const sync = within(localPane()).getByRole("button", {
+        name: "Sync folders",
+      });
+      // No selection needed: it compares the folders.
+      expect(sync).toBeEnabled();
+      fireEvent.click(sync);
+      expect(useSyncStore.getState().request?.direction).toBe("upload");
+
+      act(() => useSyncStore.setState({ request: null }));
+      const grid = within(remotePane()).getByRole("grid");
+      fireEvent.keyDown(grid, {
+        key: "ß",
+        code: "KeyS",
+        ctrlKey: true,
+        altKey: true,
+      });
+      expect(useSyncStore.getState().request?.direction).toBe("download");
+
+      act(() => useSyncStore.setState({ request: null }));
+      fireEvent.contextMenu(within(remotePane()).getByText("readme.md"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Sync Folders…" }));
+      expect(useSyncStore.getState().request?.direction).toBe("download");
+    });
+
+    it("disables Sync while the session reconnects", async () => {
+      await openBoth();
+      useSessionStore.getState().apply({
+        type: "sessionStateChanged",
+        sessionId: "s-1",
+        profileId: "p-1",
+        state: {
+          status: "reconnecting",
+          attempt: 1,
+          maxAttempts: 5,
+          nextRetryInSecs: 1,
+        },
+      });
+      await waitFor(() =>
+        expect(
+          within(localPane()).getByRole("button", { name: "Sync folders" }),
+        ).toBeDisabled(),
+      );
+    });
+
     it("disables the transfer actions without a session", async () => {
       await openLocal();
       act(() => usePaneStore.getState().setActive("local"));
@@ -677,6 +725,12 @@ describe("Pane", () => {
       fireEvent.contextMenu(screen.getByText("notes.txt"));
       expect(
         screen.getByRole("menuitem", { name: "Upload to Remote" }),
+      ).toBeDisabled();
+      expect(
+        screen.getByRole("menuitem", { name: "Sync Folders…" }),
+      ).toBeDisabled();
+      expect(
+        screen.getByRole("button", { name: "Sync folders" }),
       ).toBeDisabled();
     });
 

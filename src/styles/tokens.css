@@ -27,7 +27,11 @@
   --accent: #4493f8;
   --accent-hover: #58a6ff;
   --accent-contrast: #ffffff;
-  --selection: color-mix(in srgb, var(--accent) 18%, transparent); /* selected rows, active pane */
+  --selection: color-mix(
+    in srgb,
+    var(--accent) 18%,
+    transparent
+  ); /* selected rows, active pane */
   --selection-inactive: #2f3743; /* selected rows, inactive pane: neutral grey */
 
   /* Semantic */
@@ -98,6 +102,7 @@
   --preview-w: 340px; /* the preview island: fixed, whatever it shows */
   --checker-size: 16px; /* image preview checkerboard tile */
   --transfers-list-h: 168px; /* the transfer island's job list */
+  --sync-list-h: 200px; /* one group's item list in the Sync dialog */
 
   /* Repeating animations that are not state transitions (spinner, pulsing
      status dots) — kept off the --dur-* scale on purpose. */

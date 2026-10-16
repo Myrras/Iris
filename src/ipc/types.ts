@@ -15,6 +15,12 @@ export interface IrisSettings {
   reconnectAttempts: number;
   /** Lower-case extension without the dot → app path to open it with. */
   editorOverrides: Record<string, string>;
+  /**
+   * Name patterns a sync never copies or deletes, matched per path segment
+   * (`*` and `?` wildcards). Default `.git`, `.DS_Store`, `node_modules`,
+   * `Thumbs.db`.
+   */
+  syncExcludes: string[];
 }
 
 /** Structured error every IPC command can reject with (`IpcError`). */
@@ -515,4 +521,104 @@ export interface DragOutProgressEvent {
   dragId: DragOutId;
   bytesDone: number;
   totalBytes: number;
+}
+
+// ---------------------------------------------------------------------------
+// Sync (`iris_core::sync`)
+// ---------------------------------------------------------------------------
+
+/** One folder comparison (UUID string, `iris_core::SyncPlanId`). */
+export type SyncPlanId = string;
+
+/** `update`: copy new and changed files; `mirror`: also delete extras. */
+export type SyncMode = "update" | "mirror";
+
+/** When a file on both sides is copied (`iris_core::CompareRule`). */
+export type CompareRule =
+  "sizeOrDate" | "newerOnly" | "sizeOnly" | "everything";
+
+/** What `planSync` compares with (`iris_core::SyncOptions`); all optional. */
+export interface SyncOptions {
+  mode?: SyncMode;
+  rule?: CompareRule;
+  /** Keep target files newer than the source (default on). */
+  protectNewer?: boolean;
+  /** Leave dotfiles and hidden entries alone on both sides (default off). */
+  skipHidden?: boolean;
+  /** Create source folders that have no files to copy (default on). */
+  copyEmptyFolders?: boolean;
+  /** Skip source files larger than this many MB; `null` = no limit. */
+  maxFileSizeMb?: number | null;
+  /** Name patterns to leave alone; omitted = the `syncExcludes` setting. */
+  excludes?: string[] | null;
+}
+
+/** Where a plan item landed (`iris_core::SyncGroup`). */
+export type SyncGroup =
+  | "new"
+  | "changed"
+  | "same"
+  | "targetNewer"
+  | "differentSizeSameDate"
+  | "targetOnly"
+  | "typeMismatch"
+  | "excluded"
+  | "skipped";
+
+/** One path of a plan (`iris_core::SyncItem`). */
+export interface SyncItem {
+  /** Relative to the synced folders, `/`-separated. */
+  path: string;
+  kind: "file" | "dir" | "other";
+  group: SyncGroup;
+  /** The source file's size and date; `null` when no file is there. */
+  srcSize: number | null;
+  srcMtime: number | null;
+  dstSize: number | null;
+  dstMtime: number | null;
+  /** Why it is skipped, excluded or mismatched. */
+  reason: string | null;
+  /** Ticked by default. */
+  selected: boolean;
+}
+
+/** Items and bytes of one group (`iris_core::SyncTotal`). */
+export interface SyncTotal {
+  files: number;
+  dirs: number;
+  bytes: number;
+}
+
+/** What `planSync` returns (`iris_core::SyncPlan`). */
+export interface SyncPlan {
+  planId: SyncPlanId;
+  sessionId: SessionId;
+  /** `upload`: Local → Remote; `download`: Remote → Local. */
+  direction: TransferDirection;
+  mode: SyncMode;
+  localDir: string;
+  remoteDir: string;
+  /** Path order, folders before their contents; `same` files left out. */
+  items: SyncItem[];
+  /** Every group, also the empty ones. */
+  totals: Record<SyncGroup, SyncTotal>;
+}
+
+/** Payload of `sync:finished`: a run's copies and deletes are done. */
+export interface SyncFinishedEvent {
+  type: "syncFinished";
+  planId: SyncPlanId;
+  /** The transfer batch of its copies. */
+  batchId: BatchId;
+  sessionId: SessionId;
+  direction: TransferDirection;
+  copied: number;
+  skipped: number;
+  failed: number;
+  cancelled: number;
+  deleted: number;
+  /** Target-only items not deleted (see `note`). */
+  kept: number;
+  /** Why something was not deleted, in Iris' words. */
+  note: string | null;
 }

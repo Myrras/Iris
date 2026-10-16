@@ -29,6 +29,10 @@ import type {
   SecretKind,
   SessionId,
   SshConfigHost,
+  SyncOptions,
+  SyncPlan,
+  SyncPlanId,
+  TransferDirection,
   TransferId,
   TransferList,
   TransferRequest,
@@ -412,6 +416,52 @@ export function finishDragOut(
   dropped: boolean,
 ): Promise<void> {
   return invoke("finish_drag_out", { dragId, dropped });
+}
+
+// ---------------------------------------------------------------------------
+// Sync
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk and compare the local and remote folder for a one-way sync
+ * (`upload`: Local → Remote); resolves with the plan, kept 10 minutes for
+ * `runSync`. Rejects with `notConnected`, `notFound` (a folder is gone) or
+ * `invalidInput`.
+ */
+export function planSync(
+  sessionId: SessionId,
+  direction: TransferDirection,
+  localDir: string,
+  remoteDir: string,
+  options: SyncOptions = {},
+): Promise<SyncPlan> {
+  return invoke("plan_sync", {
+    sessionId,
+    direction,
+    localDir,
+    remoteDir,
+    options,
+  });
+}
+
+/**
+ * Run a plan once with the ticked item paths (omitted = its defaults):
+ * folders are made, the copies queue as one transfer batch (resolved), and
+ * in Mirror mode the extras are deleted once every copy went well.
+ * `sync:finished` reports the end. Rejects with `notFound` (expired or
+ * gone: compare again), `invalidInput` (nothing ticked does anything) or
+ * `notConnected`.
+ */
+export function runSync(
+  planId: SyncPlanId,
+  ticked?: string[],
+): Promise<BatchId> {
+  return invoke("run_sync", { planId, ticked: ticked ?? null });
+}
+
+/** Forget a plan that will not run. */
+export function discardSyncPlan(planId: SyncPlanId): Promise<void> {
+  return invoke("discard_sync_plan", { planId });
 }
 
 // ---------------------------------------------------------------------------

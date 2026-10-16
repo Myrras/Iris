@@ -56,6 +56,7 @@ describe("IPC commands", () => {
       parallelTransfers: 4,
       reconnectAttempts: 5,
       editorOverrides: { md: "/Applications/Example.app" },
+      syncExcludes: [".git"],
     };
     await saveSettings(settings);
     expect(invoke).toHaveBeenCalledWith("save_settings", { settings });
