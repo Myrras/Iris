@@ -1,7 +1,9 @@
 /**
- * Iris brand mark, drawn in `currentColor`. Same shape as Podium's mark (a
- * three-step podium) so the two apps read as one family; swap the paths here
- * once Iris has its own glyph.
+ * Iris brand mark, drawn in `currentColor`: a rainbow of two bands over a
+ * core (Iris, the gods' messenger, travelled on the rainbow; the arch also
+ * reads as a passage between two sides). Same 100×100 grid, opacity steps
+ * and soft shadow as the Podium and Selene marks. The source of truth is
+ * `src-tauri/icons/source/iris-mark.svg` (the app icon: `iris.svg`).
  */
 
 import type { SVGProps } from "react";
@@ -9,6 +11,15 @@ import type { SVGProps } from "react";
 interface LogoMarkProps extends SVGProps<SVGSVGElement> {
   size?: number;
 }
+
+/** The mark's paths, outer band first (shared with tests). */
+export const LOGO_PATHS = [
+  "M6 76V64A44 44 0 0 1 94 64V76H84V64A34 34 0 0 0 16 64V76Z",
+  "M20 76V64A30 30 0 0 1 80 64V76H70V64A20 20 0 0 0 30 64V76Z",
+  "M34 76V64A16 16 0 0 1 66 64V76Z",
+] as const;
+
+const OPACITY = [0.45, 0.72, 1] as const;
 
 export function LogoMark({ size = 18, ...props }: LogoMarkProps) {
   return (
@@ -31,9 +42,9 @@ export function LogoMark({ size = 18, ...props }: LogoMarkProps) {
         </filter>
       </defs>
       <g fill="currentColor" filter="url(#lm-shadow)">
-        <rect x="8" y="52" width="26" height="38" rx="4" opacity="0.7" />
-        <rect x="37" y="32" width="26" height="58" rx="4" />
-        <rect x="66" y="62" width="26" height="28" rx="4" opacity="0.5" />
+        {LOGO_PATHS.map((d, i) => (
+          <path key={d} d={d} opacity={OPACITY[i]} />
+        ))}
       </g>
     </svg>
   );
