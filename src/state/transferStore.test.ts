@@ -24,7 +24,7 @@ import {
   listTransfers,
   retryTransfer,
 } from "../ipc/commands";
-import type { TransferJob, TransferList } from "../ipc/types";
+import type { BatchInfo, TransferJob, TransferList } from "../ipc/types";
 import { useLayoutStore } from "./layoutStore";
 import { initialPane, usePaneStore } from "./paneStore";
 import { usePromptStore } from "./promptStore";
@@ -55,8 +55,30 @@ function job(id: string, extra: Partial<TransferJob> = {}): TransferJob {
   };
 }
 
-function list(jobs: TransferJob[]): TransferList {
-  return { jobs, summary: { ...EMPTY_SUMMARY, queued: jobs.length } };
+function list(jobs: TransferJob[], batches: BatchInfo[] = []): TransferList {
+  return {
+    jobs,
+    batches,
+    summary: { ...EMPTY_SUMMARY, queued: jobs.length },
+  };
+}
+
+function batch(extra: Partial<BatchInfo> = {}): BatchInfo {
+  return {
+    batchId: "b-7",
+    sessionId: "s-1",
+    direction: "download",
+    phase: "counting",
+    paused: false,
+    countedFiles: 0,
+    countedBytes: 0,
+    countedFolders: 0,
+    totalFiles: 0,
+    totalBytes: 0,
+    doneFiles: 0,
+    doneBytes: 0,
+    ...extra,
+  };
 }
 
 const store = () => useTransferStore.getState();
@@ -67,6 +89,7 @@ beforeEach(() => {
   useTransferStore.setState({
     jobs: {},
     order: [],
+    batches: [],
     summary: EMPTY_SUMMARY,
     speeds: {},
   });
@@ -252,6 +275,42 @@ describe("transferStore", () => {
       "Could not retry the transfer",
       "not connected",
     );
+  });
+
+  it("keeps the batches and moves a counting one's numbers", async () => {
+    vi.mocked(listTransfers).mockResolvedValueOnce(list([], [batch()]));
+    await store().resync();
+    expect(store().batches).toHaveLength(1);
+    store().applyCounting({
+      type: "batchCounting",
+      batchId: "b-7",
+      files: 12,
+      bytes: 3400,
+      folders: 2,
+    });
+    expect(store().batches[0]).toMatchObject({
+      countedFiles: 12,
+      countedBytes: 3400,
+      countedFolders: 2,
+    });
+    // Cancel all also stops a batch that has no jobs yet.
+    await store().cancelAll();
+    expect(cancelBatch).toHaveBeenCalledWith("b-7");
+  });
+
+  it("re-pulls when an unknown batch is counting", () => {
+    vi.useFakeTimers();
+    vi.mocked(listTransfers).mockResolvedValue(list([]));
+    store().applyCounting({
+      type: "batchCounting",
+      batchId: "b-new",
+      files: 1,
+      bytes: 1,
+      folders: 0,
+    });
+    vi.advanceTimersByTime(RESYNC_MS);
+    expect(listTransfers).toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it("lists a session's unfinished jobs", () => {

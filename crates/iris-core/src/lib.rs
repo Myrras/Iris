@@ -91,8 +91,9 @@ pub use sync::{
     SyncTotals,
 };
 pub use transfer::{
-    ConflictResolution, ConflictSide, TransferDirection, TransferError, TransferItem, TransferJob,
-    TransferList, TransferManager, TransferRequest, TransferState, TransferSummary,
+    BatchInfo, BatchPhase, ConflictResolution, ConflictSide, TransferDirection, TransferError,
+    TransferItem, TransferJob, TransferList, TransferManager, TransferRequest, TransferState,
+    TransferSummary,
 };
 
 use connection::route::{HopAuth, Resolver};

@@ -3,7 +3,8 @@
  * order), the core's summary, and each running job's speed.
  *
  * Fed by `useCoreEvents`: `transfer:job-changed` replaces one job,
- * `transfer:progress` moves its byte count, and both `transfers:updated` and
+ * `transfer:progress` moves its byte count, `transfer:batch-counting` the
+ * counts of a batch that is still counting, and both `transfers:updated` and
  * job changes schedule a re-pull of `listTransfers` (throttled to
  * `RESYNC_MS`), so the list converges on the core even when events were
  * dropped. Between re-pulls the panel computes live totals from the per-job
@@ -25,7 +26,9 @@ import {
   toIpcError,
 } from "../ipc/commands";
 import type {
+  BatchCountingEvent,
   BatchId,
+  BatchInfo,
   SessionId,
   TransferId,
   TransferJob,
@@ -50,6 +53,7 @@ export const EMPTY_SUMMARY: TransferSummary = {
   queued: 0,
   needsDecision: 0,
   paused: 0,
+  etaSecs: null,
 };
 
 interface TransferStoreState {
@@ -57,6 +61,8 @@ interface TransferStoreState {
   /** Job ids in the order the core found them. */
   order: TransferId[];
   summary: TransferSummary;
+  /** Every batch, in the order they were started. */
+  batches: BatchInfo[];
   /** Bytes per second of each running job, from `transfer:progress`. */
   speeds: Record<TransferId, number>;
 
@@ -68,6 +74,8 @@ interface TransferStoreState {
   applyJob: (job: TransferJob) => void;
   /** `transfer:progress`. */
   applyProgress: (event: TransferProgressEvent) => void;
+  /** `transfer:batch-counting`. */
+  applyCounting: (event: BatchCountingEvent) => void;
 
   /** Queue a transfer; opens the panel. Resolves with the batch id, or `null`. */
   enqueue: (request: TransferRequest) => Promise<BatchId | null>;
@@ -75,7 +83,7 @@ interface TransferStoreState {
   /** Queue a failed job again (a file starts over, a folder is re-listed). */
   retry: (jobId: TransferId) => Promise<void>;
   cancelBatch: (batchId: BatchId) => Promise<void>;
-  /** Cancel every batch that still has unfinished jobs. */
+  /** Cancel every batch that is still counting or has unfinished jobs. */
   cancelAll: () => Promise<void>;
   clearFinished: () => Promise<void>;
 }
@@ -136,6 +144,7 @@ export const useTransferStore = create<TransferStoreState>((set, get) => ({
   jobs: {},
   order: [],
   summary: EMPTY_SUMMARY,
+  batches: [],
   speeds: {},
 
   resync: async () => {
@@ -169,7 +178,8 @@ export const useTransferStore = create<TransferStoreState>((set, get) => ({
     set({
       jobs,
       order: list.jobs.map((j) => j.id),
-      summary: list.summary,
+      summary: { ...list.summary, etaSecs: list.summary.etaSecs ?? null },
+      batches: list.batches ?? [],
       speeds,
     });
     // Conflicts of jobs that are gone or finished can no longer be answered.
@@ -225,6 +235,28 @@ export const useTransferStore = create<TransferStoreState>((set, get) => ({
     });
   },
 
+  applyCounting: ({ batchId, files, bytes, folders }) => {
+    const batches = get().batches;
+    const known = batches.some((b) => b.batchId === batchId);
+    if (!known) {
+      // Started elsewhere, or not pulled yet.
+      get().scheduleResync();
+      return;
+    }
+    set({
+      batches: batches.map((b) =>
+        b.batchId === batchId && b.phase === "counting"
+          ? {
+              ...b,
+              countedFiles: files,
+              countedBytes: bytes,
+              countedFolders: folders,
+            }
+          : b,
+      ),
+    });
+  },
+
   enqueue: async (request) => {
     let batchId: BatchId;
     try {
@@ -274,6 +306,9 @@ export const useTransferStore = create<TransferStoreState>((set, get) => ({
 
   cancelAll: async () => {
     const batches = new Set<BatchId>();
+    for (const batch of get().batches) {
+      if (batch.phase === "counting") batches.add(batch.batchId);
+    }
     for (const job of Object.values(get().jobs)) {
       if (!isFinal(job.state)) batches.add(job.batchId);
     }
@@ -328,4 +363,9 @@ export function unfinishedJobsOf(
   return Object.values(jobs).filter(
     (job) => job.sessionId === sessionId && !isFinal(job.state),
   );
+}
+
+/** The batches still counting what they will copy. */
+export function countingBatches(batches: BatchInfo[]): BatchInfo[] {
+  return batches.filter((b) => b.phase === "counting");
 }

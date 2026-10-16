@@ -7,6 +7,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
+  BatchCountingEvent,
   DragOutProgressEvent,
   EditConflictEvent,
   EditFailedEvent,
@@ -69,6 +70,15 @@ export function onTransferJobChanged(
   handler: (event: TransferJobChangedEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<TransferJobChangedEvent>("transfer:job-changed", (e) =>
+    handler(e.payload),
+  );
+}
+
+/** A batch counting what it will copy found more (no jobs exist yet). */
+export function onBatchCounting(
+  handler: (event: BatchCountingEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<BatchCountingEvent>("transfer:batch-counting", (e) =>
     handler(e.payload),
   );
 }

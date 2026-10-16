@@ -15,7 +15,11 @@ import type { SessionId } from "../ipc/types";
 import { usePaneStore } from "../state/paneStore";
 import { tabOfSession, useTabsStore, type TabId } from "../state/tabsStore";
 import { toastError } from "../state/toastStore";
-import { unfinishedJobsOf, useTransferStore } from "../state/transferStore";
+import {
+  countingBatches,
+  unfinishedJobsOf,
+  useTransferStore,
+} from "../state/transferStore";
 
 function tab(id: TabId) {
   return useTabsStore.getState().tabs.find((t) => t.id === id);
@@ -24,8 +28,10 @@ function tab(id: TabId) {
 /** Whether disconnecting `sessionId` would cut transfers short. */
 export function hasUnfinishedTransfers(sessionId: SessionId | null): boolean {
   if (!sessionId) return false;
+  const { jobs, batches } = useTransferStore.getState();
   return (
-    unfinishedJobsOf(useTransferStore.getState().jobs, sessionId).length > 0
+    unfinishedJobsOf(jobs, sessionId).length > 0 ||
+    countingBatches(batches).some((b) => b.sessionId === sessionId)
   );
 }
 

@@ -14,7 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import { toIpcError, windowConfirmClose } from "../ipc/commands";
 import { transferCount, transferTotals } from "../lib/transferFormat";
 import { toastError } from "../state/toastStore";
-import { useTransferStore } from "../state/transferStore";
+import { countingBatches, useTransferStore } from "../state/transferStore";
 import { Modal } from "./Modal";
 import { StatusDot } from "./StatusDot";
 import styles from "./CloseWarningModal.module.css";
@@ -28,6 +28,8 @@ export function CloseWarningModal({
 }) {
   const [busy, setBusy] = useState(false);
   const jobs = useTransferStore((s) => s.jobs);
+  const batches = useTransferStore((s) => s.batches);
+  const counting = countingBatches(batches).length;
   const totals = useMemo(() => transferTotals(Object.values(jobs), {}), [jobs]);
 
   useEffect(() => {
@@ -57,6 +59,11 @@ export function CloseWarningModal({
       tone: "warning" as const,
     },
     { n: totals.paused, text: "paused", tone: "warning" as const },
+    {
+      n: counting,
+      text: counting === 1 ? "folder still counting" : "folders still counting",
+      tone: "busy" as const,
+    },
   ].filter((l) => l.n > 0);
 
   return (

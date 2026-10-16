@@ -19,6 +19,7 @@ vi.mock("../ipc/events", () => {
     onTransfersUpdated: sub("transfers"),
     onTransferJobChanged: sub("job"),
     onTransferProgress: sub("progress"),
+    onBatchCounting: sub("batchCounting"),
     onTransferConflict: sub("conflict"),
     onEditUploaded: sub("editUploaded"),
     onEditFailed: sub("editFailed"),
@@ -290,7 +291,7 @@ describe("useCoreEvents", () => {
   it("unsubscribes on unmount", async () => {
     const { unmount } = renderHook(() => useCoreEvents());
     unmount();
-    await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(13));
+    await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(14));
   });
 
   it("loads the transfers and feeds transfer events into the stores", async () => {
@@ -308,6 +309,37 @@ describe("useCoreEvents", () => {
       bytesPerSec: 10,
     });
     expect(useTransferStore.getState().jobs["j-1"].bytesDone).toBe(50);
+
+    useTransferStore.setState({
+      batches: [
+        {
+          batchId: "b-2",
+          sessionId: "s-1",
+          direction: "upload",
+          phase: "counting",
+          paused: false,
+          countedFiles: 0,
+          countedBytes: 0,
+          countedFolders: 0,
+          totalFiles: 0,
+          totalBytes: 0,
+          doneFiles: 0,
+          doneBytes: 0,
+        },
+      ],
+    });
+    handlers.batchCounting({
+      type: "batchCounting",
+      batchId: "b-2",
+      files: 1234,
+      bytes: 56_000_000,
+      folders: 12,
+    });
+    expect(useTransferStore.getState().batches[0]).toMatchObject({
+      countedFiles: 1234,
+      countedBytes: 56_000_000,
+      countedFolders: 12,
+    });
 
     handlers.conflict({
       type: "transferConflict",

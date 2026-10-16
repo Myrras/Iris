@@ -233,12 +233,11 @@ standalone template:
     (`resume_paused`), any unfinished → `cancelled`. `error {kind,message}`
     is set on `failed` and on Iris' own `skipped` (folder links, broken
     links, sockets/devices, unsafe names).
-  - `expand.rs`: `enqueue` validates, returns the `BatchId` and walks the
-    items in a spawned task (several folders at once, names sorted per
-    folder); each destination
-    folder is created (`mkdir_all`, existing OK) before its files are
-    queued. A selected link is followed; links to folders inside a tree are
-    skipped (loops). Names from listings must be one plain segment
+  - `expand.rs`: `enqueue` validates, returns the `BatchId` and counts the
+    items in a spawned task (see *Count before copying*), then makes the
+    destination folders (existing OK) and queues every job at once. A
+    selected link is followed; links to folders inside a tree are skipped
+    (loops). Names from listings must be one plain segment
     (`naming::is_safe_name`) so a server cannot steer a download outside
     its folder.
   - Scheduling: `Shared::pump` starts queued jobs FIFO while `running <
@@ -351,12 +350,11 @@ standalone template:
     user disconnect); the event has no separate `reason` any more.
   - **Transfers**: `disconnect` cancels the session's unfinished jobs
     (`cancel_session`); `window_confirm_close` calls
-    `cancel_all_transfers` before exiting. A walk cut off by a drop records
-    the rest (current folder, its stack, unreached items) as **paused
-    placeholders** (`TransferJob.folder = true`, `JobEntry.walk`); resuming
-    removes them and walks them again on the session (`walk_again`;
-    `BatchEntry.expanding` is a counter). A listing that *fails* becomes a
-    `failed` placeholder. `retry_transfer(jobId)`: a failed file starts over
+    `cancel_all_transfers` before exiting. A count cut off by a drop
+    keeps its inventory and the rest (see *Count before copying*); resuming
+    continues it on the session (`BatchEntry.expanding` is a counter). A
+    listing (or destination folder) that *fails* becomes a `failed`
+    placeholder (`TransferJob.folder = true`, `JobEntry.walk`). `retry_transfer(jobId)`: a failed file starts over
     (its own partial copy is replaced, not appended); a placeholder is
     walked again; needs a live session.
   - IPC: `reconnect(sessionId, password?, passphrase?, remember?)`,
@@ -703,6 +701,39 @@ standalone template:
   failing subfolder, cancel + pending), `tests/walk.rs` (listings overlap
   and stay ≤ 16 on the server — `max_open_dirs` — for a sync and a
   download, progress events, an unreadable subfolder).
+- ✅ **Count before copying** (`transfer/expand.rs`). A batch first
+  **counts**: the selected items are stat'ed (≤ walk limit at once; a sync
+  run's thousands of `Work::Item`s too), folders walked with `FolderWalk`,
+  everything kept in an `Inventory` (jobs with a sort key = (piece index,
+  path segments), destination dirs, counts); no job exists yet. Then the
+  destination folders are made level by level (`mkdir_all` for a piece's
+  own folder, `Side::mkdir_one` below, several at once); one that cannot be
+  made becomes a `failed` placeholder (retry walks it again) and nothing
+  under it is queued. Then `Shared::add_jobs` adds every job at once in
+  path order and the workers start. `BatchCounting {batchId, files, bytes,
+  folders}` (≤ 10/s + a final one) while counting. A drop during the count
+  or the mkdirs → `Outcome::Lost(pending)` → `BatchEntry.paused =
+  Some(PausedCount {inventory, pending})` (the batch stays `counting`,
+  `paused`, no jobs; `has_active` true); `resume_paused_on` takes it and
+  runs the count on the new session (each such batch counts as one in its
+  return value); cancel / disconnect / quit drop it. The old paused
+  placeholder jobs are gone. `list_transfers` adds `batches:
+  [BatchInfo {batchId, sessionId, direction, phase: counting|transferring|
+  done, paused, countedFiles/Bytes/Folders, totalFiles/Bytes, doneFiles/
+  Bytes}]` (start order; skipped/cancelled/placeholder jobs left out of the
+  totals) and `summary.etaSecs` = remaining bytes of active jobs ÷ the
+  aggregate 3 s speed, `null` while any batch counts or nothing moves.
+  Event `transfer:batch-counting`. UI: `transferStore.batches` (+
+  `applyCounting`, `countingBatches`); TransferPanel header "Counting… 1,234
+  files, 56 MB" ("Waiting for the connection…" when paused) with the total
+  bar indeterminate, then `progressText`: "12 of 340 files · 3.1 MB of
+  56 MB · 1.5 MB/s · ~0:42" (speed and ETA from the core summary); Cancel
+  all also cancels counting batches; CloseWarningModal / TabCloseModal /
+  `hasUnfinishedTransfers` count them. Tests: `tests/transfers.rs` (no job
+  while counting then all at once, totals + events, cancel while counting,
+  a folder that cannot be made, ETA), `tests/reconnect.rs` (a count cut off
+  → paused → resumed, path order), frontend `transferFormat`,
+  `transferStore`, `TransferPanel`, `useCoreEvents`, `CloseWarningModal`.
 - ✅ **Window chrome** (as in Podium): `App.tsx`'s `<header>` is the title
   bar on Windows and macOS (`data-tauri-drag-region` makes the strip
   draggable). Windows turns the native decorations off (`"decorations":

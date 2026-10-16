@@ -69,6 +69,16 @@ pub enum CoreEvent {
     /// One job changed state (or its destination, after `keepBoth`).
     TransferJobChanged { job: TransferJob },
 
+    /// A batch is counting what it will copy (before any job exists): the
+    /// files, bytes and folders found so far. At most ten per second, and
+    /// once more when the count is complete.
+    BatchCounting {
+        batch_id: BatchId,
+        files: u64,
+        bytes: u64,
+        folders: u64,
+    },
+
     /// A running job copied more bytes. At most ten per second per job.
     TransferProgress {
         job_id: TransferId,
@@ -297,6 +307,23 @@ mod tests {
         assert_eq!(
             serde_json::to_value(CoreEvent::TransfersUpdated).unwrap(),
             serde_json::json!({ "type": "transfersUpdated" })
+        );
+        let batch_id = BatchId::new();
+        assert_eq!(
+            serde_json::to_value(CoreEvent::BatchCounting {
+                batch_id,
+                files: 1234,
+                bytes: 56_000_000,
+                folders: 7,
+            })
+            .unwrap(),
+            serde_json::json!({
+                "type": "batchCounting",
+                "batchId": batch_id.to_string(),
+                "files": 1234,
+                "bytes": 56_000_000,
+                "folders": 7,
+            })
         );
     }
 

@@ -42,6 +42,7 @@ fn event_name(event: &CoreEvent) -> &'static str {
         CoreEvent::SessionStateChanged { .. } => "session:state-changed",
         CoreEvent::TransfersUpdated => "transfers:updated",
         CoreEvent::TransferJobChanged { .. } => "transfer:job-changed",
+        CoreEvent::BatchCounting { .. } => "transfer:batch-counting",
         CoreEvent::TransferProgress { .. } => "transfer:progress",
         CoreEvent::TransferConflict { .. } => "transfer:conflict",
         CoreEvent::EditUploaded { .. } => "edit:uploaded",
@@ -122,6 +123,15 @@ mod tests {
                     },
                 },
                 "transfer:job-changed",
+            ),
+            (
+                CoreEvent::BatchCounting {
+                    batch_id: BatchId::new(),
+                    files: 3,
+                    bytes: 1024,
+                    folders: 1,
+                },
+                "transfer:batch-counting",
             ),
             (
                 CoreEvent::TransferProgress {

@@ -306,13 +306,57 @@ export interface TransferSummary {
   /** Jobs waiting for a conflict answer. */
   needsDecision: number;
   paused: number;
+  /**
+   * Seconds until every unfinished job is done at the current speed;
+   * `null` while a batch is still counting or nothing moves.
+   */
+  etaSecs: number | null;
+}
+
+/**
+ * Where a batch is: counting what it will copy (no jobs yet), copying, or
+ * finished (`iris_core::BatchPhase`).
+ */
+export type BatchPhase = "counting" | "transferring" | "done";
+
+/** One batch in `listTransfers` (`iris_core::BatchInfo`). */
+export interface BatchInfo {
+  batchId: BatchId;
+  sessionId: SessionId;
+  direction: TransferDirection;
+  phase: BatchPhase;
+  /** Counting waits for the connection to come back. */
+  paused: boolean;
+  /** What the count found (so far, while counting). */
+  countedFiles: number;
+  countedBytes: number;
+  countedFolders: number;
+  /** Its jobs (skipped, cancelled and placeholders left out); 0 while counting. */
+  totalFiles: number;
+  totalBytes: number;
+  doneFiles: number;
+  doneBytes: number;
 }
 
 /** What `listTransfers` returns (`iris_core::TransferList`). */
 export interface TransferList {
   /** In the order they were found. */
   jobs: TransferJob[];
+  /** In the order they were started. */
+  batches: BatchInfo[];
   summary: TransferSummary;
+}
+
+/**
+ * Payload of `transfer:batch-counting`: what a batch's count found so far
+ * (at most ten a second, and once more at the end).
+ */
+export interface BatchCountingEvent {
+  type: "batchCounting";
+  batchId: BatchId;
+  files: number;
+  bytes: number;
+  folders: number;
 }
 
 /** One side of a conflict (`iris_core::ConflictSide`). */

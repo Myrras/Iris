@@ -11,6 +11,11 @@ when it merges.
 
 ## [Unreleased]
 
+- Uploading or downloading a folder first counts what it will copy ("Counting…
+  1,234 files, 56 MB"), then starts with the total known: the progress bar no
+  longer jumps back as more files are found, and the Transfers header shows
+  "12 of 340 files · 3.1 MB of 56 MB · 1.5 MB/s · ~0:42". A count cut off by a
+  lost connection continues after the reconnect.
 - Comparing folders for a sync, and starting a folder upload, download or drag
   out, is much faster on deep trees: several folders are listed at once
   (a 1,300-folder project compares in about 3 s instead of 40 s on a server

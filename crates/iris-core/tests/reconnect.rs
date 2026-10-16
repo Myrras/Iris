@@ -13,9 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use iris_core::{
-    AuthMethod, ConnectionProfile, Core, CoreError, CoreEvent, Credentials, FsTarget, IrisSettings,
-    ProfileId, Secret, SecretKind, SessionId, SessionState, TransferDirection, TransferItem,
-    TransferList, TransferRequest, TransferState,
+    AuthMethod, BatchPhase, ConnectionProfile, Core, CoreError, CoreEvent, Credentials, FsTarget,
+    IrisSettings, ProfileId, Secret, SecretKind, SessionId, SessionState, TransferDirection,
+    TransferItem, TransferList, TransferRequest, TransferState,
 };
 use tempfile::TempDir;
 
@@ -549,10 +549,15 @@ async fn a_folder_walk_cut_off_by_a_drop_continues_after_a_reconnect() {
     server.set_list_delay(Duration::from_millis(300));
 
     f.download(session, "/photos", &f.local_dir());
-    // The first folder is listed (its files are queued), the next listing
-    // is under way when the connection dies.
-    f.wait_until("the first files", |l| !l.jobs.is_empty())
+    // The count lists the first folder (its files are counted, nothing is
+    // queued yet), the next listings are under way when the connection
+    // dies.
+    let list = f
+        .wait_until("the first counted files", |l| {
+            l.batches.first().is_some_and(|b| b.counted_files > 0)
+        })
         .await;
+    assert!(list.jobs.is_empty(), "nothing is queued while counting");
     server.kill_all();
     server.set_list_delay(Duration::ZERO);
     f.states
@@ -560,23 +565,13 @@ async fn a_folder_walk_cut_off_by_a_drop_continues_after_a_reconnect() {
         .await;
 
     let list = f
-        .wait_until("the walk to stop", |l| {
-            l.jobs.iter().all(|j| j.state != TransferState::Running)
-                && l.jobs.iter().any(|j| j.folder)
+        .wait_until("the count to pause", |l| {
+            l.batches.first().is_some_and(|b| b.paused)
         })
         .await;
-    let placeholders: Vec<_> = list.jobs.iter().filter(|j| j.folder).collect();
-    assert!(
-        placeholders
-            .iter()
-            .all(|j| j.state == TransferState::Paused),
-        "{list:#?}"
-    );
-    assert!(
-        list.jobs.iter().all(|j| j.state != TransferState::Failed),
-        "nothing failed: {list:#?}"
-    );
-    assert!(f.core.has_active_transfers(), "placeholders are work");
+    assert!(list.jobs.is_empty(), "still no jobs: {list:#?}");
+    assert_eq!(list.batches[0].phase, BatchPhase::Counting);
+    assert!(f.core.has_active_transfers(), "a paused count is work");
 
     f.core
         .reconnect(session, Credentials::default())
@@ -590,6 +585,17 @@ async fn a_folder_walk_cut_off_by_a_drop_continues_after_a_reconnect() {
         "{list:#?}"
     );
     assert_eq!(list.jobs.len(), files.len());
+    let batch = &list.batches[0];
+    assert_eq!(batch.phase, BatchPhase::Done);
+    assert!(!batch.paused);
+    assert_eq!(batch.total_files, files.len() as u64);
+    assert_eq!(batch.counted_files, files.len() as u64);
+    assert_eq!(batch.counted_folders, 4);
+    // Jobs come in path order, whatever order the listings finished in.
+    let srcs: Vec<&str> = list.jobs.iter().map(|j| j.src.as_str()).collect();
+    let mut sorted = srcs.clone();
+    sorted.sort();
+    assert_eq!(srcs, sorted);
     for (name, content) in &files {
         assert_eq!(
             &std::fs::read(f.local.path().join(name)).unwrap(),

@@ -18,7 +18,7 @@ import {
   clearFinished,
   retryTransfer,
 } from "../ipc/commands";
-import type { TransferJob } from "../ipc/types";
+import type { BatchInfo, TransferJob } from "../ipc/types";
 import { summaryText, transferTotals } from "../lib/transferFormat";
 import { useLayoutStore } from "../state/layoutStore";
 import {
@@ -56,12 +56,31 @@ function setJobs(jobs: TransferJob[], speeds: Record<string, number> = {}) {
   });
 }
 
+function countingBatch(extra: Partial<BatchInfo> = {}): BatchInfo {
+  return {
+    batchId: "b-9",
+    sessionId: "s-1",
+    direction: "upload",
+    phase: "counting",
+    paused: false,
+    countedFiles: 1234,
+    countedBytes: 56 * 1024 * 1024,
+    countedFolders: 40,
+    totalFiles: 0,
+    totalBytes: 0,
+    doneFiles: 0,
+    doneBytes: 0,
+    ...extra,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   resetTransferResync();
   localStorage.clear();
   useLayoutStore.setState({ transfersCollapsed: false });
   setJobs([]);
+  useTransferStore.setState({ batches: [], summary: EMPTY_SUMMARY });
 });
 
 describe("TransferPanel", () => {
@@ -101,6 +120,7 @@ describe("TransferPanel", () => {
       ],
       { a: 1536 },
     );
+    useTransferStore.setState({ summary: { ...EMPTY_SUMMARY, etaSecs: 2 } });
     render(<TransferPanel />);
 
     const a = screen.getByRole("listitem", { name: "a.txt" });
@@ -131,7 +151,35 @@ describe("TransferPanel", () => {
     ).not.toBeInTheDocument();
 
     expect(
-      screen.getByText("1 active · 1 queued · 1.5 KB/s · ETA 0:02"),
+      screen.getByText("0 of 3 files · 1.0 KB of 6.0 KB · 1.5 KB/s · ~0:02"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("progressbar", { name: "Total progress" }),
+    ).toHaveAttribute("aria-valuenow", "17");
+  });
+
+  it("counts a batch first, with a sliding bar and no ETA", () => {
+    useTransferStore.setState({
+      batches: [countingBatch()],
+      summary: { ...EMPTY_SUMMARY, etaSecs: 99 },
+    });
+    render(<TransferPanel />);
+    expect(
+      screen.getByText("Counting… 1,234 files, 56.0 MB"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/starts once everything is counted/)).toBeVisible();
+    const bar = screen.getByRole("progressbar", { name: "Total progress" });
+    expect(bar).not.toHaveAttribute("aria-valuenow");
+    // Counting can be cancelled before any job exists.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel all" }));
+    expect(cancelBatch).toHaveBeenCalledWith("b-9");
+  });
+
+  it("says when a count waits for the connection", () => {
+    useTransferStore.setState({ batches: [countingBatch({ paused: true })] });
+    render(<TransferPanel />);
+    expect(
+      screen.getByText("Waiting for the connection… 1,234 files, 56.0 MB"),
     ).toBeInTheDocument();
   });
 
@@ -172,13 +220,13 @@ describe("TransferPanel", () => {
     expect(retryTransfer).toHaveBeenCalledWith("broken");
   });
 
-  it("shows a folder whose listing was cut off as a folder row", () => {
+  it("shows a folder that could not be listed as a folder row", () => {
     setJobs([
       job("photos", {
         src: "/home/alice/photos",
         dst: "/srv/photos",
         size: 0,
-        state: "paused",
+        state: "failed",
         folder: true,
       }),
     ]);

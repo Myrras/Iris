@@ -3,7 +3,12 @@
  * live totals over the job list.
  */
 
-import type { TransferId, TransferJob, TransferState } from "../ipc/types";
+import type {
+  BatchInfo,
+  TransferId,
+  TransferJob,
+  TransferState,
+} from "../ipc/types";
 import { formatSize } from "./fileFormat";
 import type { StatusTone } from "../components/StatusDot";
 
@@ -79,6 +84,10 @@ export interface TransferTotals {
   failed: number;
   /** Jobs in a final state (done, failed, cancelled, skipped). */
   finished: number;
+  /** Files to copy (skipped, cancelled and placeholder jobs left out). */
+  files: number;
+  /** Of those, the ones done. */
+  doneFiles: number;
 }
 
 /**
@@ -101,11 +110,17 @@ export function transferTotals(
     done: 0,
     failed: 0,
     finished: 0,
+    files: 0,
+    doneFiles: 0,
   };
   for (const job of jobs) {
     if (job.state !== "skipped" && job.state !== "cancelled") {
       t.totalBytes += job.size;
       t.doneBytes += Math.min(job.bytesDone, job.size);
+      if (!job.folder) {
+        t.files += 1;
+        if (job.state === "done") t.doneFiles += 1;
+      }
     }
     if (isFinal(job.state)) t.finished += 1;
     else t.remainingBytes += Math.max(0, job.size - job.bytesDone);
@@ -165,5 +180,62 @@ export function summaryText(t: TransferTotals, total: number): string {
   if (speed) parts.push(speed);
   const eta = formatEta(etaSeconds(t));
   if (eta) parts.push(`ETA ${eta}`);
+  return parts.join(" · ");
+}
+
+/** "1,234" (thousands grouped). */
+function count(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
+/** "1 file" / "1,234 files". */
+function files(n: number): string {
+  return `${count(n)} ${n === 1 ? "file" : "files"}`;
+}
+
+/**
+ * "Counting… 1,234 files, 56 MB" over the batches still counting (or
+ * "Waiting for the connection…" when every one of them is paused); empty
+ * when none is.
+ */
+export function countingText(batches: BatchInfo[]): string {
+  const counting = batches.filter((b) => b.phase === "counting");
+  if (counting.length === 0) return "";
+  let n = 0;
+  let bytes = 0;
+  for (const b of counting) {
+    n += b.countedFiles;
+    bytes += b.countedBytes;
+  }
+  const lead = counting.every((b) => b.paused)
+    ? "Waiting for the connection…"
+    : "Counting…";
+  return `${lead} ${files(n)}, ${formatSize(bytes)}`;
+}
+
+/**
+ * The panel header while copying: "12 of 340 files · 3.1 MB of 56 MB ·
+ * 1.5 MB/s · ~0:42" (plus what waits for an answer or is paused), or the
+ * finished tally. `bytesPerSec` and `etaSecs` are the core's (over every
+ * transfer together, so they do not jump as small files come and go).
+ */
+export function progressText(
+  t: TransferTotals,
+  total: number,
+  bytesPerSec: number,
+  etaSecs: number | null,
+): string {
+  if (total === 0) return "";
+  if (total === t.finished) return summaryText(t, total);
+  const parts = [
+    `${count(t.doneFiles)} of ${files(t.files)}`,
+    `${formatSize(t.doneBytes)} of ${formatSize(t.totalBytes)}`,
+  ];
+  if (t.needsDecision > 0) parts.push(`${t.needsDecision} waiting for you`);
+  if (t.paused > 0) parts.push(`${t.paused} paused`);
+  const speed = formatSpeed(bytesPerSec > 0 ? bytesPerSec : t.bytesPerSec);
+  if (speed) parts.push(speed);
+  const eta = formatEta(etaSecs);
+  if (eta) parts.push(`~${eta}`);
   return parts.join(" · ");
 }

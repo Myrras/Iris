@@ -1,14 +1,16 @@
 /**
  * The bottom transfer island: the queue of uploads and downloads.
  *
- * Header: the collapse toggle, a live summary ("2 active · 5 queued ·
- * 3.1 MB/s · ETA 0:42"), Cancel all and Clear finished, and a total progress
- * bar underneath. Body: one row per job (Podium's ProcessRow look), with
+ * Header: the collapse toggle, a live summary — "Counting… 1,234 files,
+ * 56 MB" while a batch counts what it will copy (the total bar then slides
+ * indeterminately), else "12 of 340 files · 3.1 MB of 56 MB · 1.5 MB/s ·
+ * ~0:42" — Cancel all and Clear finished, and a total progress bar
+ * underneath whose total is fixed once a batch is counted. Body: one row per job (Podium's ProcessRow look), with
  * direction, file name (full paths in the tooltip), progress, bytes, speed,
  * a `StatusDot` + state (a failure's reason in its tooltip), a cancel
  * button while it is unfinished and a retry button once it failed. A folder
- * whose listing a dropped connection cut off is a placeholder row (folder
- * icon) until resuming or retrying lists it into file rows. The list is virtualised, so a folder of
+ * that could not be listed or made is a placeholder row (folder icon)
+ * until retrying lists it into file rows. The list is virtualised, so a folder of
  * thousands of files stays cheap.
  *
  * Data comes from `transferStore` (events + throttled re-pulls); totals are
@@ -23,15 +25,20 @@ import type { TransferJob } from "../ipc/types";
 import { formatSize } from "../lib/fileFormat";
 import { baseName } from "../lib/path";
 import {
+  countingText,
   formatSpeed,
   isFinal,
+  progressText,
   stateLabel,
   stateTone,
-  summaryText,
   transferTotals,
 } from "../lib/transferFormat";
 import { useLayoutStore } from "../state/layoutStore";
-import { orderedJobs, useTransferStore } from "../state/transferStore";
+import {
+  countingBatches,
+  orderedJobs,
+  useTransferStore,
+} from "../state/transferStore";
 import { ProgressBar } from "./ProgressBar";
 import { StatusDot } from "./StatusDot";
 import {
@@ -189,14 +196,29 @@ export function TransferPanel() {
   const jobsById = useTransferStore((s) => s.jobs);
   const order = useTransferStore((s) => s.order);
   const speeds = useTransferStore((s) => s.speeds);
+  const batches = useTransferStore((s) => s.batches);
+  const coreSummary = useTransferStore((s) => s.summary);
 
   const jobs = useMemo(
     () => orderedJobs({ jobs: jobsById, order }),
     [jobsById, order],
   );
   const totals = useMemo(() => transferTotals(jobs, speeds), [jobs, speeds]);
+  const counting = countingBatches(batches).length > 0;
   const unfinished = jobs.length - totals.finished;
-  const summary = summaryText(totals, jobs.length);
+  const busy = unfinished > 0 || counting;
+  const counted = countingText(batches);
+  const summary = [
+    counted,
+    progressText(
+      totals,
+      jobs.length,
+      coreSummary.bytesPerSec,
+      counting ? null : coreSummary.etaSecs,
+    ),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const store = useTransferStore.getState;
 
   return (
@@ -223,7 +245,7 @@ export function TransferPanel() {
           {summary}
         </span>
         <div className={styles.headerActions}>
-          {unfinished > 0 && (
+          {busy && (
             <button
               type="button"
               className={styles.headerAction}
@@ -243,18 +265,20 @@ export function TransferPanel() {
           )}
         </div>
       </header>
-      {jobs.length > 0 && (
+      {(jobs.length > 0 || counting) && (
         <div className={styles.total}>
           <ProgressBar
             fraction={
-              totals.totalBytes > 0
-                ? totals.doneBytes / totals.totalBytes
-                : unfinished === 0
-                  ? 1
-                  : 0
+              counting
+                ? null
+                : totals.totalBytes > 0
+                  ? totals.doneBytes / totals.totalBytes
+                  : unfinished === 0
+                    ? 1
+                    : 0
             }
             label="Total progress"
-            tone={unfinished === 0 ? "done" : "active"}
+            tone={busy ? "active" : "done"}
           />
         </div>
       )}
@@ -264,7 +288,11 @@ export function TransferPanel() {
         aria-hidden={collapsed}
       >
         <div className={styles.bodyInner}>
-          {jobs.length === 0 ? (
+          {jobs.length === 0 && counting ? (
+            <p className={styles.placeholder}>
+              {counted}. The transfer starts once everything is counted.
+            </p>
+          ) : jobs.length === 0 ? (
             <p className={styles.placeholder}>
               No transfers yet. Drag files between the panes, or use Upload and
               Download.

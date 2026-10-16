@@ -18,6 +18,7 @@
 import { useEffect } from "react";
 
 import {
+  onBatchCounting,
   onDragOutProgress,
   onEditConflict,
   onEditFailed,
@@ -93,6 +94,7 @@ export function useCoreEvents(): void {
       onTransfersUpdated(() => transfers().scheduleResync()),
       onTransferJobChanged(({ job }) => transfers().applyJob(job)),
       onTransferProgress((event) => transfers().applyProgress(event)),
+      onBatchCounting((event) => transfers().applyCounting(event)),
       onTransferConflict((event) =>
         usePromptStore.getState().push({ kind: "transferConflict", event }),
       ),

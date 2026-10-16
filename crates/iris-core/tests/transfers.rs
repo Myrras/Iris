@@ -11,9 +11,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use iris_core::{
-    AuthMethod, BatchId, ConflictResolution, ConnectionProfile, Core, CoreError, CoreEvent,
-    IrisSettings, ProfileId, Secret, SessionId, TransferDirection, TransferItem, TransferJob,
-    TransferList, TransferRequest, TransferState,
+    AuthMethod, BatchId, BatchPhase, ConflictResolution, ConnectionProfile, Core, CoreError,
+    CoreEvent, IrisSettings, ProfileId, Secret, SessionId, TransferDirection, TransferItem,
+    TransferJob, TransferList, TransferRequest, TransferState,
 };
 use tempfile::TempDir;
 
@@ -443,6 +443,166 @@ async fn a_folder_upload_creates_the_tree_and_skips_folder_links() {
         job(&list, "data.bin").dst,
         "/uploads/project/src/deep/data.bin"
     );
+}
+
+/// A folder transfer counts everything first: no job exists while it
+/// counts, then all of them appear at once with the totals known.
+#[tokio::test]
+async fn a_folder_is_counted_before_any_job_is_queued() {
+    let server = TestServer::start(None).await;
+    let (f, session) = Fixture::new(&server).await;
+    let mut expected_bytes = 0;
+    let mut expected_files = 0;
+    for dir in ["album", "album/2024", "album/2024/june", "album/2025"] {
+        std::fs::create_dir_all(server.root().join(dir)).unwrap();
+        for i in 0..3 {
+            let len = 1000 + i * 10;
+            std::fs::write(
+                server.root().join(format!("{dir}/pic-{i}.jpg")),
+                data(len, 1),
+            )
+            .unwrap();
+            expected_bytes += len as u64;
+            expected_files += 1;
+        }
+    }
+    // Slow listings, so the count can be watched.
+    server.set_list_delay(Duration::from_millis(40));
+
+    let batch_id = f.download(session, &["/album"]);
+    let mut saw_counting = false;
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let list = f.core.list_transfers();
+        let batch = list.batches.iter().find(|b| b.batch_id == batch_id);
+        if let Some(batch) = batch {
+            if batch.phase == BatchPhase::Counting {
+                saw_counting = true;
+                assert!(list.jobs.is_empty(), "no jobs while counting: {list:#?}");
+                assert!(list.summary.eta_secs.is_none());
+            }
+        }
+        // All jobs at once: never a part of them.
+        assert!(
+            list.jobs.is_empty() || list.jobs.len() == expected_files,
+            "{list:#?}"
+        );
+        if !f.core.has_active_transfers() && !list.jobs.is_empty() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "timed out");
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    assert!(saw_counting, "the batch was counting first");
+    let list = f.core.list_transfers();
+    let batch = list
+        .batches
+        .iter()
+        .find(|b| b.batch_id == batch_id)
+        .unwrap();
+    assert_eq!(batch.phase, BatchPhase::Done);
+    assert_eq!(batch.total_files, expected_files as u64);
+    assert_eq!(batch.total_bytes, expected_bytes);
+    assert_eq!(batch.done_files, expected_files as u64);
+    assert_eq!(batch.counted_files, expected_files as u64);
+    assert_eq!(batch.counted_bytes, expected_bytes);
+    assert_eq!(batch.counted_folders, 4);
+    // The counting events grow and end at the totals.
+    let counts: Vec<(u64, u64, u64)> = f
+        .events
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            CoreEvent::BatchCounting {
+                batch_id: id,
+                files,
+                bytes,
+                folders,
+            } if *id == batch_id => Some((*files, *bytes, *folders)),
+            _ => None,
+        })
+        .collect();
+    assert!(counts.windows(2).all(|w| w[0] <= w[1]), "{counts:?}");
+    assert_eq!(
+        counts.last(),
+        Some(&(expected_files as u64, expected_bytes, 4))
+    );
+}
+
+/// Cancelling a batch while it counts ends it without a single job.
+#[tokio::test]
+async fn cancelling_while_counting_queues_nothing() {
+    let server = TestServer::start(None).await;
+    let (f, session) = Fixture::new(&server).await;
+    for dir in ["a", "a/b", "a/b/c"] {
+        std::fs::create_dir_all(server.root().join(dir)).unwrap();
+        std::fs::write(server.root().join(format!("{dir}/f.txt")), "fictitious").unwrap();
+    }
+    server.set_list_delay(Duration::from_millis(200));
+    let batch_id = f.download(session, &["/a"]);
+    f.wait_until("counting", |l| {
+        l.batches
+            .iter()
+            .any(|b| b.batch_id == batch_id && b.phase == BatchPhase::Counting)
+    })
+    .await;
+    f.core.cancel_batch(batch_id).unwrap();
+    let list = f.wait_idle().await;
+    assert!(list.jobs.is_empty(), "{list:#?}");
+    assert!(!f.local("a/b").exists(), "no folders made");
+}
+
+/// A destination folder that cannot be made becomes a failed placeholder;
+/// the rest of the tree is copied.
+#[tokio::test]
+async fn a_folder_that_cannot_be_made_fails_on_its_own() {
+    let server = TestServer::start(None).await;
+    let (f, session) = Fixture::new(&server).await;
+    let root = f.local("site");
+    std::fs::create_dir_all(root.join("css")).unwrap();
+    std::fs::create_dir_all(root.join("img/icons")).unwrap();
+    std::fs::write(root.join("index.html"), "fictitious").unwrap();
+    std::fs::write(root.join("css/main.css"), "fictitious").unwrap();
+    std::fs::write(root.join("img/logo.png"), "fictitious").unwrap();
+    std::fs::write(root.join("img/icons/a.svg"), "fictitious").unwrap();
+    // A file where the `img` folder should go.
+    std::fs::create_dir_all(server.root().join("www/site")).unwrap();
+    std::fs::write(server.root().join("www/site/img"), "in the way").unwrap();
+
+    f.upload(session, std::slice::from_ref(&root), "/www");
+    let list = f.wait_idle().await;
+    let failed: Vec<&TransferJob> = list
+        .jobs
+        .iter()
+        .filter(|j| j.state == TransferState::Failed)
+        .collect();
+    assert_eq!(failed.len(), 1, "{list:#?}");
+    assert!(failed[0].folder && failed[0].src.ends_with("site/img"));
+    let done: Vec<&str> = list
+        .jobs
+        .iter()
+        .filter(|j| j.state == TransferState::Done)
+        .map(|j| j.dst.as_str())
+        .collect();
+    assert_eq!(done, ["/www/site/css/main.css", "/www/site/index.html"]);
+}
+
+/// While bytes move, the summary says how long the rest will take.
+#[tokio::test]
+async fn the_summary_has_an_eta_while_copying() {
+    let server = TestServer::start(None).await;
+    let (f, session) = Fixture::new(&server).await;
+    std::fs::write(server.root().join("big.iso"), data(3 * 1024 * 1024, 2)).unwrap();
+    server.set_io_delay(Duration::from_millis(4));
+    f.download(session, &["/big.iso"]);
+    let list = f
+        .wait_until("an ETA", |l| l.summary.eta_secs.is_some())
+        .await;
+    assert!(list.summary.eta_secs.unwrap() > 0);
+    assert_eq!(list.batches[0].phase, BatchPhase::Transferring);
+    f.core.cancel_all_transfers();
 }
 
 #[tokio::test]

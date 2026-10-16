@@ -7,10 +7,13 @@
 //! lock, and are announced on the event bus. The async work runs in spawned
 //! tasks that never hold the lock across an `.await`:
 //!
-//! - **Expansion** (`expand.rs`): one task per `enqueue` walks the selected
-//!   items, creates the destination folders (`mkdir -p`, existing folders
-//!   are fine) before the files inside them are queued, and adds one job per
-//!   file as it is found. The IPC call returns right away with the batch id.
+//! - **Expansion** (`expand.rs`): one task per `enqueue` **counts** the
+//!   selected items first (folders walked with several listings in flight),
+//!   creates the destination folders (`mkdir -p`, existing folders are
+//!   fine), and only then adds all the batch's jobs at once — so the totals
+//!   are known before the first byte moves. The IPC call returns right away
+//!   with the batch id; [`TransferList::batches`] shows each batch's phase
+//!   (`counting` → `transferring` → `done`).
 //! - **Workers** (`worker.rs`): one task per running job. A queued job
 //!   starts when one of `parallelTransfers` slots is free — a counting
 //!   semaphore whose size is read from the settings at every acquisition, so
@@ -34,15 +37,15 @@
 //! failed ──(retry)──► queued
 //! ```
 //!
-//! ## Folders cut off by a dropped connection
-//! When the connection goes while a batch is being expanded, the walk stops
-//! and records what it had not listed yet — the folder it was in, the
-//! folders still on its stack and the selected items it had not reached —
-//! as **placeholder** jobs (`folder: true`) in `paused`. Resuming the
-//! session's paused jobs replaces each placeholder by walking it again on
-//! the new connection, so the files found then join the batch as usual. A
-//! folder whose listing *failed* (say, permission denied) becomes a `failed`
-//! placeholder that [`TransferManager::retry`] walks again.
+//! ## A count cut off by a dropped connection
+//! When the connection goes while a batch is being counted, the count
+//! stops and the batch keeps what it found and what it had not listed yet
+//! (the folders being listed or queued, the selected items not looked at)
+//! — it stays `counting`, marked `paused`, without jobs. Resuming the
+//! session's paused work continues the count on the new connection; the
+//! jobs are added once it completes. A folder whose listing (or creation)
+//! *failed* (say, permission denied) becomes a `failed` **placeholder** job
+//! (`folder: true`) that [`TransferManager::retry`] counts again.
 //!
 //! ## Retry
 //! [`TransferManager::retry`] queues a `failed` job again. A file starts
@@ -72,6 +75,7 @@
 
 mod expand;
 pub(crate) use expand::Work;
+use expand::{Inventory, PausedCount, Pending};
 pub mod naming;
 pub(crate) mod progress;
 pub(crate) mod side;
@@ -253,14 +257,56 @@ pub struct TransferSummary {
     /// Jobs waiting for a conflict answer.
     pub needs_decision: usize,
     pub paused: usize,
+    /// Seconds until every unfinished job is done at the current speed;
+    /// `None` while a batch is still counting (the total is not known) or
+    /// nothing moves.
+    pub eta_secs: Option<u64>,
 }
 
-/// What `list_transfers` returns: every job (in the order they were found)
-/// and the totals.
+/// Where a batch is: counting what it will copy, copying it, or finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BatchPhase {
+    /// Walking the selection (and making the destination folders); no jobs
+    /// yet.
+    Counting,
+    /// Its jobs are queued or running.
+    Transferring,
+    /// Every job is finished.
+    Done,
+}
+
+/// One batch in `list_transfers`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchInfo {
+    pub batch_id: BatchId,
+    pub session_id: SessionId,
+    pub direction: TransferDirection,
+    pub phase: BatchPhase,
+    /// Counting waits for the connection to come back.
+    pub paused: bool,
+    /// What the count found (so far, while counting): files to copy, their
+    /// bytes, and folders.
+    pub counted_files: u64,
+    pub counted_bytes: u64,
+    pub counted_folders: u64,
+    /// Its jobs (skipped, cancelled and placeholder jobs left out) and
+    /// their bytes; 0 while counting.
+    pub total_files: u64,
+    pub total_bytes: u64,
+    pub done_files: u64,
+    pub done_bytes: u64,
+}
+
+/// What `list_transfers` returns: every job (in the order they were found),
+/// every batch, and the totals.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TransferList {
     pub jobs: Vec<TransferJob>,
+    /// In the order they were started.
+    pub batches: Vec<BatchInfo>,
     pub summary: TransferSummary,
 }
 
@@ -347,24 +393,34 @@ impl TransferManager {
 
         let batch_id = BatchId::new();
         let token = CancellationToken::new();
-        self.shared.lock().batches.insert(
-            batch_id,
-            BatchEntry {
-                token: token.clone(),
-                policy: None,
-                expanding: 1,
-                session_id,
-                direction,
-                pinned,
-                cleared: BatchOutcome::default(),
-            },
-        );
+        {
+            let mut reg = self.shared.lock();
+            reg.batches.insert(
+                batch_id,
+                BatchEntry {
+                    token: token.clone(),
+                    policy: None,
+                    expanding: 1,
+                    session_id,
+                    direction,
+                    pinned,
+                    cleared: BatchOutcome::default(),
+                    counted: Counted::default(),
+                    paused: None,
+                },
+            );
+            reg.batch_order.push(batch_id);
+        }
+        self.shared.publish(CoreEvent::TransfersUpdated);
         runtime.spawn(expand::run(
             Arc::clone(&self.shared),
             batch_id,
             session_id,
             direction,
-            work,
+            PausedCount {
+                inventory: Inventory::default(),
+                pending: Pending::from_work(work),
+            },
             live.ssh.fs().clone(),
             token,
         ));
@@ -376,7 +432,7 @@ impl TransferManager {
         let reg = self.shared.lock();
         let batch = reg.batches.get(&batch_id)?;
         let mut outcome = batch.cleared;
-        outcome.finished = batch.expanding == 0;
+        outcome.finished = batch.expanding == 0 && batch.paused.is_none();
         for entry in reg.jobs.values() {
             if entry.job.batch_id != batch_id {
                 continue;
@@ -418,9 +474,11 @@ impl TransferManager {
         let mut reg = self.shared.lock();
         let batch = reg
             .batches
-            .get(&batch_id)
+            .get_mut(&batch_id)
             .ok_or_else(|| CoreError::NotFound("transfer batch".into()))?;
         batch.token.cancel();
+        // A count waiting for the connection is simply dropped.
+        let dropped = batch.paused.take().is_some();
         let reg = &mut *reg;
         for id in &reg.order {
             if let Some(entry) = reg.jobs.get_mut(id) {
@@ -428,6 +486,9 @@ impl TransferManager {
                     cancel_entry(&self.shared.events, entry);
                 }
             }
+        }
+        if dropped {
+            self.shared.events.publish(CoreEvent::TransfersUpdated);
         }
         Ok(())
     }
@@ -492,9 +553,8 @@ impl TransferManager {
     /// Resume the jobs paused on `paused_on` over the session `resume_on`
     /// (a reconnect opens a new session). Returns how many were queued.
     ///
-    /// Placeholders of folders whose walk was cut off are walked again on
-    /// `resume_on` (and leave the list); they count too. Without a live
-    /// `resume_on` they stay paused.
+    /// Batches whose count was cut off continue counting on `resume_on`
+    /// (each counts as one); without a live `resume_on` they stay paused.
     pub fn resume_paused_on(&self, paused_on: SessionId, resume_on: SessionId) -> usize {
         let remote = self
             .shared
@@ -502,23 +562,30 @@ impl TransferManager {
             .get(resume_on)
             .ok()
             .map(|live| live.ssh.fs().clone());
-        let mut walks: Vec<(BatchId, Work)> = Vec::new();
+        let mut counts: Vec<(BatchId, TransferDirection, CancellationToken, PausedCount)> =
+            Vec::new();
         let count = {
             let mut reg = self.shared.lock();
             let reg = &mut *reg;
             let mut count = 0;
+            if remote.is_some() {
+                for (batch_id, batch) in reg.batches.iter_mut() {
+                    if batch.session_id != paused_on {
+                        continue;
+                    }
+                    if let Some(paused) = batch.paused.take() {
+                        batch.expanding += 1;
+                        batch.session_id = resume_on;
+                        counts.push((*batch_id, batch.direction, batch.token.clone(), paused));
+                        count += 1;
+                    }
+                }
+            }
             for id in &reg.order {
                 let Some(entry) = reg.jobs.get_mut(id) else {
                     continue;
                 };
                 if entry.job.session_id != paused_on || entry.job.state != TransferState::Paused {
-                    continue;
-                }
-                if entry.walk.is_some() {
-                    if remote.is_some() {
-                        walks.push((entry.job.batch_id, entry.work()));
-                        count += 1;
-                    }
                     continue;
                 }
                 entry.job.session_id = resume_on;
@@ -528,13 +595,21 @@ impl TransferManager {
                 reg.ready.push_back(*id);
                 count += 1;
             }
-            if !walks.is_empty() {
-                reg.remove_placeholders(paused_on);
-            }
             count
         };
-        if let Some(remote) = remote {
-            self.shared.walk_again(resume_on, walks, &remote);
+        if let (Some(remote), Some(runtime)) = (remote, self.shared.runtime.get()) {
+            for (batch_id, direction, token, paused) in counts {
+                runtime.spawn(expand::run(
+                    Arc::clone(&self.shared),
+                    batch_id,
+                    resume_on,
+                    direction,
+                    paused,
+                    remote.clone(),
+                    token,
+                ));
+            }
+            self.shared.events.publish(CoreEvent::TransfersUpdated);
         }
         self.shared.pump();
         count
@@ -627,9 +702,10 @@ impl TransferManager {
     fn cancel_where(&self, matches: impl Fn(SessionId) -> bool) {
         let mut reg = self.shared.lock();
         let reg = &mut *reg;
-        for batch in reg.batches.values() {
+        for batch in reg.batches.values_mut() {
             if matches(batch.session_id) {
                 batch.token.cancel();
+                batch.paused = None;
             }
         }
         for id in &reg.order {
@@ -641,7 +717,8 @@ impl TransferManager {
         }
     }
 
-    /// Every job, in the order they were found, with the totals.
+    /// Every job, in the order they were found, every batch, and the
+    /// totals.
     pub fn list(&self) -> TransferList {
         let now = Instant::now();
         let mut reg = self.shared.lock();
@@ -651,15 +728,23 @@ impl TransferManager {
             .iter()
             .filter_map(|id| reg.jobs.get(id).map(|e| e.job.clone()))
             .collect();
+        let bytes_per_sec = reg.speed.rate(now);
         let mut summary = TransferSummary {
             total_bytes: 0,
             done_bytes: 0,
-            bytes_per_sec: reg.speed.rate(now),
+            bytes_per_sec,
             active: 0,
             queued: 0,
             needs_decision: 0,
             paused: 0,
+            eta_secs: None,
         };
+        let mut batches: Vec<BatchInfo> = reg
+            .batch_order
+            .iter()
+            .filter_map(|id| reg.batches.get(id).map(|b| b.info(*id)))
+            .collect();
+        let mut remaining: u64 = 0;
         for job in &jobs {
             match job.state {
                 TransferState::Running => summary.active += 1,
@@ -668,12 +753,44 @@ impl TransferManager {
                 TransferState::Paused => summary.paused += 1,
                 _ => {}
             }
-            if !matches!(job.state, TransferState::Skipped | TransferState::Cancelled) {
+            let counted = !matches!(job.state, TransferState::Skipped | TransferState::Cancelled);
+            if counted {
                 summary.total_bytes += job.size;
                 summary.done_bytes += job.bytes_done.min(job.size);
             }
+            if job.state.is_active() {
+                remaining += job.size.saturating_sub(job.bytes_done);
+            }
+            if let Some(info) = batches.iter_mut().find(|b| b.batch_id == job.batch_id) {
+                if job.state.is_active() && info.phase == BatchPhase::Done {
+                    info.phase = BatchPhase::Transferring;
+                }
+                if counted && !job.folder {
+                    info.total_files += 1;
+                    info.total_bytes += job.size;
+                    info.done_bytes += job.bytes_done.min(job.size);
+                    if job.state == TransferState::Done {
+                        info.done_files += 1;
+                    }
+                }
+            }
         }
-        TransferList { jobs, summary }
+        let counting = batches.iter().any(|b| b.phase == BatchPhase::Counting);
+        if !counting && bytes_per_sec > 0 && remaining > 0 {
+            summary.eta_secs = Some(remaining.div_ceil(bytes_per_sec));
+        }
+        // Batches with nothing left in the list (cleared) are not shown.
+        batches.retain(|b| {
+            b.phase == BatchPhase::Counting || b.total_files > 0 || {
+                let id = b.batch_id;
+                jobs.iter().any(|j| j.batch_id == id)
+            }
+        });
+        TransferList {
+            jobs,
+            batches,
+            summary,
+        }
     }
 
     /// Drop finished jobs (done, failed, cancelled, skipped) from the list,
@@ -697,18 +814,20 @@ impl TransferManager {
             reg.order.retain(|id| jobs.contains_key(id));
             reg.batches.retain(|batch_id, batch| {
                 batch.pinned
-                    || batch.expanding > 0
+                    || batch.is_counting()
                     || jobs.values().any(|e| e.job.batch_id == *batch_id)
             });
+            let batches = &reg.batches;
+            reg.batch_order.retain(|id| batches.contains_key(id));
         }
         self.shared.events.publish(CoreEvent::TransfersUpdated);
     }
 
     /// Whether any job is queued, running, waiting for a decision or
-    /// paused, or a batch is still being expanded.
+    /// paused, or a batch is still counting (or waits to count on).
     pub fn has_active(&self) -> bool {
         let reg = self.shared.lock();
-        reg.batches.values().any(|b| b.expanding > 0)
+        reg.batches.values().any(BatchEntry::is_counting)
             || reg.jobs.values().any(|e| e.job.state.is_active())
     }
 
@@ -835,6 +954,48 @@ struct BatchEntry {
     pinned: bool,
     /// The finished jobs "Clear finished" took out of a pinned batch.
     cleared: BatchOutcome,
+    /// What its count found (so far).
+    counted: Counted,
+    /// A count cut off by a lost connection, waiting for a resume.
+    paused: Option<PausedCount>,
+}
+
+/// A count's numbers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Counted {
+    files: u64,
+    bytes: u64,
+    folders: u64,
+}
+
+impl BatchEntry {
+    /// Counting, or waiting to count on.
+    fn is_counting(&self) -> bool {
+        self.expanding > 0 || self.paused.is_some()
+    }
+
+    /// The batch as `list_transfers` shows it, before its jobs are added
+    /// up ([`TransferManager::list`]).
+    fn info(&self, batch_id: BatchId) -> BatchInfo {
+        BatchInfo {
+            batch_id,
+            session_id: self.session_id,
+            direction: self.direction,
+            phase: if self.is_counting() {
+                BatchPhase::Counting
+            } else {
+                BatchPhase::Done
+            },
+            paused: self.paused.is_some(),
+            counted_files: self.counted.files,
+            counted_bytes: self.counted.bytes,
+            counted_folders: self.counted.folders,
+            total_files: 0,
+            total_bytes: 0,
+            done_files: 0,
+            done_bytes: 0,
+        }
+    }
 }
 
 /// How the jobs of a batch ended, so far.
@@ -866,6 +1027,8 @@ struct Registry {
     /// Discovery order.
     order: Vec<TransferId>,
     batches: HashMap<BatchId, BatchEntry>,
+    /// Batches in the order they were started.
+    batch_order: Vec<BatchId>,
     /// Queued jobs, next first.
     ready: VecDeque<TransferId>,
     running: usize,
@@ -875,24 +1038,9 @@ struct Registry {
     speed: SpeedMeter,
 }
 
-impl Registry {
-    /// Drop the paused placeholders of `session_id` (they are being walked
-    /// again).
-    fn remove_placeholders(&mut self, session_id: SessionId) {
-        self.jobs.retain(|_, e| {
-            !(e.walk.is_some()
-                && e.job.session_id == session_id
-                && e.job.state == TransferState::Paused)
-        });
-        let jobs = &self.jobs;
-        self.order.retain(|id| jobs.contains_key(id));
-    }
-}
-
 /// A job to add to the registry.
+#[derive(Debug)]
 pub(crate) struct NewJob {
-    pub batch_id: BatchId,
-    pub session_id: SessionId,
     pub direction: TransferDirection,
     pub src: String,
     pub dst_dir: String,
@@ -900,7 +1048,7 @@ pub(crate) struct NewJob {
     pub dst: String,
     pub size: u64,
     /// `Queued` queues the job; anything else records it as it is
-    /// (skipped or failed during expansion, or a paused placeholder).
+    /// (skipped during the count, or a failed placeholder).
     pub state: TransferState,
     pub error: Option<TransferError>,
     pub walk: Option<Walk>,
@@ -929,54 +1077,86 @@ impl Shared {
         self.events.publish(event);
     }
 
-    /// Record a job found by the expansion and queue it (unless it is
-    /// already finished). Returns `false` when its batch was cancelled.
-    pub fn add_job(self: &Arc<Self>, new: NewJob) -> bool {
+    /// Add the jobs a count found, all at once (in their order), and queue
+    /// them; `session_id` is the session the count ended on. Nothing is
+    /// added when the batch was cancelled meanwhile.
+    pub fn add_jobs(self: &Arc<Self>, batch_id: BatchId, session_id: SessionId, jobs: Vec<NewJob>) {
         {
             let mut reg = self.lock();
-            let Some(batch) = reg.batches.get(&new.batch_id) else {
-                return false;
+            let reg = &mut *reg;
+            let Some(batch) = reg.batches.get(&batch_id) else {
+                return;
             };
             if batch.token.is_cancelled() {
-                return false;
+                return;
             }
-            let token = batch.token.child_token();
-            let id = TransferId::new();
-            let state = new.state;
-            reg.jobs.insert(
-                id,
-                JobEntry {
-                    job: TransferJob {
-                        id,
-                        batch_id: new.batch_id,
-                        session_id: new.session_id,
-                        direction: new.direction,
-                        src: new.src,
-                        dst: new.dst,
-                        size: new.size,
-                        bytes_done: 0,
-                        state,
-                        error: new.error,
-                        folder: new.walk.is_some(),
+            let token = batch.token.clone();
+            for new in jobs {
+                let id = TransferId::new();
+                let state = new.state;
+                reg.jobs.insert(
+                    id,
+                    JobEntry {
+                        job: TransferJob {
+                            id,
+                            batch_id,
+                            session_id,
+                            direction: new.direction,
+                            src: new.src,
+                            dst: new.dst,
+                            size: new.size,
+                            bytes_done: 0,
+                            state,
+                            error: new.error,
+                            folder: new.walk.is_some(),
+                        },
+                        dst_dir: new.dst_dir,
+                        name: new.name,
+                        token: token.child_token(),
+                        append: false,
+                        resolution: new.resolution,
+                        throttle: Throttle::new(PROGRESS_INTERVAL),
+                        announced: 0,
+                        speed: SpeedMeter::new(),
+                        walk: new.walk,
                     },
-                    dst_dir: new.dst_dir,
-                    name: new.name,
-                    token,
-                    append: false,
-                    resolution: new.resolution,
-                    throttle: Throttle::new(PROGRESS_INTERVAL),
-                    announced: 0,
-                    speed: SpeedMeter::new(),
-                    walk: new.walk,
-                },
-            );
-            reg.order.push(id);
-            if state == TransferState::Queued {
-                reg.ready.push_back(id);
+                );
+                reg.order.push(id);
+                if state == TransferState::Queued {
+                    reg.ready.push_back(id);
+                }
             }
         }
         self.pump();
-        true
+    }
+
+    /// A count found `files` files (`bytes` bytes) in `folders` folders so
+    /// far; with `announce`, [`CoreEvent::BatchCounting`] says so.
+    pub fn counted(&self, batch_id: BatchId, files: u64, bytes: u64, folders: u64, announce: bool) {
+        if let Some(batch) = self.lock().batches.get_mut(&batch_id) {
+            batch.counted = Counted {
+                files,
+                bytes,
+                folders,
+            };
+        }
+        if announce {
+            self.publish(CoreEvent::BatchCounting {
+                batch_id,
+                files,
+                bytes,
+                folders,
+            });
+        }
+    }
+
+    /// The connection went while counting: keep the count for a resume.
+    pub fn pause_count(&self, batch_id: BatchId, count: PausedCount) {
+        if let Some(batch) = self.lock().batches.get_mut(&batch_id) {
+            if !batch.token.is_cancelled() {
+                batch.paused = Some(count);
+            }
+        }
     }
 
     /// One walk of `batch_id` is over.
@@ -1006,6 +1186,10 @@ impl Shared {
             }
         }
         for (batch_id, works) in by_batch {
+            let count = PausedCount {
+                inventory: Inventory::default(),
+                pending: Pending::from_work(works),
+            };
             let started = {
                 let mut reg = self.lock();
                 reg.batches.get_mut(&batch_id).map(|batch| {
@@ -1022,7 +1206,7 @@ impl Shared {
                 batch_id,
                 session_id,
                 direction,
-                works,
+                count,
                 remote.clone(),
                 token,
             ));
@@ -1319,6 +1503,42 @@ mod tests {
         assert_eq!(request.items[0].src, "/srv/a.txt");
         let answer: ConflictResolution = serde_json::from_str("\"keepBoth\"").unwrap();
         assert_eq!(answer, ConflictResolution::KeepBoth);
+    }
+
+    #[test]
+    fn batches_and_the_summary_are_camel_case() {
+        let info = BatchInfo {
+            batch_id: BatchId::new(),
+            session_id: SessionId::new(),
+            direction: TransferDirection::Upload,
+            phase: BatchPhase::Counting,
+            paused: false,
+            counted_files: 3,
+            counted_bytes: 42,
+            counted_folders: 1,
+            total_files: 0,
+            total_bytes: 0,
+            done_files: 0,
+            done_bytes: 0,
+        };
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["phase"], "counting");
+        assert_eq!(json["countedFiles"], 3);
+        assert_eq!(json["totalBytes"], 0);
+        assert!(json["batchId"].is_string());
+        let summary = TransferSummary {
+            total_bytes: 1,
+            done_bytes: 0,
+            bytes_per_sec: 0,
+            active: 0,
+            queued: 1,
+            needs_decision: 0,
+            paused: 0,
+            eta_secs: None,
+        };
+        let json = serde_json::to_value(&summary).unwrap();
+        assert!(json["etaSecs"].is_null());
+        assert_eq!(json["needsDecision"], 0);
     }
 
     #[test]

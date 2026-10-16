@@ -11,7 +11,11 @@ import { confirmPending } from "../lib/tabs";
 import { transferCount, transferTotals } from "../lib/transferFormat";
 import { useProfilesStore } from "../state/profilesStore";
 import { useTabsStore } from "../state/tabsStore";
-import { unfinishedJobsOf, useTransferStore } from "../state/transferStore";
+import {
+  countingBatches,
+  unfinishedJobsOf,
+  useTransferStore,
+} from "../state/transferStore";
 import { Modal } from "./Modal";
 import { StatusDot } from "./StatusDot";
 import styles from "./CloseWarningModal.module.css";
@@ -23,7 +27,11 @@ export function TabCloseModal() {
   );
   const profiles = useProfilesStore((s) => s.profiles);
   const jobs = useTransferStore((s) => s.jobs);
+  const batches = useTransferStore((s) => s.batches);
   const sessionId = tab?.sessionId ?? null;
+  const counting = countingBatches(batches).filter(
+    (b) => b.sessionId === sessionId,
+  ).length;
   const totals = useMemo(
     () =>
       transferTotals(sessionId ? unfinishedJobsOf(jobs, sessionId) : [], {}),
@@ -51,6 +59,11 @@ export function TabCloseModal() {
       tone: "warning" as const,
     },
     { n: totals.paused, text: "paused", tone: "warning" as const },
+    {
+      n: counting,
+      text: counting === 1 ? "folder still counting" : "folders still counting",
+      tone: "busy" as const,
+    },
   ].filter((l) => l.n > 0);
 
   return (

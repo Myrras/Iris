@@ -18,7 +18,32 @@ describe("CloseWarningModal", () => {
     vi.mocked(invoke).mockResolvedValue(undefined);
     useToastStore.setState({ toasts: [] });
     resetTransferResync();
-    useTransferStore.setState({ jobs: {}, order: [], speeds: {} });
+    useTransferStore.setState({ jobs: {}, order: [], speeds: {}, batches: [] });
+  });
+
+  it("lists a folder transfer that is still counting", () => {
+    useTransferStore.setState({
+      batches: [
+        {
+          batchId: "b-1",
+          sessionId: "s-1",
+          direction: "download",
+          phase: "counting",
+          paused: false,
+          countedFiles: 10,
+          countedBytes: 100,
+          countedFolders: 2,
+          totalFiles: 0,
+          totalBytes: 0,
+          doneFiles: 0,
+          doneBytes: 0,
+        },
+      ],
+    });
+    render(<CloseWarningModal open onClose={() => undefined} />);
+    expect(
+      screen.getByRole("list", { name: "Unfinished transfers" }),
+    ).toHaveTextContent("1 folder still counting");
   });
 
   it("warns that closing interrupts work in progress", () => {
