@@ -10,6 +10,7 @@
 import { create } from "zustand";
 
 import type { CompareRule } from "../ipc/types";
+import type { ActionId, ShortcutOverrides } from "../lib/keymap";
 
 export interface Settings {
   appearance: { reduceMotion: boolean };
@@ -33,6 +34,11 @@ export interface Settings {
     limitSize: boolean;
     maxSizeMb: number;
   };
+  /**
+   * Only the shortcuts the user changed (action → its bindings); the rest
+   * follow `lib/keymap`'s defaults, also for actions added later.
+   */
+  shortcuts: ShortcutOverrides;
 }
 
 export const PREVIEW_MAX_SIZE_MIN_MB = 1;
@@ -53,9 +59,43 @@ export const DEFAULTS: Settings = {
     limitSize: false,
     maxSizeMb: 100,
   },
+  shortcuts: {},
 };
 
 const STORAGE_KEY = "iris.settings";
+
+/** Keeps the entries that are a non-empty list of strings for a known action. */
+function loadShortcuts(saved: unknown): ShortcutOverrides {
+  const out: ShortcutOverrides = {};
+  if (!saved || typeof saved !== "object") return out;
+  for (const [action, list] of Object.entries(saved)) {
+    if (
+      Array.isArray(list) &&
+      list.length > 0 &&
+      list.every((b) => typeof b === "string")
+    ) {
+      out[action as ActionId] = list;
+    }
+  }
+  return out;
+}
+
+function persist(s: Settings): void {
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        appearance: s.appearance,
+        browser: s.browser,
+        preview: s.preview,
+        sync: s.sync,
+        shortcuts: s.shortcuts,
+      }),
+    );
+  } catch {
+    /* quota exceeded: keep the in-memory value for this session */
+  }
+}
 
 function load(): Settings {
   try {
@@ -69,6 +109,7 @@ function load(): Settings {
       browser: { ...DEFAULTS.browser, ...saved.browser },
       preview: { ...DEFAULTS.preview, ...saved.preview },
       sync: { ...DEFAULTS.sync, ...saved.sync },
+      shortcuts: loadShortcuts(saved.shortcuts),
     };
   } catch {
     return structuredClone(DEFAULTS);
@@ -93,6 +134,10 @@ interface SettingsState extends Settings {
     patch: Partial<Settings[K]>,
   ) => void;
   resetSettings: () => void;
+  /** Rebinds an action; `null` puts its default back. */
+  setShortcut: (action: ActionId, bindings: string[] | null) => void;
+  /** Puts every shortcut back to its default. */
+  resetShortcuts: () => void;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => {
@@ -102,20 +147,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     ...initial,
     set: (section, patch) => {
       const next = { ...get()[section], ...patch } as Settings[typeof section];
-      const merged = { ...get(), [section]: next };
-      try {
-        localStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify({
-            appearance: merged.appearance,
-            browser: merged.browser,
-            preview: merged.preview,
-            sync: merged.sync,
-          }),
-        );
-      } catch {
-        /* quota exceeded: keep the in-memory value for this session */
-      }
+      persist({ ...get(), [section]: next });
       if (section === "appearance") {
         applyReduceMotion((next as Settings["appearance"]).reduceMotion);
       }
@@ -125,6 +157,17 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       localStorage.removeItem(STORAGE_KEY);
       applyReduceMotion(DEFAULTS.appearance.reduceMotion);
       set({ ...structuredClone(DEFAULTS) });
+    },
+    setShortcut: (action, bindings) => {
+      const next = { ...get().shortcuts };
+      if (bindings && bindings.length > 0) next[action] = bindings;
+      else delete next[action];
+      persist({ ...get(), shortcuts: next });
+      set({ shortcuts: next });
+    },
+    resetShortcuts: () => {
+      persist({ ...get(), shortcuts: {} });
+      set({ shortcuts: {} });
     },
   };
 });

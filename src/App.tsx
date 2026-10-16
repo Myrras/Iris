@@ -9,7 +9,7 @@
  * component also owns the app-level wiring: the backend events
  * (`useCoreEvents`), files dragged in from the OS (`useNativeDrop`), the
  * pane-drag chip (`DragGhost`), the Sync dialog (`SyncDialog`), opening
- * the active tab's panes and the tab shortcuts, settings access (native menu on
+ * the active tab's panes and the app shortcuts (`lib/keymap`), settings access (native menu on
  * macOS, title-bar gear elsewhere), the close-warning event, and suppressing
  * webview-only behaviour (reload shortcuts, the browser context menu).
  */
@@ -17,8 +17,10 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { onMenuOpenSettings, onWindowCloseRequested } from "./ipc/events";
+import { withHint } from "./lib/keymap";
 import { isMac, isWindows } from "./lib/platform";
 import { useCoreEvents } from "./lib/useCoreEvents";
+import { useKeymap } from "./lib/useKeymap";
 import { useNativeDrop } from "./lib/useNativeDrop";
 import { useTabShortcuts } from "./lib/useTabShortcuts";
 import { useLayoutStore } from "./state/layoutStore";
@@ -45,7 +47,7 @@ import styles from "./App.module.css";
 export default function App() {
   useCoreEvents();
   useNativeDrop();
-  useTabShortcuts();
+  const keymap = useKeymap();
 
   // Open the active tab's panes: the local pane in its restored folder (or
   // home), the remote pane only once the user connects (never on its own).
@@ -54,6 +56,9 @@ export default function App() {
   }, []);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Ctrl+, off macOS (rebindable); the browser shortcuts are swallowed there.
+  const openSettings = useCallback(() => setSettingsOpen(true), []);
+  useTabShortcuts({ onOpenSettings: openSettings });
   const settingsRequest = useSettingsRequestStore((s) => s.request);
   useEffect(() => {
     if (settingsRequest) setSettingsOpen(true);
@@ -111,28 +116,12 @@ export default function App() {
     return () => window.removeEventListener("contextmenu", onContextMenu);
   }, []);
 
-  // Settings access. macOS: the native menu's Settings… item (⌘,) emits
-  // `menu:open-settings`, so the in-app shortcut binds only elsewhere to
-  // avoid a double-fire. A desktop app must never reload its webview, so
-  // swallow the browser refresh shortcuts (F5, Cmd/Ctrl+R) on every platform.
+  // macOS: the native menu's Settings… item (⌘,) emits `menu:open-settings`.
+  // Elsewhere the shortcut comes from the keymap (`useTabShortcuts`), so
+  // the two never double-fire.
   useEffect(() => {
     const menuSub = onMenuOpenSettings(() => setSettingsOpen(true));
-    const onKey = (e: KeyboardEvent) => {
-      if (!isMac && (e.ctrlKey || e.metaKey) && e.key === ",") {
-        e.preventDefault();
-        setSettingsOpen(true);
-        return;
-      }
-      if (
-        e.key === "F5" ||
-        ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r")
-      ) {
-        e.preventDefault();
-      }
-    };
-    window.addEventListener("keydown", onKey);
     return () => {
-      window.removeEventListener("keydown", onKey);
       menuSub.then((unlisten) => unlisten()).catch(() => undefined);
     };
   }, []);
@@ -164,7 +153,7 @@ export default function App() {
               type="button"
               className={styles.settingsBtn}
               aria-label="Settings"
-              title="Settings"
+              title={withHint("Settings", keymap, "openSettings")}
               onClick={() => setSettingsOpen(true)}
             >
               <SettingsIcon size={16} />

@@ -77,4 +77,41 @@ describe("settingsStore", () => {
     expect(store.getState().browser.showHidden).toBe(false);
     expect(localStorage.getItem("iris.settings")).toBeNull();
   });
+
+  it("keeps only the shortcuts the user changed, over the defaults", async () => {
+    localStorage.setItem(
+      "iris.settings",
+      JSON.stringify({
+        shortcuts: { goTo: ["Mod+KeyK"], find: [], refresh: "x" },
+      }),
+    );
+    const store = await freshStore();
+    expect(store.getState().shortcuts).toEqual({ goTo: ["Mod+KeyK"] });
+    const { resolveKeymap } = await import("../lib/keymap");
+    const map = resolveKeymap(store.getState().shortcuts);
+    expect(map.goTo).toEqual(["Mod+KeyK"]);
+    expect(map.find).toEqual(["Mod+KeyF"]);
+  });
+
+  it("an older blob without shortcuts gets none changed", async () => {
+    localStorage.setItem(
+      "iris.settings",
+      JSON.stringify({ browser: { showHidden: true } }),
+    );
+    expect((await freshStore()).getState().shortcuts).toEqual({});
+  });
+
+  it("sets, clears and resets shortcuts, persisting each", async () => {
+    const store = await freshStore();
+    const stored = () =>
+      JSON.parse(localStorage.getItem("iris.settings")!).shortcuts;
+    store.getState().setShortcut("goTo", ["Mod+KeyK"]);
+    store.getState().setShortcut("refresh", ["Mod+KeyJ"]);
+    expect(stored()).toEqual({ goTo: ["Mod+KeyK"], refresh: ["Mod+KeyJ"] });
+    store.getState().setShortcut("goTo", null);
+    expect(stored()).toEqual({ refresh: ["Mod+KeyJ"] });
+    store.getState().resetShortcuts();
+    expect(stored()).toEqual({});
+    expect(store.getState().shortcuts).toEqual({});
+  });
 });

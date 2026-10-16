@@ -1,6 +1,12 @@
 /** macOS keyboard behaviour (Finder): Enter renames, Cmd+Down opens. */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/platform", () => ({ isMac: true, isWindows: false }));
@@ -122,17 +128,54 @@ describe("Pane on macOS", () => {
     );
   });
 
-  it("opens the go-to-path field with Cmd+Shift+G and Cmd+L, not with Ctrl", async () => {
+  it("opens the go-to-path field with Cmd+P and Cmd+L, not with Ctrl", async () => {
     const grid = screen.getByRole("grid");
     const field = () => screen.queryByRole("textbox", { name: "Go to path" });
-    fireEvent.keyDown(grid, { key: "G", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(grid, { key: "p", ctrlKey: true });
     fireEvent.keyDown(grid, { key: "l", ctrlKey: true });
     expect(field()).toBeNull();
-    fireEvent.keyDown(grid, { key: "G", metaKey: true, shiftKey: true });
+    fireEvent.keyDown(grid, { key: "p", metaKey: true });
     expect(field()).toHaveValue("/Users/alice");
     fireEvent.keyDown(field()!, { key: "Escape" });
     expect(field()).toBeNull();
     fireEvent.keyDown(screen.getByRole("grid"), { key: "l", metaKey: true });
     expect(field()).toHaveValue("/Users/alice");
+  });
+
+  it("refreshes with Cmd+R and focuses the filter with Cmd+F, not with Ctrl", async () => {
+    const grid = screen.getByRole("grid");
+    const calls = () => vi.mocked(listDir).mock.calls.length;
+    const before = calls();
+    fireEvent.keyDown(grid, { key: "r", ctrlKey: true });
+    fireEvent.keyDown(grid, { key: "f", ctrlKey: true });
+    expect(calls()).toBe(before);
+    expect(screen.getByRole("searchbox")).not.toHaveFocus();
+
+    const refresh = new KeyboardEvent("keydown", {
+      key: "r",
+      code: "KeyR",
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      grid.dispatchEvent(refresh);
+    });
+    expect(refresh.defaultPrevented).toBe(true);
+    await waitFor(() => expect(calls()).toBe(before + 1));
+
+    fireEvent.keyDown(grid, { key: "f", metaKey: true });
+    expect(screen.getByRole("searchbox")).toHaveFocus();
+  });
+
+  it("shows the macOS glyphs in tooltips", () => {
+    expect(screen.getByRole("button", { name: "Refresh" })).toHaveAttribute(
+      "title",
+      "Refresh (⌘R)",
+    );
+    expect(screen.getByRole("button", { name: "New folder" })).toHaveAttribute(
+      "title",
+      "New folder (⇧⌘N)",
+    );
   });
 });

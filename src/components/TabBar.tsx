@@ -10,8 +10,10 @@
 
 import { useRef, useState } from "react";
 
+import { withHint } from "../lib/keymap";
 import { sessionStatus, type SessionStatusView } from "../lib/sessionStatus";
 import { requestCloseTab } from "../lib/tabs";
+import { useKeymap } from "../lib/useKeymap";
 import { useProfilesStore } from "../state/profilesStore";
 import { useSessionStore, type SessionInfo } from "../state/sessionStore";
 import { useTabsStore, type Tab } from "../state/tabsStore";
@@ -36,6 +38,7 @@ export function TabBar() {
   const activeTabId = useTabsStore((s) => s.activeTabId);
   const sessions = useSessionStore((s) => s.sessions);
   const profiles = useProfilesStore((s) => s.profiles);
+  const keymap = useKeymap();
 
   // Drag-to-reorder: the dragged tab's id lives in a ref (no re-render
   // needed); `overId` drives the insertion line.
@@ -118,7 +121,9 @@ export function TabBar() {
               type="button"
               className={styles.close}
               aria-label={`Close ${title}`}
-              title="Close tab"
+              title={
+                active ? withHint("Close tab", keymap, "closeTab") : "Close tab"
+              }
               onClick={(e) => {
                 e.stopPropagation();
                 requestCloseTab(tab.id);
@@ -132,7 +137,7 @@ export function TabBar() {
       <button
         type="button"
         className={styles.add}
-        title="New tab"
+        title={withHint("New tab", keymap, "newTab")}
         aria-label="New tab"
         onClick={() => useTabsStore.getState().newTab()}
       >

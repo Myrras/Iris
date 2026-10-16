@@ -446,7 +446,7 @@ describe("Pane", () => {
       ]);
       const labels = screen
         .getAllByRole("menuitem")
-        .map((item) => item.textContent);
+        .map((item) => item.firstChild?.textContent);
       expect(labels).toEqual([
         "Open",
         "Open With Default App",
@@ -468,7 +468,9 @@ describe("Pane", () => {
       await openLocal();
       fireEvent.contextMenu(grid());
       expect(
-        screen.getAllByRole("menuitem").map((item) => item.textContent),
+        screen
+          .getAllByRole("menuitem")
+          .map((item) => item.firstChild?.textContent),
       ).toEqual([
         "New Folder",
         "Sync Folders…",

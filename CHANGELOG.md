@@ -11,7 +11,8 @@ when it merges.
 
 ## [Unreleased]
 
-- Go to a typed path in either pane: ⇧⌘G / Ctrl+Shift+G, ⌘L / Ctrl+L, or a click on the empty part of the path bar turns it into a text field. Absolute and relative paths (`..`, `./x`) and `~` work; Tab completes folder names; a file path opens its folder with the file selected.
+- Keyboard shortcuts are configurable (Settings → Shortcuts: record a new combination, conflicts are refused or swapped, reset per row or all). New defaults: ⌘P / Ctrl+P go to path (⌘L stays; ⇧⌘G is no longer bound), ⌘R / Ctrl+R refresh, ⌘F / Ctrl+F focus the filter (Escape clears it and returns to the file list), ⌥⌘P toggles the preview. Buttons and menus show the current binding.
+- Go to a typed path in either pane: ⌘P / Ctrl+P, ⌘L / Ctrl+L, or a click on the empty part of the path bar turns it into a text field. Absolute and relative paths (`..`, `./x`) and `~` work; Tab completes folder names; a file path opens its folder with the file selected.
 - Local files open in their application: double-click, Enter (not on macOS),
   ⌘O / ⌘↓ or the context menu's Open use the app set in Settings → Editors,
   else the system default. "Show in Finder" (Explorer / File Manager) in the

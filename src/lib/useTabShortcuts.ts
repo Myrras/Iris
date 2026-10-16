@@ -1,49 +1,62 @@
 /**
- * Tab shortcuts, browser style (Cmd on macOS, Ctrl elsewhere): ⌘T new tab,
- * ⌘W close the tab on screen, ⌘1–⌘8 that tab, ⌘9 the last one, ⌘⇧] / ⌘⇧[
- * the next / previous one. Iris's macOS menu has no Close Window item, so
- * ⌘W reaches the webview. Ignored while typing in a field; none of these
- * clash with the pane shortcuts (`Pane.tsx`).
+ * The window-wide shortcuts, from the keymap (`lib/keymap`; rebindable in
+ * Settings → Shortcuts): new tab, close the tab on screen, next / previous
+ * tab, and Settings off macOS (macOS has the native menu's ⌘,). ⌘1–⌘8 switch
+ * to that tab and ⌘9 to the last one, fixed. Iris's macOS menu has no Close
+ * Window item, so ⌘W reaches the webview. Ignored while typing in a field.
+ *
+ * It also swallows the browser's own shortcuts (reload, print, find, save):
+ * a desktop app must never reload its webview, wherever the focus is.
  */
 
 import { useEffect } from "react";
 
 import { useTabsStore } from "../state/tabsStore";
+import {
+  findAction,
+  isBrowserShortcut,
+  isEditableTarget,
+  type KeyEventLike,
+} from "./keymap";
 import { isMac } from "./platform";
 import { requestCloseActiveTab } from "./tabs";
+import { currentKeymap } from "./useKeymap";
 
-function isEditable(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null;
-  return (
-    !!el &&
-    (el.tagName === "INPUT" ||
-      el.tagName === "TEXTAREA" ||
-      el.tagName === "SELECT" ||
-      el.isContentEditable)
-  );
+/** ⌘1–⌘8 / ⌘9 (Ctrl elsewhere), no other modifier. */
+function tabNumber(e: KeyEventLike): string | null {
+  const mod = isMac ? e.metaKey : e.ctrlKey;
+  const stray = isMac ? e.ctrlKey : e.metaKey;
+  if (!mod || stray || e.altKey || e.shiftKey) return null;
+  return /^[1-9]$/.test(e.key) ? e.key : null;
 }
 
-export function useTabShortcuts(): void {
+export function useTabShortcuts(options?: { onOpenSettings?: () => void }) {
+  const onOpenSettings = options?.onOpenSettings;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = isMac ? e.metaKey : e.ctrlKey;
-      if (!mod || e.altKey || e.defaultPrevented || isEditable(e.target)) {
-        return;
+      const action = findAction(e, currentKeymap(), "app");
+      // Settings opens from a field too, as the native ⌘, does.
+      const typing = isEditableTarget(e.target) && action !== "openSettings";
+      if (!e.defaultPrevented && !typing) {
+        const tabs = useTabsStore.getState();
+        const digit = tabNumber(e);
+        let handled = true;
+        if (action === "newTab") tabs.newTab();
+        else if (action === "closeTab") requestCloseActiveTab();
+        else if (action === "nextTab") tabs.cycle(1);
+        else if (action === "prevTab") tabs.cycle(-1);
+        else if (action === "openSettings" && onOpenSettings) onOpenSettings();
+        else if (digit === "9") tabs.switchToIndex(-1);
+        else if (digit) tabs.switchToIndex(Number(digit) - 1);
+        else handled = false;
+        if (handled) {
+          e.preventDefault();
+          return;
+        }
       }
-      const tabs = useTabsStore.getState();
-      const key = e.key.toLowerCase();
-      let handled = true;
-      if (e.shiftKey && e.code === "BracketRight") tabs.cycle(1);
-      else if (e.shiftKey && e.code === "BracketLeft") tabs.cycle(-1);
-      else if (e.shiftKey) handled = false;
-      else if (key === "t") tabs.newTab();
-      else if (key === "w") requestCloseActiveTab();
-      else if (/^[1-8]$/.test(e.key)) tabs.switchToIndex(Number(e.key) - 1);
-      else if (e.key === "9") tabs.switchToIndex(-1);
-      else handled = false;
-      if (handled) e.preventDefault();
+      if (isBrowserShortcut(e)) e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [onOpenSettings]);
 }

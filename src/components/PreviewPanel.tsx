@@ -25,7 +25,9 @@ import {
   previewable,
 } from "../lib/previewReveal";
 import { formatSize } from "../lib/fileFormat";
+import { previewTitle } from "../lib/keymap";
 import { MOTION, usePresence } from "../lib/motion";
+import { useKeymap } from "../lib/useKeymap";
 import { useLayoutStore } from "../state/layoutStore";
 import { focusedEntry, usePaneStore } from "../state/paneStore";
 import { useSettingsStore } from "../state/settingsStore";
@@ -143,6 +145,7 @@ function useLingering(want: boolean, delay: number): boolean {
 
 /** The closed state: no layout space, just an overlay handle on the edge. */
 function RevealHandle() {
+  const keymap = useKeymap();
   const entry = usePaneStore((s) => focusedEntry(s.panes[s.active]));
   const maxSizeMb = useSettingsStore((s) => s.preview.maxSizeMb);
   const edge = useEdgeHover(true);
@@ -158,7 +161,7 @@ function RevealHandle() {
       className={styles.handle}
       data-state={state}
       aria-label="Show preview"
-      title="Show preview (Space)"
+      title={previewTitle("Show preview", keymap)}
       tabIndex={state === "open" ? 0 : -1}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
@@ -170,6 +173,7 @@ function RevealHandle() {
 }
 
 function PreviewIsland() {
+  const keymap = useKeymap();
   const setOpen = useLayoutStore((s) => s.setPreviewOpen);
   const target = usePaneStore((s) => s.panes[s.active].target);
   const entry = usePaneStore((s) => focusedEntry(s.panes[s.active]));
@@ -190,7 +194,7 @@ function PreviewIsland() {
           type="button"
           className={styles.tool}
           aria-label="Hide preview"
-          title="Hide preview (Space)"
+          title={previewTitle("Hide preview", keymap)}
           aria-expanded={true}
           onClick={() => setOpen(false)}
         >

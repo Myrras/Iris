@@ -10,6 +10,7 @@
  * - Editors: which application opens a remote file for editing, per
  *   extension (`editorOverrides` in the same `settings.json`); rows in
  *   Podium's card look, the app picked with the native dialog.
+ * - Shortcuts: rebind the keyboard shortcuts (`ShortcutsTab`, `lib/keymap`).
  *
  * A new tab: add the id to `SettingsTabId`, an entry to `TABS` and a branch
  * in `TabBody`.
@@ -53,6 +54,7 @@ import {
   type SettingsTabId,
 } from "../state/settingsRequestStore";
 import { AddIcon, CheckIcon, MinusIcon } from "./icons";
+import { ShortcutsTab } from "./ShortcutsTab";
 import styles from "./SettingsModal.module.css";
 
 interface SettingsModalProps {
@@ -64,6 +66,7 @@ const TABS: [SettingsTabId, string][] = [
   ["general", "General"],
   ["transfers", "Transfers"],
   ["editors", "Editors"],
+  ["shortcuts", "Shortcuts"],
 ];
 
 /**
@@ -180,6 +183,8 @@ function TabBody({ tab }: { tab: SettingsTabId }) {
       );
     case "editors":
       return <EditorsTab />;
+    case "shortcuts":
+      return <ShortcutsTab />;
   }
 }
 

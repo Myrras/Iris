@@ -13,6 +13,8 @@ import styles from "./ContextMenu.module.css";
 export interface ContextMenuItem {
   label: string;
   onSelect: () => void;
+  /** Its keyboard shortcut, shown at the right edge (`⌘R`). */
+  shortcut?: string;
   disabled?: boolean;
   /** Paint the item in the danger tone (delete). */
   danger?: boolean;
@@ -79,6 +81,11 @@ export function ContextMenu({
             }}
           >
             {item.label}
+            {item.shortcut && (
+              <span className={styles.shortcut} aria-hidden="true">
+                {item.shortcut}
+              </span>
+            )}
           </button>
         ))}
       </div>

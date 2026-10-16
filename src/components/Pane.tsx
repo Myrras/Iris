@@ -5,28 +5,30 @@
  * component derives the visible rows and turns clicks, keys and the context
  * menu into store actions.
  *
- * Shortcuts (Finder's on macOS, with Ctrl for Cmd elsewhere): Cmd+Shift+N new
- * folder; F2, or Enter on macOS, rename; Delete / Cmd+Backspace delete (always
- * confirmed); Cmd+I Get Info; Space preview; typing a name selects the
- * first row starting with it (Finder's type-to-select; Space joins the
- * typed name while typing); Cmd+Down / Cmd+O open; Cmd+Up
- * enclosing folder; Cmd+Shift+G or Cmd+L (Ctrl+Shift+G / Ctrl+L), a click
- * on the empty part of the breadcrumb bar or a double-click on it turn the
- * breadcrumb into the "go to path" field (`GoToField`: absolute or relative
- * paths, `~`, Tab completion). Transfers: Cmd+Shift+U uploads the Local selection,
- * Cmd+Shift+D downloads the Remote selection, and F5 (Total Commander's
- * "copy to the other pane") does either, into the other pane's folder.
- * Option+Cmd+S (Ctrl+Alt+S elsewhere), the toolbar's Sync button or the
- * context menu's "Sync Folders…" open the Sync dialog (`SyncDialog`) for
- * the two panes' folders, from this pane to the other.
- * Remote files open in the local editor (`lib/edit`) with Cmd+E, the
+ * Shortcuts come from the keymap (`lib/keymap`, rebindable in Settings →
+ * Shortcuts; Cmd on macOS, Ctrl elsewhere). Defaults: Cmd+P or Cmd+L go to
+ * path (a click on the empty part of the breadcrumb bar or a double-click on
+ * it do too): the breadcrumb becomes the `GoToField` (absolute or relative
+ * paths, `~`, Tab completion); Cmd+R refresh; Cmd+F focuses and selects the
+ * filter (Escape there clears it and gives the focus back to the table);
+ * Cmd+Shift+N new folder; F2, or Enter on macOS, rename; Delete /
+ * Cmd+Backspace delete (always confirmed); Cmd+I Get Info; Cmd+E open a
+ * remote file in the editor; Option+Cmd+R show in Finder (Explorer / File
+ * Manager); Option+Cmd+S Sync dialog (`SyncDialog`, this pane's folder to
+ * the other's); Option+Cmd+P or Space preview. Transfers: Cmd+Shift+U
+ * uploads the Local selection, Cmd+Shift+D downloads the Remote selection,
+ * and F5 (Total Commander's "copy to the other pane") does either, into the
+ * other pane's folder. Fixed: Space preview; typing a name selects the first
+ * visible row starting with it (Finder's type-to-select, `lib/typeAhead`: 1 s
+ * buffer, closest match, Space joins the name while typing); Cmd+Down /
+ * Cmd+O open; Cmd+Up enclosing folder. A shortcut with Cmd/Ctrl or
+ * Option/Alt also works while nothing is focused (the active pane takes it),
+ * and none of them fire while typing in a field.
+ * Remote files open in the local editor (`lib/edit`) with the shortcut, the
  * context menu's "Open in Editor", or by opening them (double-click, Enter
  * off macOS, Cmd+Down / Cmd+O); folders still navigate. Local files open
  * the same way (`lib/openLocal`) in the application set for their type
- * (Settings → Editors) or the OS default; Option+Cmd+R (Ctrl+Alt+R
- * elsewhere) or the context menu's "Show in Finder" (Explorer / File
- * Manager) reveals the Local selection, or the folder itself, in the OS
- * file manager.
+ * (Settings → Editors) or the OS default.
  *
  * Rows dragged onto the other pane (or a folder row in it) transfer too
  * (`lib/paneDrag`); the pane under the drag, and the folder row, light up.
@@ -61,11 +63,20 @@ import {
   openLocalFile,
   revealLocalPath,
 } from "../lib/openLocal";
+import {
+  findAction,
+  isEditableTarget,
+  previewTitle,
+  shortcutHint,
+  withHint,
+  type ActionId,
+} from "../lib/keymap";
 import { startPaneDrag } from "../lib/paneDrag";
 import { baseName, parentPath } from "../lib/path";
 import { isMac, isWindows } from "../lib/platform";
 import { clickSelection, moveCursor } from "../lib/selection";
 import { requestDisconnectSession } from "../lib/tabs";
+import { useKeymap } from "../lib/useKeymap";
 import { createTypeAheadBuffer, matchTypeAhead } from "../lib/typeAhead";
 import { otherPane, startTransfer } from "../lib/transfer";
 import { useConnectionFormStore } from "../state/connectionFormStore";
@@ -99,18 +110,6 @@ import {
   UploadIcon,
 } from "./icons";
 import styles from "./Pane.module.css";
-
-/** Typing in a field (filter, rename, dialogs) never triggers shortcuts. */
-function isEditable(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null;
-  return (
-    !!el &&
-    (el.tagName === "INPUT" ||
-      el.tagName === "TEXTAREA" ||
-      el.tagName === "SELECT" ||
-      el.isContentEditable)
-  );
-}
 
 export function Pane({
   id,
@@ -358,6 +357,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   const store = usePaneStore.getState;
   const remote = pane.target?.kind === "remote";
   const paneActive = usePaneStore((s) => s.active === id);
+  const keymap = useKeymap();
   const isLocal = pane.target?.kind === "local";
 
   // Copying to the other pane needs a live session and both folders.
@@ -400,6 +400,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   >(null);
   const [info, setInfo] = useState<ChmodRequest | null>(null);
   const browserRef = useRef<HTMLDivElement>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
   // The "go to path" field replaces the breadcrumb while it is open. A
   // remote pane needs a connected session (the field closes if it drops).
   const [goToOpen, setGoToOpen] = useState(false);
@@ -424,7 +425,16 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         ?.focus({ preventScroll: true });
     }
   };
-  const goToHint = `Click to type a path (${isMac ? "⇧⌘G" : "Ctrl+Shift+G"})`;
+  const goToHint = withHint("Click to type a path", keymap, "goTo");
+  const focusTable = () =>
+    browserRef.current
+      ?.querySelector<HTMLElement>('[role="grid"]')
+      ?.focus({ preventScroll: true });
+  // Cmd+F: into the filter box with its text selected, ready to be replaced.
+  const findInPane = () => {
+    filterRef.current?.focus();
+    filterRef.current?.select();
+  };
 
   const entries = useMemo(
     () =>
@@ -556,12 +566,8 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     if (canCopy)
       useSyncStore.getState().open(id === "local" ? "upload" : "download");
   };
-  const syncShortcut = isMac ? "⌥⌘S" : "Ctrl+Alt+S";
   const copyVerb = id === "local" ? "Upload" : "Download";
-  const copyKey = id === "local" ? "u" : "d";
-  const copyShortcut = isMac
-    ? `⇧⌘${copyKey.toUpperCase()}`
-    : `Ctrl+Shift+${copyKey.toUpperCase()}`;
+  const copyAction: ActionId = id === "local" ? "upload" : "download";
   // Local rows can always be dragged (out of the window to Finder /
   // Explorer even without a session); remote rows need a connected one.
   const canDrag = remote ? editSession !== null : pane.path !== null;
@@ -575,33 +581,76 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
       void downloadTo(list.map((e) => e.path));
   };
 
+  /** Runs the bound action; false when it does not apply to this pane. */
+  function runAction(action: ActionId): boolean {
+    switch (action) {
+      case "goTo":
+        openGoTo();
+        return true;
+      case "refresh":
+        if (hasFolder) void store().refresh(id);
+        return true;
+      case "find":
+        findInPane();
+        return true;
+      case "newFolder":
+        newFolder();
+        return true;
+      case "rename":
+        rename();
+        return true;
+      case "delete":
+        askDelete();
+        return true;
+      case "getInfo":
+        getInfo();
+        return true;
+      case "openInEditor":
+        if (!remote) return false;
+        editFile();
+        return true;
+      case "showInFinder":
+        reveal();
+        return true;
+      case "upload":
+      case "download":
+        // Each pane transfers its own way: Upload from Local, Download from Remote.
+        if (action !== copyAction) return false;
+        copyToOther();
+        return true;
+      case "sync":
+        openSync();
+        return true;
+      case "togglePreview":
+        togglePreview();
+        return true;
+      default:
+        return false;
+    }
+  }
+
   function onKeyDown(e: React.KeyboardEvent) {
-    if (e.defaultPrevented || isEditable(e.target)) return;
+    if (e.defaultPrevented || isEditableTarget(e.target)) return;
     // Dialogs and menus are portals: their keys bubble through React to
     // here, but they are not the pane's.
     if (!e.currentTarget.contains(e.target as Node)) return;
     // Space on a focused toolbar button presses it.
     if (e.key === " " && (e.target as HTMLElement).tagName === "BUTTON") return;
+    // Bound keys first: a combination bound to an action never type-selects.
+    const action = findAction(e, keymap, "pane");
+    if (action && runAction(action)) {
+      e.preventDefault();
+      return;
+    }
     const mod = isMac ? e.metaKey : e.ctrlKey;
     const key = e.key.toLowerCase();
     let handled = true;
-    if (mod && e.shiftKey && key === "n") newFolder();
-    else if (e.key === "F2") rename();
-    else if (e.key === "Delete" || (mod && e.key === "Backspace")) askDelete();
-    else if (mod && key === "i") getInfo();
-    else if (mod && !e.shiftKey && key === "e" && remote) editFile();
-    else if (e.key === " " && !mod && !e.altKey && typeAhead.current.active())
+    if (e.key === " " && !mod && !e.altKey && typeAhead.current.active())
       typeSelect(" ");
     else if (e.key === " " && !mod) togglePreview();
     else if (mod && (e.key === "ArrowDown" || key === "o")) openCursor();
     else if (mod && e.key === "ArrowUp") void store().up(id);
-    else if ((mod && e.shiftKey && key === copyKey) || e.key === "F5")
-      copyToOther();
-    // By code: Option+S types "ß" on a Mac keyboard.
-    else if (mod && e.shiftKey && !e.altKey && key === "g") openGoTo();
-    else if (mod && !e.shiftKey && !e.altKey && key === "l") openGoTo();
-    else if (mod && e.altKey && !e.shiftKey && e.code === "KeyS") openSync();
-    else if (mod && e.altKey && !e.shiftKey && e.code === "KeyR") reveal();
+    else if (e.key === "F5") copyToOther();
     else if (
       [...e.key].length === 1 &&
       !e.metaKey &&
@@ -613,6 +662,28 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     else handled = false;
     if (handled) e.preventDefault();
   }
+
+  // Nothing focused (after a dialog closed, say): the active pane still takes
+  // its Cmd/Ctrl/Option shortcuts. On `document`, which sees the event before
+  // the app-level handler on `window`; keys the pane's own handler took are
+  // already `defaultPrevented`.
+  const fallback = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  useEffect(() => {
+    fallback.current = (e) => {
+      const t = e.target as HTMLElement | null;
+      if (e.defaultPrevented || (t && t !== document.body)) return;
+      if (!(e.metaKey || e.ctrlKey || e.altKey)) return;
+      if (document.querySelector('[aria-modal="true"], [role="menu"]')) return;
+      const action = findAction(e, keymap, "pane");
+      if (action && runAction(action)) e.preventDefault();
+    };
+  });
+  useEffect(() => {
+    if (!paneActive) return;
+    const on = (e: KeyboardEvent) => fallback.current(e);
+    document.addEventListener("keydown", on);
+    return () => document.removeEventListener("keydown", on);
+  }, [paneActive]);
 
   function contextMenu(entry: Entry | null, e: React.MouseEvent) {
     // Right-clicking outside the selection selects that entry (Finder).
@@ -627,22 +698,27 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   }
 
   function menuItems(entry: Entry | null): ContextMenuItem[] {
+    const hint = (action: ActionId) => shortcutHint(keymap, action);
     const refresh: ContextMenuItem = {
       label: "Refresh",
+      shortcut: hint("refresh"),
       onSelect: () => void store().refresh(id),
     };
     const create: ContextMenuItem = {
       label: "New Folder",
+      shortcut: hint("newFolder"),
       disabled: !hasFolder,
       onSelect: newFolder,
     };
     const sync: ContextMenuItem = {
       label: "Sync Folders…",
+      shortcut: hint("sync"),
       disabled: !canCopy,
       onSelect: openSync,
     };
     const showInFileManager = (onSelect: () => void): ContextMenuItem => ({
       label: `Show in ${fileManagerName}`,
+      shortcut: hint("showInFinder"),
       disabled: !hasFolder,
       onSelect,
     });
@@ -680,6 +756,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         ? [
             {
               label: "Open in Editor",
+              shortcut: hint("openInEditor"),
               disabled: !(editSession && single && isEditableFile(entry)),
               onSelect: editFile,
             },
@@ -692,6 +769,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
       },
       {
         label: id === "local" ? "Upload to Remote" : "Download to Local",
+        shortcut: hint(copyAction),
         disabled: !canCopy,
         onSelect: copyToOther,
       },
@@ -706,14 +784,21 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         : []),
       sync,
       create,
-      { label: "Rename", disabled: !single, onSelect: () => rename(entry) },
+      {
+        label: "Rename",
+        shortcut: hint("rename"),
+        disabled: !single,
+        onSelect: () => rename(entry),
+      },
       {
         label: noModes ? "Get Info…" : "Get Info / Permissions…",
+        shortcut: hint("getInfo"),
         onSelect: getInfo,
       },
       refresh,
       {
         label: list.length > 1 ? `Delete ${list.length} Items…` : "Delete…",
+        shortcut: hint("delete"),
         danger: true,
         onSelect: askDelete,
       },
@@ -756,7 +841,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
           type="button"
           className={styles.tool}
           aria-label="Refresh"
-          title="Refresh"
+          title={withHint("Refresh", keymap, "refresh")}
           disabled={pane.path === null}
           data-loading={pane.loading ? "true" : undefined}
           onClick={() => void store().refresh(id)}
@@ -789,9 +874,11 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
           <FilterIcon className={styles.filterIcon} />
           <span className="visually-hidden">Filter {label} files</span>
           <input
+            ref={filterRef}
             type="search"
             className={styles.filterInput}
             placeholder="Filter"
+            title={withHint("Filter this folder", keymap, "find")}
             value={pane.filter}
             autoComplete="off"
             autoCorrect="off"
@@ -799,9 +886,15 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
             spellCheck={false}
             onChange={(e) => store().setFilter(id, e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Escape" && pane.filter) {
+              // Escape clears the filter and hands the focus back to the table.
+              if (e.key === "Escape") {
                 e.stopPropagation();
-                store().setFilter(id, "");
+                if (pane.filter) store().setFilter(id, "");
+                focusTable();
+              } else if (findAction(e, keymap, "pane") === "find") {
+                // Cmd+F again selects the text; the pane's shortcuts stay off.
+                e.preventDefault();
+                e.currentTarget.select();
               }
             }}
           />
@@ -810,7 +903,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
           type="button"
           className={styles.tool}
           aria-label={copyVerb}
-          title={`${copyVerb} to ${id === "local" ? "Remote" : "Local"} (${copyShortcut} or F5)`}
+          title={`${copyVerb} to ${id === "local" ? "Remote" : "Local"} (${shortcutHint(keymap, copyAction)} or F5)`}
           disabled={!canCopy || !hasTargets}
           onClick={copyToOther}
         >
@@ -820,7 +913,11 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
           type="button"
           className={styles.tool}
           aria-label="Sync folders"
-          title={`Sync ${id === "local" ? "Local → Remote" : "Remote → Local"}… (${syncShortcut})`}
+          title={withHint(
+            `Sync ${id === "local" ? "Local → Remote" : "Remote → Local"}…`,
+            keymap,
+            "sync",
+          )}
           disabled={!canCopy}
           onClick={openSync}
         >
@@ -830,7 +927,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
           type="button"
           className={styles.tool}
           aria-label="New folder"
-          title={`New folder (${isMac ? "⇧⌘N" : "Ctrl+Shift+N"})`}
+          title={withHint("New folder", keymap, "newFolder")}
           disabled={!hasFolder}
           onClick={newFolder}
         >
@@ -851,7 +948,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
           className={styles.tool}
           aria-label="Preview"
           aria-pressed={previewOpen}
-          title="Preview (Space)"
+          title={previewTitle("Preview", keymap)}
           onClick={togglePreview}
         >
           <PreviewIcon />

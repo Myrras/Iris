@@ -34,7 +34,10 @@
 }
 
 .item {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-4);
   width: 100%;
   text-align: left;
   white-space: nowrap;
@@ -66,4 +69,9 @@
 .item:disabled {
   color: var(--text-faint);
   cursor: default;
+}
+
+.shortcut {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
 }

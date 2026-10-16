@@ -193,16 +193,22 @@ standalone template:
     `focusedEntry`), `actionTargets` = selection or cursor. `FileTable`
     shows the inline `RenameField` (basename preselected; Enter/blur commit,
     Escape cancels) and reports right-clicks; `Pane` owns the shortcuts
-    (`isMac` picks ⌘ vs Ctrl; Enter renames on macOS; typing a name
-    selects the first visible row starting with it, `lib/typeAhead`: 1 s
-    buffer, closest match, Space joins the name while typing; ⇧⌘G / ⌘L
-    (Ctrl+Shift+G / Ctrl+L), a click on the empty breadcrumb bar or a
-    double-click on it turn the breadcrumb into `GoToField`: absolute or
-    relative paths, `~` (`homeDir`), `stat` → folder opens with Back, file
-    opens its folder selected (`paneStore.goTo`), errors stay inline; Tab
-    completes folders from a per-open cached listing; closed while the
-    remote session is not connected; every pane shortcut and the type-ahead
-    ignore keys from inputs via `isEditable`), the `ContextMenu`,
+    from the **keymap** (`lib/keymap.ts`, see below; `isMac` picks ⌘ vs
+    Ctrl; Enter renames on macOS; typing a name selects the first visible
+    row starting with it, `lib/typeAhead`: 1 s buffer, closest match, Space
+    joins the name while typing; bound combinations are tried first, so
+    they never type-select). Defaults: ⌘P / ⌘L (Ctrl+P / Ctrl+L), a click
+    on the empty breadcrumb bar or a double-click on it turn the breadcrumb
+    into `GoToField`: absolute or relative paths, `~` (`homeDir`), `stat` →
+    folder opens with Back, file opens its folder selected
+    (`paneStore.goTo`), errors stay inline; Tab completes folders from a
+    per-open cached listing; closed while the remote session is not
+    connected. ⌘R refreshes, ⌘F focuses and selects the filter (Escape
+    there clears it and returns focus to the table). Every pane shortcut
+    and the type-ahead
+    ignore keys from inputs via `isEditableTarget`; with nothing focused the
+    active pane still takes its ⌘/Ctrl/Option ones, on `document`), the
+    `ContextMenu` (items show their binding),
     `DeleteConfirmModal` (remote: permanent/danger tone; local:
     Trash/warning tone; Enter confirms) and `ChmodDialog` (Get Info + rwx
     grid ⇄ octal, recursive for folders). `PreviewPanel` is the island right
@@ -687,6 +693,28 @@ standalone template:
   calls `window_confirm_close` (cancels all transfers, arms
   `AppState::force_close`, exits).
 
+- ✅ **Configurable shortcuts.** `lib/keymap.ts` is the one place for key
+  bindings: `ACTIONS` (id, label, group, `pane`/`app` scope, defaults), a
+  binding is `"Mod+Shift+KeyN"` (`Mod` = ⌘ / Ctrl; Alt for ⌥), `matches` is
+  exact about modifiers and reads letters/digits from `key` (layout-proof)
+  but everything with Option/Alt from `code` (Option+S types "ß"; "Unknown"
+  codes fall back to `key`). `resolveKeymap` lays the user's changes
+  (`settingsStore.shortcuts`, only changed actions, `setShortcut` /
+  `resetShortcuts`) over the defaults. Defaults: Go to path ⌘P + ⌘L, Refresh
+  ⌘R, Find ⌘F, New folder ⇧⌘N, Rename F2, Delete Delete + ⌘⌫, Get Info ⌘I,
+  Upload ⇧⌘U (Local pane), Download ⇧⌘D (Remote pane), Sync ⌥⌘S, Open in
+  editor ⌘E, Show in Finder ⌥⌘R, Toggle preview ⌥⌘P (+ Space), New / Close /
+  Next / Previous tab ⌘T / ⌘W / ⇧⌘] / ⇧⌘[, Open Settings ⌘, (non-macOS only:
+  macOS keeps the native menu). Fixed (`RESERVED`, refused by the recorder):
+  Enter, Space, arrows, F5, ⌘O / ⌘↓ / ⌘↑, ⌘A / C / V / X / Z, ⌘1–9, Escape,
+  macOS ⌘Q / H / M. `isBrowserShortcut` (F5, ⌘/Ctrl+R, P, F, G, S) is
+  `preventDefault`ed in `useTabShortcuts` everywhere, bound or not, so the
+  webview never reloads or prints. Settings → **Shortcuts** (`ShortcutsTab`):
+  Record (capture-phase listener, Escape cancels), conflicts refused with a
+  "Swap them" offer, per-row Reset and Reset all. Add an action: an entry in
+  `ACTIONS`, a case in `Pane.runAction` (or `useTabShortcuts`), its hint
+  where it has a button or menu item (`withHint` / `shortcutHint`).
+
 ## Tech stack
 
 | Concern     | Choice                                                    |
@@ -793,7 +821,9 @@ src/
               # layout, toast — mirror the backend; don't guess
   lib/        # connect flow, tabs, edit (open for edit, edit toasts),
               # editorOverrides, sync (dialog rules), syncExcludes,
-              # useTabShortcuts, sessionStatus,
+              # keymap (named actions, default bindings, matcher, formatter;
+              # `useKeymap`), useTabShortcuts (app-level bindings + the
+              # browser-shortcut guard), sessionStatus,
               # useCoreEvents, useNativeDrop, paneDrag, dragOut (OS drag
               # out, remote preparation), downloadTo (folder picker),
               # transfer (pane → request), pure rules (entries, selection,

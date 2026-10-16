@@ -141,7 +141,7 @@ async function openRemote(status: "connected" | "reconnecting" = "connected") {
 }
 
 const openByShortcut = () =>
-  fireEvent.keyDown(grid(), { key: "G", ctrlKey: true, shiftKey: true });
+  fireEvent.keyDown(grid(), { key: "p", ctrlKey: true });
 
 /** Type `text` and press Enter, then wait for the folder to change. */
 async function goTo(text: string) {
@@ -151,7 +151,7 @@ async function goTo(text: string) {
 }
 
 describe("opening the field", () => {
-  it("opens with Ctrl+Shift+G, prefilled with the path and selected", async () => {
+  it("opens with Ctrl+P, prefilled with the path and selected", async () => {
     await openLocal();
     expect(queryField()).toBeNull();
     openByShortcut();
@@ -191,6 +191,9 @@ describe("opening the field", () => {
     await openLocal();
     fireEvent.keyDown(grid(), { key: "l", ctrlKey: true, shiftKey: true });
     fireEvent.keyDown(grid(), { key: "g", ctrlKey: true });
+    // Ctrl+Shift+G was the old default: it is not bound any more.
+    fireEvent.keyDown(grid(), { key: "G", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(grid(), { key: "p", ctrlKey: true, shiftKey: true });
     fireEvent.keyDown(grid(), { key: "l", altKey: true, ctrlKey: true });
     expect(queryField()).toBeNull();
   });
@@ -563,7 +566,7 @@ describe("keys while the field is focused", () => {
 describe("remote pane without a live session", () => {
   it("does not open the field while reconnecting", async () => {
     await openRemote("reconnecting");
-    fireEvent.keyDown(grid(), { key: "G", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(grid(), { key: "p", ctrlKey: true });
     fireEvent.keyDown(grid(), { key: "l", ctrlKey: true });
     fireEvent.click(screen.getByRole("navigation", { name: "Path" }));
     fireEvent.doubleClick(screen.getByText("app"));
