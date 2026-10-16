@@ -23,6 +23,7 @@ vi.mock("../ipc/events", () => {
     onEditUploaded: sub("editUploaded"),
     onEditFailed: sub("editFailed"),
     onEditConflict: sub("editConflict"),
+    onDragOutProgress: sub("dragOutProgress"),
   };
 });
 vi.mock("../ipc/commands", async (importOriginal) => ({
@@ -250,7 +251,7 @@ describe("useCoreEvents", () => {
   it("unsubscribes on unmount", async () => {
     const { unmount } = renderHook(() => useCoreEvents());
     unmount();
-    await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(11));
+    await waitFor(() => expect(unlisten).toHaveBeenCalledTimes(12));
   });
 
   it("loads the transfers and feeds transfer events into the stores", async () => {

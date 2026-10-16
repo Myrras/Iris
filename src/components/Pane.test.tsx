@@ -25,6 +25,9 @@ vi.mock("../lib/connect", () => ({
   retrySession: vi.fn(() => Promise.resolve(true)),
 }));
 vi.mock("../lib/tabs", () => ({ requestDisconnectSession: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  open: vi.fn(() => Promise.resolve("/Users/alice/Downloads")),
+}));
 
 import {
   chmod,
@@ -617,6 +620,30 @@ describe("Pane", () => {
       );
     });
 
+    it("downloads the remote selection to a picked folder", async () => {
+      await openBoth();
+      fireEvent.click(within(remotePane()).getByText("readme.md"));
+      fireEvent.click(within(remotePane()).getByText("www"), { metaKey: true });
+      fireEvent.contextMenu(within(remotePane()).getByText("www"));
+      fireEvent.click(screen.getByRole("menuitem", { name: "Download to…" }));
+      await waitFor(() =>
+        expect(enqueueTransfers).toHaveBeenCalledWith({
+          sessionId: "s-1",
+          direction: "download",
+          // In listing order (folders first).
+          items: [{ src: "/srv/www" }, { src: "/srv/readme.md" }],
+          dstDir: "/Users/alice/Downloads",
+        }),
+      );
+      fireEvent.keyDown(document, { key: "Escape" });
+      fireEvent.contextMenu(within(localPane()).getByText("notes.txt"));
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("menuitem", { name: "Download to…" }),
+        ).toBeNull(),
+      );
+    });
+
     it("does not open for editing while the session reconnects", async () => {
       await openBoth();
       useSessionStore.getState().apply({
@@ -634,6 +661,9 @@ describe("Pane", () => {
       fireEvent.contextMenu(within(remotePane()).getByText("readme.md"));
       expect(
         screen.getByRole("menuitem", { name: "Open in Editor" }),
+      ).toBeDisabled();
+      expect(
+        screen.getByRole("menuitem", { name: "Download to…" }),
       ).toBeDisabled();
       expect(openRemote).not.toHaveBeenCalled();
     });

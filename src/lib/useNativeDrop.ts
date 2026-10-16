@@ -9,6 +9,12 @@
  * is hit-tested against the DOM (`document.elementFromPoint`); overlays shown
  * during the drag are `pointer-events: none`, so the test sees through them.
  *
+ * A drag out of the Remote pane (`lib/dragOut`) that comes back over the
+ * window carries Iris' own downloaded copies: it is not offered as an upload
+ * (that would copy the files back onto the server they came from). A drag
+ * out of the Local pane is a normal OS drag of local files and uploads when
+ * dropped on the Remote pane.
+ *
  * Positions: Tauri types them as physical pixels, which they are on Windows
  * and Linux; on macOS wry reports AppKit points, which are already CSS
  * pixels, so only the other platforms divide by `devicePixelRatio`.
@@ -38,6 +44,16 @@ export function nativeDropTarget(position: {
   return over?.pane === "remote" ? over : null;
 }
 
+/** Whether `paths` are the copies of the running (or last) remote drag out. */
+export function isOwnRemoteDragOut(paths: string[]): boolean {
+  const out = useDragStore.getState().dragOut;
+  return (
+    out?.from === "remote" &&
+    paths.length === out.paths.length &&
+    paths.every((p) => out.paths.includes(p))
+  );
+}
+
 export function useNativeDrop(): void {
   useEffect(() => {
     let webview;
@@ -47,21 +63,29 @@ export function useNativeDrop(): void {
       return; // no Tauri bridge (tests, plain browser)
     }
     const drag = useDragStore.getState;
+    /** The drag over the window is a remote drag out of our own. */
+    let own = false;
     // Only a pane drag of our own sets `paneDrag`; never fight it.
     const sub = webview.onDragDropEvent(({ payload }) => {
       if (drag().paneDrag) return;
       switch (payload.type) {
         case "enter":
+          own = isOwnRemoteDragOut(payload.paths);
+          if (!own) drag().setNative(true, nativeDropTarget(payload.position));
+          break;
         case "over":
-          drag().setNative(true, nativeDropTarget(payload.position));
+          if (!own) drag().setNative(true, nativeDropTarget(payload.position));
           break;
         case "leave":
+          own = false;
           drag().end();
           break;
         case "drop": {
           const over = nativeDropTarget(payload.position);
           drag().end();
-          if (!over || payload.paths.length === 0) return;
+          const ignored = own || isOwnRemoteDragOut(payload.paths);
+          own = false;
+          if (ignored || !over || payload.paths.length === 0) return;
           if (
             !remoteSessionId() ||
             !usePaneStore.getState().panes.remote.path

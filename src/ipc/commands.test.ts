@@ -13,8 +13,11 @@ import {
   chmod,
   clearFinished,
   clearSecret,
+  cancelDragOut,
   closeEdit,
   connect,
+  finishDragOut,
+  prepareDragOut,
   listEdits,
   openRemote,
   resolveEdit,
@@ -285,5 +288,25 @@ describe("remote edit commands", () => {
     });
     expect(invoke).toHaveBeenCalledWith("list_edits");
     expect(invoke).toHaveBeenCalledWith("close_edit", { editId: "e-1" });
+  });
+});
+
+describe("drag-out commands", () => {
+  beforeEach(() => vi.mocked(invoke).mockClear());
+
+  it("names the commands and keys like the Rust handlers", async () => {
+    await prepareDragOut("d-1", "s-1", ["/srv/report.pdf"]);
+    await cancelDragOut("d-1");
+    await finishDragOut("d-1", true);
+    expect(invoke).toHaveBeenCalledWith("prepare_drag_out", {
+      dragId: "d-1",
+      sessionId: "s-1",
+      paths: ["/srv/report.pdf"],
+    });
+    expect(invoke).toHaveBeenCalledWith("cancel_drag_out", { dragId: "d-1" });
+    expect(invoke).toHaveBeenCalledWith("finish_drag_out", {
+      dragId: "d-1",
+      dropped: true,
+    });
   });
 });

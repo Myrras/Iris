@@ -40,6 +40,7 @@ import {
 
 import type { ConnectionProfile, Entry, SessionId } from "../ipc/types";
 import { connectInTab, retrySession } from "../lib/connect";
+import { downloadTo } from "../lib/downloadTo";
 import { isEditable as isEditableFile, openForEdit } from "../lib/edit";
 import { isDirLike, visibleEntries } from "../lib/entries";
 import { startPaneDrag } from "../lib/paneDrag";
@@ -472,9 +473,17 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   const copyShortcut = isMac
     ? `⇧⌘${copyKey.toUpperCase()}`
     : `Ctrl+Shift+${copyKey.toUpperCase()}`;
+  // Local rows can always be dragged (out of the window to Finder /
+  // Explorer even without a session); remote rows need a connected one.
+  const canDrag = remote ? editSession !== null : pane.path !== null;
   const onRowDragStart = (entry: Entry, e: React.MouseEvent) => {
-    if (!canCopy) return;
+    if (!canDrag) return;
     startPaneDrag(id, entry, e.clientX, e.clientY);
+  };
+  const downloadToFolder = () => {
+    const list = targets();
+    if (editSession && list.length > 0)
+      void downloadTo(list.map((e) => e.path));
   };
 
   function onKeyDown(e: React.KeyboardEvent) {
@@ -552,6 +561,15 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         disabled: !canCopy,
         onSelect: copyToOther,
       },
+      ...(remote
+        ? [
+            {
+              label: "Download to…",
+              disabled: !editSession,
+              onSelect: downloadToFolder,
+            },
+          ]
+        : []),
       create,
       { label: "Rename", disabled: !single, onSelect: () => rename(entry) },
       {

@@ -17,6 +17,7 @@
 import { useEffect } from "react";
 
 import {
+  onDragOutProgress,
   onEditConflict,
   onEditFailed,
   onEditUploaded,
@@ -37,6 +38,7 @@ import { useSessionStore } from "../state/sessionStore";
 import { useTabsStore } from "../state/tabsStore";
 import { toastError, toastSuccess } from "../state/toastStore";
 import { useTransferStore } from "../state/transferStore";
+import { dragOutProgress } from "./dragOut";
 import { editFailed, editUploaded } from "./edit";
 import { refreshSessionPanes } from "./tabs";
 
@@ -96,6 +98,7 @@ export function useCoreEvents(): void {
       onEditConflict((event) =>
         usePromptStore.getState().push({ kind: "editConflict", event }),
       ),
+      onDragOutProgress(dragOutProgress),
     ];
     const forgetMissing = (profiles: { id: string }[], loaded: boolean) => {
       if (loaded) {

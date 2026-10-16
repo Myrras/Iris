@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 import {
+  onDragOutProgress,
   onEditConflict,
   onEditFailed,
   onEditUploaded,
@@ -22,6 +23,7 @@ import {
   onTransfersUpdated,
 } from "./events";
 import type {
+  DragOutProgressEvent,
   EditConflictEvent,
   SessionStateChangedEvent,
   TransferConflictEvent,
@@ -143,5 +145,20 @@ describe("edit events", () => {
     };
     listeners["edit:conflict"]({ payload: conflict });
     expect(seen).toEqual([conflict]);
+  });
+});
+
+describe("drag-out events", () => {
+  it("listens under the name src-tauri emits and passes the payload", async () => {
+    const seen: unknown[] = [];
+    await onDragOutProgress((e) => seen.push(e));
+    const progress: DragOutProgressEvent = {
+      type: "dragOutProgress",
+      dragId: "d-1",
+      bytesDone: 10,
+      totalBytes: 20,
+    };
+    listeners["dragOut:progress"]({ payload: progress });
+    expect(seen).toEqual([progress]);
   });
 });

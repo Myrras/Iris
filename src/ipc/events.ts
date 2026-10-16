@@ -7,6 +7,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
+  DragOutProgressEvent,
   EditConflictEvent,
   EditFailedEvent,
   EditUploadedEvent,
@@ -113,6 +114,15 @@ export function onEditFailed(
   handler: (event: EditFailedEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<EditFailedEvent>("edit:failed", (e) => handler(e.payload));
+}
+
+/** A drag out of the window downloaded more of its remote files. */
+export function onDragOutProgress(
+  handler: (event: DragOutProgressEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<DragOutProgressEvent>("dragOut:progress", (e) =>
+    handler(e.payload),
+  );
 }
 
 /** The native macOS menu's Settings… item (⌘,) was activated (`lib.rs`). */

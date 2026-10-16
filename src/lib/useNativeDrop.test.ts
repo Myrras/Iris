@@ -122,6 +122,34 @@ describe("useNativeDrop", () => {
     );
   });
 
+  it("does not upload a remote drag out that comes back, but does a local one", async () => {
+    renderHook(() => useNativeDrop());
+    await waitFor(() => expect(native.handler).not.toBeNull());
+    hit = document.getElementById("www");
+    const copies = ["/cache/dragout/d-1/report.pdf"];
+    useDragStore.getState().setDragOut({ from: "remote", paths: copies });
+    fire({ type: "enter", paths: copies, position: { x: 50, y: 60 } });
+    fire({ type: "over", position: { x: 50, y: 60 } });
+    expect(useDragStore.getState().over).toBeNull();
+    fire({ type: "drop", paths: copies, position: { x: 50, y: 60 } });
+    expect(enqueueTransfers).not.toHaveBeenCalled();
+
+    const local = ["/Users/alice/a.txt"];
+    useDragStore.getState().setDragOut({ from: "local", paths: local });
+    fire({ type: "enter", paths: local, position: { x: 50, y: 60 } });
+    expect(useDragStore.getState().over).toEqual({
+      pane: "remote",
+      dir: "/srv/www",
+    });
+    fire({ type: "drop", paths: local, position: { x: 50, y: 60 } });
+    await waitFor(() =>
+      expect(enqueueTransfers).toHaveBeenCalledWith(
+        expect.objectContaining({ direction: "upload", dstDir: "/srv/www" }),
+      ),
+    );
+    useDragStore.getState().setDragOut(null);
+  });
+
   it("scales physical positions outside macOS and ignores the local pane", () => {
     platform.mac = false;
     const ratio = window.devicePixelRatio;

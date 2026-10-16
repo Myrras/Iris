@@ -14,6 +14,8 @@ import type {
   ConflictResolution,
   ConnectionProfile,
   ConnectionProfileInput,
+  DragOutId,
+  DragOutReady,
   EditId,
   EditInfo,
   EditResolution,
@@ -376,6 +378,40 @@ export function listEdits(): Promise<EditInfo[]> {
 /** Stop editing a file and delete its local copy; rejects with `notFound`. */
 export function closeEdit(editId: EditId): Promise<void> {
   return invoke("close_edit", { editId });
+}
+
+// ---------------------------------------------------------------------------
+// Drag out
+// ---------------------------------------------------------------------------
+
+/**
+ * Download remote `paths` into the app cache so they can be dragged out of
+ * the window as local files (`dragOut:progress` along the way). Rejects with
+ * `tooLarge` over the limits (200 MB / 500 files, checked first),
+ * `cancelled` after `cancelDragOut`, `notConnected`, `notFound`.
+ */
+export function prepareDragOut(
+  dragId: DragOutId,
+  sessionId: SessionId,
+  paths: string[],
+): Promise<DragOutReady> {
+  return invoke("prepare_drag_out", { dragId, sessionId, paths });
+}
+
+/** Stop preparing a drag out, or throw a prepared one away. */
+export function cancelDragOut(dragId: DragOutId): Promise<void> {
+  return invoke("cancel_drag_out", { dragId });
+}
+
+/**
+ * The native drag ended; `dropped` keeps the files a little longer for the
+ * app that took them to copy.
+ */
+export function finishDragOut(
+  dragId: DragOutId,
+  dropped: boolean,
+): Promise<void> {
+  return invoke("finish_drag_out", { dragId, dropped });
 }
 
 // ---------------------------------------------------------------------------

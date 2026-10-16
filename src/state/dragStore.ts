@@ -1,8 +1,9 @@
 /**
  * Drag and drop in flight: rows dragged from one pane to the other
- * (`lib/paneDrag`), or files dragged in from Finder / Explorer
- * (`lib/useNativeDrop`). Panes and rows read `over` to highlight the drop
- * target; `DragGhost` follows the pointer during a pane drag.
+ * (`lib/paneDrag`), out of the window to Finder / Explorer (`lib/dragOut`),
+ * or files dragged in from Finder / Explorer (`lib/useNativeDrop`). Panes
+ * and rows read `over` to highlight the drop target; `DragGhost` follows
+ * the pointer during a pane drag.
  */
 
 import { create } from "zustand";
@@ -22,6 +23,17 @@ export interface PaneDrag {
   /** Pointer position (client coordinates). */
   x: number;
   y: number;
+  /** The pointer is outside the window (a drag out to Finder / Explorer). */
+  outside?: boolean;
+  /** Remote files being downloaded before the drag can leave the window. */
+  preparing?: { bytesDone: number; totalBytes: number } | null;
+}
+
+/** A native drag out of the window, handed to the OS. */
+export interface DragOut {
+  from: PaneId;
+  /** The local paths the OS drag carries. */
+  paths: string[];
 }
 
 interface DragState {
@@ -30,9 +42,22 @@ interface DragState {
   nativeDrag: boolean;
   /** The valid drop target under the pointer, if any. */
   over: DropTarget | null;
+  /**
+   * The native drag out running now (or the last one, until the next):
+   * kept past its end because the webview's own drop event for it may
+   * arrive after the OS reported the drag finished.
+   */
+  dragOut: DragOut | null;
   startPaneDrag: (drag: PaneDrag) => void;
-  movePaneDrag: (x: number, y: number, over: DropTarget | null) => void;
+  movePaneDrag: (
+    x: number,
+    y: number,
+    over: DropTarget | null,
+    outside?: boolean,
+  ) => void;
+  setPreparing: (preparing: PaneDrag["preparing"]) => void;
   setNative: (active: boolean, over: DropTarget | null) => void;
+  setDragOut: (dragOut: DragOut | null) => void;
   end: () => void;
 }
 
@@ -43,16 +68,22 @@ export const useDragStore = create<DragState>((set, get) => ({
   paneDrag: null,
   nativeDrag: false,
   over: null,
+  dragOut: null,
   startPaneDrag: (drag) => set({ paneDrag: drag, over: null }),
-  movePaneDrag: (x, y, over) => {
+  movePaneDrag: (x, y, over, outside = false) => {
     const drag = get().paneDrag;
     if (!drag) return;
     set({
-      paneDrag: { ...drag, x, y },
+      paneDrag: { ...drag, x, y, outside },
       // Keep the same object while the target holds, so rows do not re-render.
       over: sameTarget(get().over, over) ? get().over : over,
     });
   },
+  setPreparing: (preparing) => {
+    const drag = get().paneDrag;
+    if (drag) set({ paneDrag: { ...drag, preparing } });
+  },
+  setDragOut: (dragOut) => set({ dragOut }),
   setNative: (active, over) =>
     set({
       nativeDrag: active,

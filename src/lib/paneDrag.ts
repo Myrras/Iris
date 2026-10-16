@@ -14,15 +14,33 @@
  * the window then tracks the pointer (the element under it is the event
  * target, as nothing captures the pointer) and releasing over the other
  * pane starts the transfer. Escape cancels.
+ *
+ * Leaving the window turns it into a drag out to Finder / Explorer
+ * (`lib/dragOut`): local rows hand over to the OS drag at once; remote rows
+ * are downloaded first, the in-window drag keeps tracking meanwhile (the
+ * pointer may come back and drop on the Local pane), and the OS drag starts
+ * on the first move outside the window once the files are there.
  */
 
 import type { Entry } from "../ipc/types";
 import { dropTargetAt, useDragStore } from "../state/dragStore";
 import { actionTargets, usePaneStore, type PaneId } from "../state/paneStore";
-import { startTransfer } from "./transfer";
+import {
+  finishRemoteDragOut,
+  offerDownloadTo,
+  prepareRemoteDragOut,
+  startNativeDrag,
+  type RemotePrep,
+} from "./dragOut";
+import { remoteSessionId, startTransfer } from "./transfer";
 
 /** Pixels the pointer must travel before a press becomes a drag. */
 export const DRAG_THRESHOLD = 4;
+
+/** Whether a pointer at (`x`, `y`) is outside the window's viewport. */
+export function outsideWindow(x: number, y: number): boolean {
+  return x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight;
+}
 
 /**
  * Track a possible drag from pane `from` after a primary-button press at
@@ -36,6 +54,14 @@ export function beginPaneDrag(
   items: () => string[],
 ): void {
   let paths: string[] | null = null;
+  let active = true;
+  /** The pointer is outside the window. */
+  let outside = false;
+  /** The primary button is held, as the last move reported it. */
+  let held = true;
+  /** Remote rows being downloaded for a drag out, and the result. */
+  let prep: RemotePrep | null = null;
+  let ready: string[] | null = null;
   const drag = useDragStore.getState;
 
   const valid = (el: EventTarget | null) => {
@@ -61,16 +87,75 @@ export function beginPaneDrag(
       // Sweeping across the toolbar or breadcrumb must not select text.
       document.body.style.userSelect = "none";
     }
-    drag().movePaneDrag(e.clientX, e.clientY, valid(e.target));
+    held = (e.buttons & 1) === 1;
+    const out = outsideWindow(e.clientX, e.clientY);
+    drag().movePaneDrag(
+      e.clientX,
+      e.clientY,
+      out ? null : valid(e.target),
+      out,
+    );
+    if (out) leftWindow();
+    else outside = false;
+  }
+
+  /** Moving the pointer off the window (`mouseout` with nowhere to go). */
+  function onOut(e: MouseEvent) {
+    if (paths && e.relatedTarget === null) leftWindow();
+  }
+
+  function leftWindow() {
+    if (!paths || !active) return;
+    outside = true;
+    if (from === "local") {
+      handOver(paths, null);
+    } else if (ready) {
+      if (held) handOver(ready, prep);
+    } else if (!prep) {
+      const sessionId = remoteSessionId();
+      if (!sessionId) return;
+      const started = prepareRemoteDragOut(sessionId, paths);
+      prep = started;
+      drag().setPreparing({ bytesDone: 0, totalBytes: 0 });
+      void started.done.then((local) => {
+        if (!active || prep !== started) return;
+        if (!local) {
+          // Failed, too large or too slow (already reported): the drag
+          // cannot leave the window.
+          prep = null;
+          stop();
+          return;
+        }
+        ready = local;
+        drag().setPreparing(null);
+        if (outside && held) handOver(local, started);
+      });
+    }
+  }
+
+  /** End the in-window drag and give `local` to the OS drag. */
+  function handOver(local: string[], remote: RemotePrep | null) {
+    // The OS drag owns the pointer from now on; the webview gets no
+    // mouse-up for this press.
+    prep = null;
+    stop();
+    void startNativeDrag(from, local).then((dropped) => {
+      if (remote) finishRemoteDragOut(remote.id, dropped);
+    });
   }
 
   function onUp(e: MouseEvent) {
     const dropped = paths;
-    const over = dropped ? valid(e.target) : null;
+    const out = outside || outsideWindow(e.clientX, e.clientY);
+    const over = dropped && !out ? valid(e.target) : null;
+    const preparing = prep !== null && ready === null;
     stop();
     if (!dropped) return;
     swallowNextClick();
     if (over) void startTransfer(from, dropped, over.dir);
+    else if (out && preparing) {
+      offerDownloadTo(dropped, "Released before the files were ready");
+    }
   }
 
   function onKey(e: KeyboardEvent) {
@@ -81,8 +166,14 @@ export function beginPaneDrag(
   }
 
   function stop() {
+    if (!active) return;
+    active = false;
+    // A drag out that never left the window throws its files away.
+    prep?.cancel();
+    prep = null;
     window.removeEventListener("mousemove", onMove);
     window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("mouseout", onOut);
     window.removeEventListener("keydown", onKey, true);
     if (paths) {
       document.body.style.cursor = "";
@@ -93,6 +184,7 @@ export function beginPaneDrag(
 
   window.addEventListener("mousemove", onMove);
   window.addEventListener("mouseup", onUp);
+  window.addEventListener("mouseout", onOut);
   window.addEventListener("keydown", onKey, true);
 }
 

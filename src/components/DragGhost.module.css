@@ -33,3 +33,8 @@
     opacity: 0;
   }
 }
+
+.ghost[data-preparing="true"] {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}

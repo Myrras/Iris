@@ -491,3 +491,28 @@ export type IpcErrorKind =
   | "notConnected"
   | "remote"
   | "unknown";
+
+// ---------------------------------------------------------------------------
+// Drag out (`iris_core::drag_out`)
+// ---------------------------------------------------------------------------
+
+/** One drag of remote files out of the window; chosen by the webview. */
+export type DragOutId = string;
+
+/** A prepared drag out (`iris_core::DragOutReady`). */
+export interface DragOutReady {
+  dragId: DragOutId;
+  /** Absolute local paths of the selected items, in order. */
+  paths: string[];
+  /** Files downloaded (folders not counted). */
+  files: number;
+  totalBytes: number;
+}
+
+/** Payload of `dragOut:progress`; the last one has `bytesDone === totalBytes`. */
+export interface DragOutProgressEvent {
+  type: "dragOutProgress";
+  dragId: DragOutId;
+  bytesDone: number;
+  totalBytes: number;
+}
