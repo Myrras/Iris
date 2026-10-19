@@ -1032,6 +1032,9 @@ Prefer `just` (run `just` to list recipes). The Tauri CLI is the local
 ```
 just dev            # run the app (Vite + Tauri, hot reload)
 just build          # production bundle
+just dev-signed     # debug .app, stable signing identity, launches it (macOS)
+just build-signed   # release .app, stable signing identity (macOS)
+just install-signed # build-signed + copy to /Applications/Iris.app
 just check          # cargo check --workspace
 just test           # cargo test --workspace + frontend vitest
 just test-core      # iris-core tests only
@@ -1050,6 +1053,26 @@ production `pnpm build`. A stub `dist/` is created first so
 tagged GitHub Release (see _Versioning & CI_). `.github/workflows/
 integration.yml` runs the Docker SSH tests nightly and on demand
 (ubuntu, `libdbus-1-dev` for keyring's Linux backend).
+
+### macOS keychain prompt during development
+
+Iris keeps passwords and passphrases in the macOS keychain (`keyring`, service
+`iris`). `just dev` ad-hoc-signs the binary with a new identity on every
+rebuild, so macOS asks for keychain access again each run and "Always Allow"
+never sticks. Release builds signed with a stable identity don't have this.
+
+- `just dev-signed` builds and launches a debug `.app`, `just build-signed` a
+  release `.app` (`$CARGO_TARGET_DIR/release/bundle/macos/Iris.app`),
+  `just install-signed` also copies it to `/Applications/Iris.app`. All sign with
+  the identity in `src-tauri/tauri.dev-signed.conf.json`, applied only through
+  `--config`, so `just build` is unaffected. No hot reload: keep `just dev` for
+  iteration.
+- That file is **gitignored** (machine-specific). Create it with your identity
+  from `security find-identity -v -p codesigning`:
+  `{"$schema": "https://schema.tauri.app/config/2", "bundle": {"macOS": {"signingIdentity": "<identity name>"}}}`.
+  The recipes stop with a hint if it is missing.
+- The justfile exports `CARGO_TARGET_DIR` as the main checkout's `target/`, so
+  git worktrees share one build cache. CI doesn't use `just` and keeps `./target`.
 
 ## Conventions
 

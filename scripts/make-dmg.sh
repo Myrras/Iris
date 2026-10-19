@@ -16,8 +16,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # App name comes from tauri.conf.json's productName (this is what Tauri names
 # the .app and the .dmg), so this script stays generic across projects.
 APP_NAME="$(python3 -c "import json;print(json.load(open('$REPO_ROOT/src-tauri/tauri.conf.json'))['productName'])")"
-APP="$REPO_ROOT/target/release/bundle/macos/${APP_NAME}.app"
-OUT_DIR="$REPO_ROOT/target/release/bundle/dmg"
+# `just` exports CARGO_TARGET_DIR (shared across worktrees); CI leaves it unset.
+TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
+APP="$TARGET_DIR/release/bundle/macos/${APP_NAME}.app"
+OUT_DIR="$TARGET_DIR/release/bundle/dmg"
 
 if [[ ! -d "$APP" ]]; then
 	echo >&2 "error: $APP not found — run 'pnpm tauri build --bundles app' first."

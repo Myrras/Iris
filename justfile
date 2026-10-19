@@ -1,5 +1,13 @@
 # Iris — development tasks. Run `just` to see them.
 
+# Share one target/ across the main checkout and every git worktree. A fresh
+# worktree otherwise starts cold and rebuilds every dependency (minutes);
+# pointing it at the main checkout's target/ keeps them warm.
+# ponytail: cargo locks the target dir, so two builds in different worktrees
+# serialise instead of running in parallel — still far cheaper than a cold
+# rebuild. Falls back to ./target outside a git checkout.
+export CARGO_TARGET_DIR := `dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || echo "$PWD/.git")"` / "target"
+
 # Show available recipes.
 default:
     @just --list
@@ -17,6 +25,19 @@ build:
     ./scripts/make-dmg.sh
     @just sweep
 
+# Build + launch a debug .app signed with a STABLE certificate (macOS).
+# `just dev` ad-hoc-signs the binary with a fresh identity every rebuild, so the
+# keychain re-prompts each run and "Always Allow" never sticks. This recipe
+# keeps one signing identity across rebuilds, so a single "Always Allow"
+# persists. Tradeoff: runs a bundle, so there's NO hot reload — use `just dev`
+# for fast iteration and this when the keychain prompt is in your way.
+# Setup: see "macOS keychain prompt during development" in CLAUDE.md
+# (identity lives in the gitignored src-tauri/tauri.dev-signed.conf.json).
+dev-signed: _signed-conf
+    pnpm tauri build --debug --bundles app --config src-tauri/tauri.dev-signed.conf.json
+    @just sweep
+    open "$CARGO_TARGET_DIR/debug/bundle/macos/Iris.app"
+
 # Reclaim stale build artifacts (old dependency versions + other toolchains)
 # WITHOUT touching the current build, so `target/` stops growing without bound.
 # Runs automatically at the tail of `build`. No-op with a hint if cargo-sweep
@@ -26,6 +47,32 @@ sweep:
         && cargo sweep --installed >/dev/null && cargo sweep --time 7 >/dev/null \
         && echo "recycled stale target/ artifacts" \
         || echo "cargo-sweep not installed; skipping target/ recycle (cargo install cargo-sweep)"
+
+# Build a SIGNED release .app for personal install (macOS).
+# Reuses the stable signing identity in tauri.dev-signed.conf.json (that file
+# only sets bundle.macOS.signingIdentity, so it's equally valid for release).
+# A stable identity means macOS keychain "Always Allow" persists and the app
+# launches with no Gatekeeper prompt on this machine. Output:
+# target/release/bundle/macos/Iris.app. Install: drag it into /Applications,
+# or run `just install-signed`.
+# Only the .app is built (--bundles app): no .dmg for a personal install.
+build-signed: _signed-conf
+    pnpm install
+    pnpm tauri build --bundles app --config src-tauri/tauri.dev-signed.conf.json
+    @just sweep
+    open "$CARGO_TARGET_DIR/release/bundle/macos"
+
+# Build the signed release and copy it straight into /Applications.
+install-signed: build-signed
+    rm -rf "/Applications/Iris.app"
+    cp -R "$CARGO_TARGET_DIR/release/bundle/macos/Iris.app" "/Applications/Iris.app"
+    @echo "Installed → /Applications/Iris.app"
+
+# Guard for the signed recipes. The config is gitignored (it names *your*
+# machine's signing identity), so a fresh clone or git worktree does not have it
+# and tauri would fail with an opaque config error instead.
+_signed-conf:
+    @test -f src-tauri/tauri.dev-signed.conf.json || { echo "error: src-tauri/tauri.dev-signed.conf.json is missing."; echo "It is gitignored (machine-specific signing identity), so copy it from another checkout of this repo, or create it per 'macOS keychain prompt during development' in CLAUDE.md."; echo "Your identities: security find-identity -v -p codesigning"; exit 1; }
 
 # Regenerate the app icons from src-tauri/icons/source/iris.svg (needs
 # rsvg-convert: `brew install librsvg`). Only the desktop icons are kept.
