@@ -4,6 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../lib/exportTransfers", () => ({
   exportTransfers: vi.fn(() => Promise.resolve(true)),
 }));
+vi.mock("../lib/openLocal", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/openLocal")>()),
+  revealLocalPath: vi.fn(() => Promise.resolve(true)),
+}));
 vi.mock("../ipc/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/commands")>()),
   cancelTransfer: vi.fn(() => Promise.resolve()),
@@ -23,8 +27,11 @@ import {
 } from "../ipc/commands";
 import type { BatchInfo, TransferJob } from "../ipc/types";
 import { exportTransfers } from "../lib/exportTransfers";
+import { revealLocalPath } from "../lib/openLocal";
 import { summaryText, transferTotals } from "../lib/transferFormat";
 import { useLayoutStore } from "../state/layoutStore";
+import { useProfilesStore } from "../state/profilesStore";
+import { useSessionStore } from "../state/sessionStore";
 import {
   EMPTY_SUMMARY,
   resetTransferResync,
@@ -87,6 +94,29 @@ beforeEach(() => {
   useLayoutStore.setState({ transfersCollapsed: false });
   setJobs([]);
   useTransferStore.setState({ batches: [], summary: EMPTY_SUMMARY });
+  useProfilesStore.setState({
+    profiles: [
+      {
+        id: "p-1",
+        name: "Web server",
+        host: "web.example.test",
+        port: 22,
+        user: "deploy",
+        auth: { kind: "agent" },
+        startDir: null,
+        jump: null,
+      },
+    ],
+  });
+  useSessionStore.setState({
+    sessions: {
+      "s-1": {
+        sessionId: "s-1",
+        profileId: "p-1",
+        state: { status: "connected" },
+      },
+    },
+  });
 });
 
 describe("TransferPanel", () => {
@@ -272,5 +302,118 @@ describe("TransferPanel", () => {
     expect(summaryText(transferTotals(jobs, {}), jobs.length)).toBe(
       "1 done · 1 failed · 1 skipped or cancelled",
     );
+  });
+
+  describe("paths", () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    beforeEach(() => {
+      writeText.mockClear();
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+      });
+    });
+
+    function pathsLine(name: string) {
+      const row = screen.getByRole("listitem", { name });
+      return row.querySelector<HTMLElement>("[data-paths] > span:last-child")!;
+    }
+
+    it("shows the folders for an upload, Local first", () => {
+      setJobs([
+        job("a", {
+          src: "/Users/me/project/src/a.txt",
+          dst: "/var/www/site/src/a.txt",
+        }),
+      ]);
+      render(<TransferPanel />);
+      expect(pathsLine("a.txt")).toHaveTextContent(
+        "Local: /Users/me/project/src → web.example.test: /var/www/site/src",
+      );
+    });
+
+    it("shows the folders for a download, the connection first", () => {
+      setJobs([
+        job("a", {
+          direction: "download",
+          src: "/var/www/site/a.txt",
+          dst: "/Users/me/dl/a.txt",
+        }),
+      ]);
+      render(<TransferPanel />);
+      expect(pathsLine("a.txt")).toHaveTextContent(
+        "web.example.test: /var/www/site → Local: /Users/me/dl",
+      );
+    });
+
+    it("cuts long folders in the middle", () => {
+      const deep = "/Users/me/" + "very-long-folder/".repeat(8) + "last";
+      setJobs([job("a", { src: `${deep}/a.txt`, dst: "/srv/a.txt" })]);
+      render(<TransferPanel />);
+      const text = pathsLine("a.txt").textContent ?? "";
+      expect(text).toContain("…");
+      expect(text).toContain("/Users/me");
+      expect(text).toContain("/last");
+    });
+
+    it("carries both full paths in the tooltip", () => {
+      setJobs([job("a", { src: "/Users/me/p/a.txt", dst: "/srv/x/a.txt" })]);
+      render(<TransferPanel />);
+      expect(pathsLine("a.txt")).toHaveAttribute(
+        "title",
+        "Local: /Users/me/p/a.txt → web.example.test: /srv/x/a.txt",
+      );
+    });
+
+    it("copies the source and destination paths", () => {
+      setJobs([job("a", { src: "/Users/me/p/a.txt", dst: "/srv/x/a.txt" })]);
+      render(<TransferPanel />);
+      fireEvent.contextMenu(screen.getByRole("listitem", { name: "a.txt" }));
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Copy Source Path" }),
+      );
+      expect(writeText).toHaveBeenLastCalledWith("/Users/me/p/a.txt");
+
+      fireEvent.contextMenu(screen.getByRole("listitem", { name: "a.txt" }));
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Copy Destination Path" }),
+      );
+      expect(writeText).toHaveBeenLastCalledWith("/srv/x/a.txt");
+    });
+
+    it("offers reveal only for the local side", () => {
+      setJobs([
+        job("up", { src: "/Users/me/up.txt", dst: "/srv/up.txt" }),
+        job("down", {
+          direction: "download",
+          src: "/srv/down.txt",
+          dst: "/Users/me/down.txt",
+          state: "done",
+          bytesDone: 2048,
+        }),
+      ]);
+      render(<TransferPanel />);
+      fireEvent.contextMenu(screen.getByRole("listitem", { name: "up.txt" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: /^Show in / }));
+      expect(revealLocalPath).toHaveBeenLastCalledWith("/Users/me/up.txt");
+
+      fireEvent.contextMenu(screen.getByRole("listitem", { name: "down.txt" }));
+      fireEvent.click(screen.getByRole("menuitem", { name: /^Show in / }));
+      expect(revealLocalPath).toHaveBeenLastCalledWith("/Users/me/down.txt");
+      expect(revealLocalPath).not.toHaveBeenCalledWith("/srv/up.txt");
+      expect(revealLocalPath).not.toHaveBeenCalledWith("/srv/down.txt");
+    });
+
+    it("keeps a failed row's error visible", () => {
+      setJobs([
+        job("c", {
+          state: "failed",
+          error: { kind: "permissionDenied", message: "Permission denied" },
+        }),
+      ]);
+      render(<TransferPanel />);
+      expect(pathsLine("c.txt")).toHaveTextContent("Permission denied");
+      expect(pathsLine("c.txt").title).toContain("/home/alice/c.txt");
+    });
   });
 });

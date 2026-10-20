@@ -11,6 +11,7 @@ when it merges.
 
 ## [Unreleased]
 
+- The transfer list shows where each file comes from and goes to ("Local: /folder → host: /folder", long paths cut in the middle, full paths on hover), with Copy Source Path, Copy Destination Path and Show in Finder in the row's right-click menu.
 - Row hover highlight is hidden while you use the keyboard (typing, arrows) until
   the pointer moves again, as in Finder.
 - Sync only files changed within a time window: "Only files changed in" (last

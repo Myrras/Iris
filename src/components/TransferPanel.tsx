@@ -6,9 +6,13 @@
  * indeterminately), else "12 of 340 files · 3.1 MB of 56 MB · 1.5 MB/s ·
  * ~0:42" — Cancel all, Clear finished and Export CSV…, and a total progress bar
  * underneath whose total is fixed once a batch is counted. Body: one row per job (Podium's ProcessRow look), with
- * direction, file name (full paths in the tooltip), progress, bytes, speed,
- * a `StatusDot` + state (a failure's reason in its tooltip), a cancel
- * button while it is unfinished and a retry button once it failed. A folder
+ * direction, file name with a muted second line "Local: /from/folder →
+ * host: /to/folder" (folders only, cut in the middle by `lib/pathEllipsis`
+ * to what the column fits; a failed row shows its error there instead; both
+ * full paths in the tooltip), progress, bytes, speed, a `StatusDot` + state,
+ * a cancel button while it is unfinished and a retry button once it failed.
+ * Right-click a row: copy either path, show the local one in the file
+ * manager. A folder
  * that could not be listed or made is a placeholder row (folder icon)
  * until retrying lists it into file rows. The list is virtualised, so a folder of
  * thousands of files stays cheap.
@@ -18,13 +22,15 @@
  * collapse state persists via `layoutStore`; a new batch opens the panel.
  */
 
-import { memo, useMemo, useRef } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import type { TransferJob } from "../ipc/types";
 import { exportTransfers } from "../lib/exportTransfers";
 import { formatSize } from "../lib/fileFormat";
-import { baseName } from "../lib/path";
+import { fileManagerName, revealLocalPath } from "../lib/openLocal";
+import { baseName, parentPath } from "../lib/path";
+import { charsThatFit, ellipsizePath } from "../lib/pathEllipsis";
 import {
   countingText,
   formatSpeed,
@@ -35,11 +41,15 @@ import {
   transferTotals,
 } from "../lib/transferFormat";
 import { useLayoutStore } from "../state/layoutStore";
+import { useProfilesStore } from "../state/profilesStore";
+import { useSessionStore } from "../state/sessionStore";
+import { toastError, toastSuccess } from "../state/toastStore";
 import {
   countingBatches,
   orderedJobs,
   useTransferStore,
 } from "../state/transferStore";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { ProgressBar } from "./ProgressBar";
 import { StatusDot } from "./StatusDot";
 import {
@@ -53,7 +63,33 @@ import {
 } from "./icons";
 import styles from "./TransferPanel.module.css";
 
-const ROW_HEIGHT = 28;
+/** Two lines: the name and the muted paths (or error) line. */
+const ROW_HEIGHT = 40;
+/** Characters of path shown before the list has been measured. */
+const DEFAULT_PATH_CHARS = 120;
+
+/** The folder a job's path lives in (a folder placeholder is its own). */
+function folderOf(path: string, isFolder: boolean): string {
+  return isFolder ? path : (parentPath(path) ?? path);
+}
+
+/** "Local" or the connection's host, for the session a job belongs to. */
+function useRemoteLabel(sessionId: string): string {
+  const profileId = useSessionStore((s) => s.sessions[sessionId]?.profileId);
+  const host = useProfilesStore(
+    (s) => s.profiles.find((p) => p.id === profileId)?.host,
+  );
+  return host ?? "Remote";
+}
+
+async function copyPath(path: string, what: string) {
+  try {
+    await navigator.clipboard.writeText(path);
+    toastSuccess(`${what} path copied`);
+  } catch {
+    toastError(`Could not copy the ${what.toLowerCase()} path`);
+  }
+}
 
 function barTone(job: TransferJob): "active" | "done" | "error" | "muted" {
   if (job.state === "done") return "done";
@@ -65,10 +101,15 @@ function barTone(job: TransferJob): "active" | "done" | "error" | "muted" {
 const JobRow = memo(function JobRow({
   job,
   speed,
+  pathChars,
+  onMenu,
 }: {
   job: TransferJob;
   speed: number;
+  pathChars: number;
+  onMenu: (job: TransferJob, x: number, y: number) => void;
 }) {
+  const remote = useRemoteLabel(job.sessionId);
   const name = baseName(job.src);
   const final = isFinal(job.state);
   const label = stateLabel(job.state);
@@ -76,6 +117,16 @@ const JobRow = memo(function JobRow({
   const Direction = job.direction === "upload" ? UploadIcon : DownloadIcon;
   const fraction =
     job.size > 0 ? job.bytesDone / job.size : job.state === "done" ? 1 : 0;
+  const upload = job.direction === "upload";
+  const srcLabel = upload ? "Local" : remote;
+  const dstLabel = upload ? remote : "Local";
+  const srcDir = folderOf(job.src, job.folder);
+  const dstDir = folderOf(job.dst, job.folder);
+  // Both sides share the line: what is left after the labels, split in two.
+  const overhead = srcLabel.length + dstLabel.length + 7; // ": " ×2, " → "
+  const sideChars = Math.max(8, Math.floor((pathChars - overhead) / 2));
+  const pathsLine = `${srcLabel}: ${ellipsizePath(srcDir, sideChars)} → ${dstLabel}: ${ellipsizePath(dstDir, sideChars)}`;
+  const fullPaths = `${srcLabel}: ${job.src} → ${dstLabel}: ${job.dst}`;
   const bytes = job.folder
     ? "folder"
     : job.state === "done" || job.bytesDone === 0
@@ -88,6 +139,10 @@ const JobRow = memo(function JobRow({
       role="listitem"
       aria-label={name}
       data-state={job.state}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu(job, e.clientX, e.clientY);
+      }}
     >
       <Direction
         className={styles.direction}
@@ -95,17 +150,33 @@ const JobRow = memo(function JobRow({
         aria-hidden={false}
         role="img"
       />
-      <span className={styles.name} title={`${job.src} → ${job.dst}`}>
-        {job.folder && (
-          <FolderIcon
-            className={styles.folder}
-            aria-label="Folder, not listed yet"
-            aria-hidden={false}
-            role="img"
-          />
+      <div className={styles.text} data-paths>
+        <span className={styles.name} title={`${job.src} → ${job.dst}`}>
+          {job.folder && (
+            <FolderIcon
+              className={styles.folder}
+              aria-label="Folder, not listed yet"
+              aria-hidden={false}
+              role="img"
+            />
+          )}
+          {name}
+        </span>
+        {reason && job.state === "failed" ? (
+          // The error replaces the paths (still in the tooltip) so a failed
+          // row stays two lines tall.
+          <span
+            className={`${styles.paths} ${styles.error}`}
+            title={`${reason}\n${fullPaths}`}
+          >
+            {reason}
+          </span>
+        ) : (
+          <span className={styles.paths} title={fullPaths}>
+            {pathsLine}
+          </span>
         )}
-        {name}
-      </span>
+      </div>
       <ProgressBar
         fraction={fraction}
         label={`${name} progress`}
@@ -158,6 +229,31 @@ function JobList({
   speeds: Record<string, number>;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [pathChars, setPathChars] = useState(DEFAULT_PATH_CHARS);
+  const [menu, setMenu] = useState<{
+    job: TransferJob;
+    x: number;
+    y: number;
+  } | null>(null);
+  const hasJobs = jobs.length > 0;
+
+  // Fit the paths: measure the text column of the first rendered row (all
+  // rows share the grid) and convert its width to characters. Re-measured
+  // whenever the list resizes. jsdom has no layout (width 0): keep the default.
+  useEffect(() => {
+    const list = scrollRef.current;
+    if (!list || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const column = list.querySelector<HTMLElement>("[data-paths]");
+      const width = column?.clientWidth ?? 0;
+      if (width > 0) setPathChars(charsThatFit(width));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [hasJobs]);
+
   const virtualizer = useVirtualizer({
     count: jobs.length,
     getScrollElement: () => scrollRef.current,
@@ -182,13 +278,47 @@ function JobList({
                 height: vr.size,
               }}
             >
-              <JobRow job={job} speed={speeds[job.id] ?? 0} />
+              <JobRow
+                job={job}
+                speed={speeds[job.id] ?? 0}
+                pathChars={pathChars}
+                onMenu={(j, x, y) => setMenu({ job: j, x, y })}
+              />
             </div>
           );
         })}
       </div>
+      <ContextMenu
+        open={menu !== null}
+        x={menu?.x ?? 0}
+        y={menu?.y ?? 0}
+        items={menu ? menuItems(menu.job) : []}
+        onClose={() => setMenu(null)}
+      />
     </div>
   );
+}
+
+/** Copy actions for both paths; reveal only for the side that is local. */
+function menuItems(job: TransferJob): ContextMenuItem[] {
+  const items: ContextMenuItem[] = [
+    {
+      label: "Copy Source Path",
+      onSelect: () => void copyPath(job.src, "Source"),
+    },
+    {
+      label: "Copy Destination Path",
+      onSelect: () => void copyPath(job.dst, "Destination"),
+    },
+  ];
+  const upload = job.direction === "upload";
+  items.push({
+    label: `Show in ${fileManagerName}`,
+    onSelect: () => void revealLocalPath(upload ? job.src : job.dst),
+    // A download's local copy exists once it has started writing.
+    disabled: !upload && job.bytesDone === 0 && job.state !== "done",
+  });
+  return items;
 }
 
 export function TransferPanel() {

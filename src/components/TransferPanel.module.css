@@ -189,6 +189,27 @@
   color: var(--text-faint);
 }
 
+/* Name over the muted paths line. */
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.paths {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.error {
+  color: var(--danger);
+}
+
 .name {
   min-width: 0;
   overflow: hidden;
