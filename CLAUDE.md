@@ -217,8 +217,8 @@ standalone template:
     from the right edge when `lib/previewReveal.looksPreviewable` (listing-only
     guess: image ext within the cap, known text ext, extensionless/dot file,
     non-empty; no remote read while closed) or when the pointer is within
-    `EDGE_REVEAL_PX` of the edge, lingering `HANDLE_HIDE_DELAY_MS`) at a fixed
-    `--preview-w` whatever it shows,
+    `EDGE_REVEAL_PX` of the edge, lingering `HANDLE_HIDE_DELAY_MS`) at the
+    stored `--preview-w` (resizable, see *Resizable islands*) whatever it shows,
     debounced 120ms, size cap from `settingsStore.preview.maxSizeMb`.
     Tests: `tests/remote.rs` covers mkdir/rename/delete/chmod/preview over
     SFTP (the `support/` server now serves open/read/mkdir/rmdir/remove/
@@ -842,6 +842,50 @@ standalone template:
   so each repeats the whole `windows[0]` object. The window-state plugin is
   registered without `StateFlags::DECORATIONS`, otherwise its restore
   overrides the platform config's decorations.
+- ✅ **Resizable islands** (`components/Splitter.tsx`, `components/Shell.tsx`,
+  pure rules in `lib/resize.ts`, `lib/useShellLayout.ts`). `Shell` (the body
+  under the title bar) holds the sidebar, tab strip, panes, preview and
+  transfers with a `Splitter` in every canvas gap (`--gap-island`, so the
+  containers have no flex gap of their own). Four sizes, stored in
+  `layoutStore` (`iris.layout`; an old layout is merged over the defaults):
+  - **Sidebar** width: default 280, 160–600 (`setSidebarWidth`).
+  - **Local | Remote** split: `panesRatio` (Local's share), default 0.5, each
+    pane ≥ `PANE_MIN_PX` 280 (stored ratio clamped to 0.05–0.95; the window
+    makes the real limit). The panes are wrapped in slots sized by the
+    flex-grow weights `--pane-local-grow` / `--pane-remote-grow` (sum 1000),
+    so a window resize keeps the ratio natively.
+  - **Preview** width: default 340, min 240, max 50% of the window; the
+    splitter exists only while the preview is open, closed = no space and no
+    gap, and the stored width comes back on reopen.
+  - **Transfers** list height (`--transfers-list-h`, the header comes on
+    top): default 168, min 56 (two rows), the whole island at most 60% of
+    the window. Collapsed = header only and the handle is just a gap.
+  Stored values are *preferences*: `resolveLayout(prefs, viewport)` clamps
+  them to the window on every resize (coalesced per frame) and never writes
+  back, so a bigger window gives the chosen sizes back. Priority when short
+  of room: the sidebar gives way first (down to 160), then the preview (down
+  to 240), the panes never go below 280 each. At the default 1100 px window
+  with the preview open the sidebar is therefore drawn at 160. `layoutVars`
+  turns the result into `--sidebar-w`, `--preview-w`, the pane weights and
+  `--transfers-list-h`, written on the `Shell` container; `Sidebar`,
+  `PreviewPanel` and `TransferPanel` only read the variables (the tokens in
+  `tokens.css` are the defaults). `GAP_PX` / `PANE_MIN_PX` / `TRANSFERS_HEADER_PX`
+  in `lib/resize.ts` mirror CSS tokens: keep them in sync.
+  - `Splitter`: `role="separator"` with `aria-orientation` and
+    `aria-valuenow/min/max`; pointer events with pointer capture (HTML5 DnD
+    is taken by `dragDropEnabled`); `html[data-resizing="col|row"]` while the
+    button is down (no selection incl. `-webkit-user-select`, fixed cursor,
+    no row/handle hover, like `data-dragging`). `onResize` fires once per
+    animation frame and only writes CSS variables (`useShellLayout.draft`:
+    no React render, no store); the store is written on release (`onCommit`).
+    Escape cancels a drag. Keys: arrows 16 px, Shift+arrows 64 px, Home/End =
+    min/max (`keyboardTarget`; arrows follow the handle, `invert` for the
+    preview and transfers whose handle sits on their start edge);
+    double-click resets to the default. Only the handle's accent line
+    animates (`--dur-1`, covered by the global reduced-motion guard).
+  - Tests: `lib/resize.test.ts`, `Splitter.test.tsx` (jsdom has no
+    `PointerEvent`: `src/test/pointer.ts` stubs it), `Shell.test.tsx` (children
+    mocked), `layoutStore.test.ts`. Check by hand: dragging feel in WKWebView.
 - ✅ **Close guard**: `CloseRequested` (red button) and `ExitRequested`
   (Cmd+Q) are blocked while `Core::has_active_work()` (any queued, running,
   needsDecision or paused transfer, or an edit save not on the server yet); the webview gets
@@ -862,7 +906,7 @@ standalone template:
   editor ⌘E, Show in Finder ⌥⌘R, Toggle preview ⌥⌘P (+ Space), New / Close /
   Next / Previous tab ⌘T / ⌘W / ⇧⌘] / ⇧⌘[, Open Settings ⌘, (non-macOS only:
   macOS keeps the native menu). Fixed (`RESERVED`, refused by the recorder):
-  Enter, Space, arrows, F5, ⌘O / ⌘↓ / ⌘↑, ⌘A / C / V / X / Z, ⌘1–9, Escape,
+  Enter, Space, arrows, F5, ⌘O / ⌘↓ / ⌘↑, ⌥⌘↑ / ⌥⌘↓ (move a connection), ⌘A / C / V / X / Z, ⌘1–9, Escape,
   macOS ⌘Q / H / M. `isBrowserShortcut` (F5, ⌘/Ctrl+R, P, F, G, S) is
   `preventDefault`ed in `useTabShortcuts` everywhere, bound or not, so the
   webview never reloads or prints. Settings → **Shortcuts** (`ShortcutsTab`):
@@ -870,6 +914,24 @@ standalone template:
   "Swap them" offer, per-row Reset and Reset all. Add an action: an entry in
   `ACTIONS`, a case in `Pane.runAction` (or `useTabShortcuts`), its hint
   where it has a button or menu item (`withHint` / `shortcutHint`).
+
+- ✅ **Reorderable connections.** `profiles.json`'s array order is the sidebar
+  order (`list_profiles` never sorts; new profiles go last, a save keeps its
+  place, a delete keeps the rest). `Core::reorder_profiles(ids)` /
+  `ProfileStore::reorder` take a permutation of **all** current ids (unknown,
+  missing or repeated = `invalidInput`, nothing changes), write atomically and
+  emit `profiles:changed`. IPC `reorder_profiles(ids)`. UI: `profilesStore.reorder`
+  applies the order locally, sends it, then re-reads; a refusal toasts and
+  restores the backend's order (it never rejects; only the latest of several
+  quick reorders reverts or refreshes). Drag a row (`lib/rowReorder`: mouse
+  events, 4px threshold, insertion line on the list item's edge, auto-scroll
+  near the scroll area's edge, Escape cancels and the release does not
+  connect; sets `html[data-dragging="reorder"]` for the no-select / no-sticky
+  hover gate); a press without moving is still a click. ⌥⌘↑ / ⌥⌘↓ (Ctrl+Alt)
+  on a focused row and the menu's Move Up / Move Down do the same step. These
+  keys are **not** a keymap action (the `pane` / `app` scopes have no "focused
+  sidebar row"): `ConnectionRow` handles them via `keymap.connectionMoveOf`,
+  and they are in `RESERVED` so the recorder refuses them.
 
 ## Tech stack
 
@@ -965,14 +1027,16 @@ src-tauri/src/
               # (prepare/cancel/finish_drag_out), sync.rs (plan_sync/run_sync/
               # discard_sync_plan), window.rs
 src/
-  App.tsx     # the shell: title bar, sidebar, tab bar, Local/Remote panes,
-              # preview, transfers
+  App.tsx     # the app: title bar, app-level wiring, dialogs; `Shell` below it
+              # (sidebar, tab bar, Local/Remote panes, preview, transfers, and
+              # the splitters between them)
   components/ # Sidebar + ConnectionSidebar/ConnectionRow, ConnectionForm,
               # PromptHost (SecretPrompt, HostKeyDialog, ConflictDialog,
               # EditConflictDialog),
               # Pane + Breadcrumb + GoToField + FileTable, ContextMenu,
               # DeleteConfirmModal,
               # ChmodDialog, PreviewPanel, TransferPanel + ProgressBar,
+              # Shell + Splitter (resizable islands),
               # DragGhost, SyncDialog, WelcomeScreen, Modal, TabBar, TabCloseModal,
               # Toasts, SettingsModal, CloseWarningModal, WindowControls,
               # StatusDot, LogoMark, icons (lucide wrapper; import from here)
@@ -991,7 +1055,8 @@ src/
               # out, remote preparation), downloadTo (folder picker),
               # transfer (pane → request), pure rules (entries, selection,
               # path, goToPath, fileFormat, fileName, mode, dateFormat,
-              # transferFormat, connectionForm), log, motion, platform
+              # transferFormat, connectionForm, resize), useShellLayout,
+              # log, motion, platform
   assets/     # drag-icon.png (the OS drag image)
   styles/     # tokens.css (design tokens) + global.css (resets/primitives)
   test/       # Vitest setup + stubViewport (jsdom has no layout)

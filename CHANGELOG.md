@@ -11,6 +11,12 @@ when it merges.
 
 ## [Unreleased]
 
+- Connections can be reordered: drag a connection up or down in the sidebar (Escape
+  cancels), press ⌥⌘↑ / ⌥⌘↓ (Ctrl+Alt+↑ / ↓) on a focused one, or use Move Up /
+  Move Down in its menu. The order is kept.
+- The islands are resizable: drag the gaps between the sidebar, the Local and
+  Remote panes, the preview and the transfers (or use the arrow keys, Shift for
+  bigger steps, Home/End; double-click resets). Sizes are remembered.
 - The transfer list shows where each file comes from and goes to ("Local: /folder → host: /folder", long paths cut in the middle, full paths on hover), with Copy Source Path, Copy Destination Path and Show in Finder in the row's right-click menu.
 - Row hover highlight is hidden while you use the keyboard (typing, arrows) until
   the pointer moves again, as in Finder.

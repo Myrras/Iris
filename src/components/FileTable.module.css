@@ -89,8 +89,12 @@
 
 /* Not while dragging: WebKit does not refresh :hover with the button held, so
    it would stick to rows; only the drop target lights up then. Nor while the
-   keyboard drives (Finder): the cursor row is the highlight, not the pointer. */
-:where(html:not([data-dragging]) .scroll:not([data-keyboard="true"]))
+   keyboard drives (Finder): the cursor row is the highlight, not the pointer.
+   Nor while an island is being resized (`data-resizing`). */
+:where(
+    html:not([data-dragging]):not([data-resizing])
+      .scroll:not([data-keyboard="true"])
+  )
   .row:hover {
   background: var(--surface-hover);
 }

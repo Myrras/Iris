@@ -4,6 +4,8 @@
 /* A floating island: rounded, bordered, elevated; clips its sections. */
 .sidebar {
   height: 100%;
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-w);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);

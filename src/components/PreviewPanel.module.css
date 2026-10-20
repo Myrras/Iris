@@ -1,6 +1,7 @@
 /* The preview island: same chrome as the panes. */
 .panel {
-  /* Fixed width (and the row's height): content scrolls or fits inside. */
+  /* One width, whatever it shows (the stored width, set by Shell), and the
+     row's height: content scrolls or fits inside. */
   flex: 0 0 var(--preview-w);
   width: var(--preview-w);
   min-width: var(--preview-w);

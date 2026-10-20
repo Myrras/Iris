@@ -277,3 +277,22 @@ html[data-dragging] * {
   -webkit-user-select: none !important;
   user-select: none !important;
 }
+
+/* While an island is being resized (`components/Splitter` sets the attribute)
+   nothing may select, and the resize cursor stays whatever the pointer is
+   over. The `-webkit-` prefix is for WKWebView. */
+html[data-resizing],
+html[data-resizing] * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+html[data-resizing="col"],
+html[data-resizing="col"] * {
+  cursor: col-resize !important;
+}
+
+html[data-resizing="row"],
+html[data-resizing="row"] * {
+  cursor: row-resize !important;
+}

@@ -1,11 +1,12 @@
 /**
  * Iris — application shell (Podium's island layout).
  *
- * Layout: a slim title bar on the canvas; below it the sidebar island on the
- * left and the work column on the right — the Local and Remote pane islands
- * side by side with the collapsible preview island at their right, and the
- * collapsible transfer island underneath, with the tab strip above the
- * panes (each tab its own pane pair and session, `tabsStore`). This
+ * Layout: a slim title bar on the canvas; below it `Shell` — the sidebar
+ * island on the left and the work column on the right (the Local and Remote
+ * pane islands side by side with the collapsible preview island at their
+ * right, the collapsible transfer island underneath, the tab strip above the
+ * panes; each tab its own pane pair and session, `tabsStore`), with
+ * splitters between the islands. This
  * component also owns the app-level wiring: the backend events
  * (`useCoreEvents`), files dragged in from the OS (`useNativeDrop`), the
  * pane-drag chip (`DragGhost`), the Sync dialog (`SyncDialog`), opening
@@ -23,25 +24,20 @@ import { useCoreEvents } from "./lib/useCoreEvents";
 import { useKeymap } from "./lib/useKeymap";
 import { useNativeDrop } from "./lib/useNativeDrop";
 import { useTabShortcuts } from "./lib/useTabShortcuts";
-import { useLayoutStore } from "./state/layoutStore";
 import { useTabsStore } from "./state/tabsStore";
 import { useSettingsRequestStore } from "./state/settingsRequestStore";
 import { CloseWarningModal } from "./components/CloseWarningModal";
 import { ConnectionForm } from "./components/ConnectionForm";
 import { DragGhost } from "./components/DragGhost";
 import { LogoMark } from "./components/LogoMark";
-import { Pane } from "./components/Pane";
-import { PreviewPanel } from "./components/PreviewPanel";
 import { PromptHost } from "./components/PromptHost";
 import { SettingsModal } from "./components/SettingsModal";
+import { Shell } from "./components/Shell";
 import { SyncDialog } from "./components/SyncDialog";
-import { Sidebar } from "./components/Sidebar";
-import { TabBar } from "./components/TabBar";
 import { TabCloseModal } from "./components/TabCloseModal";
 import { Toasts } from "./components/Toasts";
-import { TransferPanel } from "./components/TransferPanel";
 import { WindowControls } from "./components/WindowControls";
-import { LocalIcon, ServerIcon, SettingsIcon } from "./components/icons";
+import { SettingsIcon } from "./components/icons";
 import styles from "./App.module.css";
 
 export default function App() {
@@ -65,9 +61,6 @@ export default function App() {
   }, [settingsRequest]);
   const [closeWarnOpen, setCloseWarnOpen] = useState(false);
 
-  const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
-  const setSidebarWidth = useLayoutStore((s) => s.setSidebarWidth);
-
   // The backend blocked a quit because work is still in flight — surface the
   // warning so the user can confirm or cancel.
   useEffect(() => {
@@ -76,26 +69,6 @@ export default function App() {
       sub.then((unlisten) => unlisten()).catch(() => undefined);
     };
   }, []);
-
-  const onSidebarResizerDown = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startW = sidebarWidth;
-      function onMove(ev: MouseEvent) {
-        setSidebarWidth(startW + (ev.clientX - startX));
-      }
-      function onUp() {
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-        document.body.style.cursor = "";
-      }
-      document.body.style.cursor = "col-resize";
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
-    },
-    [sidebarWidth, setSidebarWidth],
-  );
 
   // Suppress the webview's default right-click menu (the browser-y "Save as /
   // Print / Share" items, most glaring on Windows' WebView2). Kept inside
@@ -163,25 +136,7 @@ export default function App() {
         </div>
       </header>
 
-      <div className={styles.body}>
-        <Sidebar />
-        <div
-          className={styles.sidebarResizer}
-          onMouseDown={onSidebarResizerDown}
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize sidebar"
-        />
-        <main className={styles.work}>
-          <TabBar />
-          <div className={styles.panes}>
-            <Pane id="local" title="Local" Icon={LocalIcon} />
-            <Pane id="remote" title="Remote" Icon={ServerIcon} />
-            <PreviewPanel />
-          </div>
-          <TransferPanel />
-        </main>
-      </div>
+      <Shell />
 
       <Toasts />
       <DragGhost />

@@ -96,10 +96,13 @@
   --dur-4: 360ms; /* slow: large or emphasis transitions */
 
   /* Layout constants */
+  /* Sizes of the resizable islands: defaults only. The shell overrides them on
+     its container from the stored layout (`lib/resize`, `useShellLayout`). */
   --sidebar-w: 280px;
+  --pane-min-w: 280px; /* a pane island's minimum; mirrors PANE_MIN_PX */
   --tabbar-h: 38px;
   --statusbar-h: 28px;
-  --preview-w: 340px; /* the preview island: fixed, whatever it shows */
+  --preview-w: 340px; /* the preview island: one width, whatever it shows */
   --checker-size: 16px; /* image preview checkerboard tile */
   --transfers-list-h: 168px; /* the transfer island's job list */
   --sync-list-h: 200px; /* one group's item list in the Sync dialog */

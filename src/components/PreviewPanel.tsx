@@ -3,8 +3,8 @@
  * toolbar toggles it). It follows the focused entry of the active pane: text
  * in monospace (the start only for large files, with a notice), images fitted
  * on a checkerboard, and a short note for folders, binary files and images
- * over the size limit. Always open at a fixed width (`--preview-w`) until the
- * user closes it (`layoutStore.previewOpen`, persisted). Closed, it takes no
+ * over the size limit. Always open at one width (`--preview-w`, the user's
+ * stored width, set by `Shell`) until the user closes it (`layoutStore.previewOpen`, persisted). Closed, it takes no
  * space at all: a small handle slides in from the window's right edge (it
  * overlays the layout) when the focused file looks previewable or the pointer
  * is at that edge, and reopens the island.

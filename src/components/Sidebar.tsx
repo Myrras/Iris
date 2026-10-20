@@ -1,24 +1,19 @@
 /**
  * The left sidebar island: the Connections section and, pinned below it, the
- * "New connection…" button.
+ * "New connection…" button. Its width is the `--sidebar-w` variable the shell
+ * sets from `layoutStore` (see `Shell`, `Splitter`).
  */
 
 import { useConnectionFormStore } from "../state/connectionFormStore";
-import { useLayoutStore } from "../state/layoutStore";
 import { ConnectionSidebar } from "./ConnectionSidebar";
 import { AddIcon } from "./icons";
 import styles from "./Sidebar.module.css";
 
 export function Sidebar() {
-  const sidebarWidth = useLayoutStore((s) => s.sidebarWidth);
   const openNew = useConnectionFormStore((s) => s.openNew);
 
   return (
-    <aside
-      className={styles.sidebar}
-      style={{ width: sidebarWidth, minWidth: sidebarWidth }}
-      aria-label="Sidebar"
-    >
+    <aside className={styles.sidebar} aria-label="Sidebar">
       <div className={styles.groups}>
         <ConnectionSidebar />
       </div>
