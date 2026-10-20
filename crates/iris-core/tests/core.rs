@@ -40,6 +40,53 @@ fn invalid_settings_are_rejected() {
     ));
 }
 
+#[test]
+fn reordered_connections_persist_and_announce() {
+    use iris_core::{AuthMethod, ConnectionProfile, ProfileId};
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("profiles.json");
+    let core = Core::new();
+    core.set_profiles_path(file.clone());
+    let save = |name: &str| {
+        core.save_profile(ConnectionProfile {
+            id: ProfileId::new(),
+            name: name.into(),
+            host: "sftp.example.test".into(),
+            port: 22,
+            user: "demo".into(),
+            auth: AuthMethod::Agent,
+            start_dir: None,
+            jump: None,
+        })
+        .unwrap()
+    };
+    let (a, b, c) = (save("A"), save("B"), save("C"));
+    let names = |core: &Core| {
+        core.list_profiles()
+            .into_iter()
+            .map(|p| p.name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&core), ["A", "B", "C"]);
+
+    let mut rx = core.subscribe_events();
+    core.reorder_profiles(vec![c.id, a.id, b.id]).unwrap();
+    assert_eq!(rx.try_recv().unwrap(), CoreEvent::ProfilesChanged);
+    assert_eq!(names(&core), ["C", "A", "B"]);
+
+    // A refused list changes nothing and announces nothing.
+    assert!(matches!(
+        core.reorder_profiles(vec![a.id, b.id]),
+        Err(CoreError::InvalidInput(_))
+    ));
+    assert!(rx.try_recv().is_err());
+
+    let restarted = Core::new();
+    restarted.set_profiles_path(file);
+    assert_eq!(names(&restarted), ["C", "A", "B"]);
+}
+
 // -- Local file operations ------------------------------------------------------
 
 mod local_ops {

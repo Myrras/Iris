@@ -8,6 +8,7 @@
 //! does not silently lose every saved connection on the next save) and the
 //! list starts empty.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -21,7 +22,8 @@ use crate::persist::write_json_atomic;
 const LOCK_POISONED: &str = "profile store lock poisoned";
 
 /// The persisted document. A wrapper object (not a bare array) so later
-/// versions can add top-level fields.
+/// versions can add top-level fields. The array order **is** the order the
+/// connections are shown in (see [`ProfileStore::reorder`]).
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct ProfilesFile {
@@ -34,7 +36,9 @@ struct Inner {
 }
 
 /// Thread-safe live copy of the saved profiles, shared by the
-/// [`crate::Core`]. Order is insertion order.
+/// [`crate::Core`]. The order is the user's: new profiles go to the end,
+/// [`ProfileStore::reorder`] moves them, saving or deleting never shuffles
+/// the others.
 pub struct ProfileStore {
     inner: Mutex<Inner>,
 }
@@ -58,7 +62,7 @@ impl ProfileStore {
         inner.profiles = profiles;
     }
 
-    /// All profiles, in the order they were first saved.
+    /// All profiles in the user's order (never sorted).
     pub fn list(&self) -> Vec<ConnectionProfile> {
         self.inner.lock().expect(LOCK_POISONED).profiles.clone()
     }
@@ -88,6 +92,40 @@ impl ProfileStore {
         persist(&inner, &next)?;
         inner.profiles = next;
         Ok(profile)
+    }
+
+    /// Put the profiles in the order of `ids`, then persist. `ids` must be a
+    /// permutation of the current ids: an unknown, missing or repeated id is
+    /// `InvalidInput` and nothing changes.
+    pub fn reorder(&self, ids: &[ProfileId]) -> CoreResult<()> {
+        let mut inner = self.inner.lock().expect(LOCK_POISONED);
+        let mut seen = HashSet::new();
+        if let Some(id) = ids.iter().find(|id| !seen.insert(**id)) {
+            return Err(CoreError::InvalidInput(format!(
+                "connection {id} is listed twice"
+            )));
+        }
+        if let Some(id) = ids
+            .iter()
+            .find(|id| !inner.profiles.iter().any(|p| p.id == **id))
+        {
+            return Err(CoreError::InvalidInput(format!("unknown connection {id}")));
+        }
+        if ids.len() != inner.profiles.len() {
+            return Err(CoreError::InvalidInput(
+                "the list must name every saved connection".into(),
+            ));
+        }
+        let next: Vec<ConnectionProfile> = ids
+            .iter()
+            .filter_map(|id| inner.profiles.iter().find(|p| p.id == *id).cloned())
+            .collect();
+        if next == inner.profiles {
+            return Ok(());
+        }
+        persist(&inner, &next)?;
+        inner.profiles = next;
+        Ok(())
     }
 
     /// Remove a profile; `NotFound` when no profile has that id.
@@ -206,6 +244,132 @@ mod tests {
         assert!(store.list().is_empty());
         assert!(matches!(store.delete(a.id), Err(CoreError::NotFound(_))));
         assert!(matches!(store.get(a.id), Err(CoreError::NotFound(_))));
+    }
+
+    fn ids(store: &ProfileStore) -> Vec<ProfileId> {
+        store.list().iter().map(|p| p.id).collect()
+    }
+
+    fn names(store: &ProfileStore) -> Vec<String> {
+        store.list().into_iter().map(|p| p.name).collect()
+    }
+
+    #[test]
+    fn new_profiles_go_to_the_end() {
+        let store = ProfileStore::new();
+        let a = store.save(profile("A")).unwrap();
+        let b = store.save(profile("B")).unwrap();
+        store.reorder(&[b.id, a.id]).unwrap();
+        store.save(profile("C")).unwrap();
+        assert_eq!(names(&store), ["B", "A", "C"]);
+    }
+
+    #[test]
+    fn reorder_applies_and_survives_a_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("profiles.json");
+        let store = ProfileStore::new();
+        store.set_path(file.clone());
+        let a = store.save(profile("A")).unwrap();
+        let b = store.save(profile("B")).unwrap();
+        let c = store.save(profile("C")).unwrap();
+        store.reorder(&[c.id, a.id, b.id]).unwrap();
+        assert_eq!(names(&store), ["C", "A", "B"]);
+
+        let reloaded = ProfileStore::new();
+        reloaded.set_path(file.clone());
+        assert_eq!(reloaded.list(), vec![c, a, b]);
+        assert!(!file.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn reorder_refuses_anything_but_a_permutation() {
+        let store = ProfileStore::new();
+        let a = store.save(profile("A")).unwrap();
+        let b = store.save(profile("B")).unwrap();
+        let c = store.save(profile("C")).unwrap();
+        let stranger = ProfileId::new();
+        let bad: [&[ProfileId]; 6] = [
+            &[a.id, b.id],                 // missing one
+            &[a.id, b.id, c.id, c.id],     // too long
+            &[a.id, a.id, b.id],           // duplicate
+            &[a.id, b.id, stranger],       // unknown
+            &[a.id, b.id, c.id, stranger], // unknown extra
+            &[],                           // nothing
+        ];
+        for list in bad {
+            assert!(
+                matches!(store.reorder(list), Err(CoreError::InvalidInput(_))),
+                "{list:?}"
+            );
+        }
+        assert_eq!(names(&store), ["A", "B", "C"]);
+        assert!(matches!(
+            ProfileStore::new().reorder(&[a.id]),
+            Err(CoreError::InvalidInput(_))
+        ));
+        ProfileStore::new().reorder(&[]).unwrap();
+    }
+
+    #[test]
+    fn a_refused_reorder_leaves_the_file_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("profiles.json");
+        let store = ProfileStore::new();
+        store.set_path(file.clone());
+        let a = store.save(profile("A")).unwrap();
+        store.save(profile("B")).unwrap();
+        let before = std::fs::read_to_string(&file).unwrap();
+        assert!(store.reorder(&[a.id, a.id]).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+    }
+
+    #[test]
+    fn saving_an_edited_profile_keeps_its_position() {
+        let store = ProfileStore::new();
+        let a = store.save(profile("A")).unwrap();
+        let b = store.save(profile("B")).unwrap();
+        let c = store.save(profile("C")).unwrap();
+        store.reorder(&[c.id, a.id, b.id]).unwrap();
+        store
+            .save(ConnectionProfile {
+                name: "A2".into(),
+                ..a
+            })
+            .unwrap();
+        assert_eq!(names(&store), ["C", "A2", "B"]);
+        assert_eq!(ids(&store), [c.id, a.id, b.id]);
+    }
+
+    #[test]
+    fn delete_keeps_the_order_of_the_others() {
+        let store = ProfileStore::new();
+        let a = store.save(profile("A")).unwrap();
+        let b = store.save(profile("B")).unwrap();
+        let c = store.save(profile("C")).unwrap();
+        let d = store.save(profile("D")).unwrap();
+        store.reorder(&[d.id, b.id, c.id, a.id]).unwrap();
+        store.delete(c.id).unwrap();
+        assert_eq!(ids(&store), [d.id, b.id, a.id]);
+        // The shorter list is now the whole permutation.
+        store.reorder(&[a.id, d.id, b.id]).unwrap();
+        assert_eq!(names(&store), ["A", "D", "B"]);
+    }
+
+    #[test]
+    fn a_file_without_any_reorder_loads_in_its_array_order() {
+        // Files written before reordering existed are plain arrays in the
+        // order they were created: that order stays.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("profiles.json");
+        let store = ProfileStore::new();
+        store.set_path(file.clone());
+        store.save(profile("A")).unwrap();
+        store.save(profile("B")).unwrap();
+        store.save(profile("C")).unwrap();
+        let reloaded = ProfileStore::new();
+        reloaded.set_path(file);
+        assert_eq!(names(&reloaded), ["A", "B", "C"]);
     }
 
     #[test]

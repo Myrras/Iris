@@ -10,7 +10,7 @@ use iris_core::{ConnectionProfile, ProfileId, Secret, SecretKind, SshConfigHost}
 use crate::error::IpcError;
 use crate::state::AppState;
 
-/// All saved connections, in creation order.
+/// All saved connections, in the user's order.
 #[tauri::command]
 pub fn list_profiles(state: State<'_, AppState>) -> Vec<ConnectionProfile> {
     state.core.list_profiles()
@@ -24,6 +24,13 @@ pub fn save_profile(
     profile: ConnectionProfile,
 ) -> Result<ConnectionProfile, IpcError> {
     Ok(state.core.save_profile(profile)?)
+}
+
+/// Put the profiles in the order of `ids` (every saved id exactly once);
+/// `invalidInput` otherwise.
+#[tauri::command]
+pub fn reorder_profiles(state: State<'_, AppState>, ids: Vec<ProfileId>) -> Result<(), IpcError> {
+    Ok(state.core.reorder_profiles(ids)?)
 }
 
 /// Delete a profile and its remembered secrets; `notFound` when it does not

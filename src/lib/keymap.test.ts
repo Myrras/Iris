@@ -6,6 +6,7 @@ import {
   activeActions,
   bindingFromEvent,
   bindingProblem,
+  connectionMoveOf,
   findAction,
   findConflict,
   formatBinding,
@@ -359,5 +360,45 @@ describe("isBrowserShortcut", () => {
         false,
       ),
     ).toBe(false);
+  });
+});
+
+describe("moving a connection in the sidebar", () => {
+  const up = ev({
+    key: "ArrowUp",
+    code: "ArrowUp",
+    metaKey: true,
+    altKey: true,
+  });
+  const down = ev({
+    key: "ArrowDown",
+    code: "ArrowDown",
+    metaKey: true,
+    altKey: true,
+  });
+
+  it("is Option+Cmd+Up / Down on a Mac and Ctrl+Alt+Up / Down elsewhere", () => {
+    expect(connectionMoveOf(up, true)).toBe(-1);
+    expect(connectionMoveOf(down, true)).toBe(1);
+    expect(
+      connectionMoveOf({ ...up, metaKey: false, ctrlKey: true }, false),
+    ).toBe(-1);
+    expect(connectionMoveOf(up, false)).toBeNull();
+  });
+
+  it("needs both modifiers and no shift", () => {
+    expect(connectionMoveOf({ ...up, altKey: false }, true)).toBeNull();
+    expect(connectionMoveOf({ ...up, metaKey: false }, true)).toBeNull();
+    expect(connectionMoveOf({ ...up, shiftKey: true }, true)).toBeNull();
+  });
+
+  it("is fixed: no action can be bound to it", () => {
+    for (const mac of [true, false]) {
+      for (const code of ["ArrowUp", "ArrowDown"]) {
+        expect(
+          bindingProblem({ code, mod: true, alt: true, shift: false }, mac),
+        ).toMatch(/is fixed \(Move connection (up|down)\)/);
+      }
+    }
   });
 });

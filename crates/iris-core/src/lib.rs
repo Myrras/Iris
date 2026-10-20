@@ -259,7 +259,8 @@ impl Core {
         self.inner.profiles.set_path(path);
     }
 
-    /// All saved connections, in the order they were created.
+    /// All saved connections in the user's order (new ones last; see
+    /// [`Core::reorder_profiles`]).
     pub fn list_profiles(&self) -> Vec<ConnectionProfile> {
         self.inner.profiles.list()
     }
@@ -270,6 +271,15 @@ impl Core {
         let saved = self.inner.profiles.save(profile)?;
         self.inner.events.publish(CoreEvent::ProfilesChanged);
         Ok(saved)
+    }
+
+    /// Put the saved connections in the order of `ids`, which must name every
+    /// saved connection exactly once (`InvalidInput` otherwise, nothing
+    /// changes). Persisted, then announces [`CoreEvent::ProfilesChanged`].
+    pub fn reorder_profiles(&self, ids: Vec<ProfileId>) -> CoreResult<()> {
+        self.inner.profiles.reorder(&ids)?;
+        self.inner.events.publish(CoreEvent::ProfilesChanged);
+        Ok(())
     }
 
     /// Delete a saved connection (`NotFound` if unknown) and its remembered

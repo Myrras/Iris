@@ -79,7 +79,7 @@ export function saveSettings(settings: IrisSettings): Promise<IrisSettings> {
 // Connections
 // ---------------------------------------------------------------------------
 
-/** All saved connections, in creation order. */
+/** All saved connections, in the user's order. */
 export function listProfiles(): Promise<ConnectionProfile[]> {
   return invoke("list_profiles");
 }
@@ -92,6 +92,15 @@ export function saveProfile(
   profile: ConnectionProfileInput,
 ): Promise<ConnectionProfile> {
   return invoke("save_profile", { profile });
+}
+
+/**
+ * Put the saved connections in the order of `ids`, which must name every
+ * saved connection exactly once; rejects with `invalidInput` otherwise.
+ * Emits `profiles:changed`.
+ */
+export function reorderProfiles(ids: ProfileId[]): Promise<void> {
+  return invoke("reorder_profiles", { ids });
 }
 
 /**

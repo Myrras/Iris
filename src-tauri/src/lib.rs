@@ -176,6 +176,7 @@ pub fn run() {
             commands::settings::save_settings,
             commands::connection::list_profiles,
             commands::connection::save_profile,
+            commands::connection::reorder_profiles,
             commands::connection::delete_profile,
             commands::connection::set_secret,
             commands::connection::clear_secret,

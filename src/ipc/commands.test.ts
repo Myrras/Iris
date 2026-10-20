@@ -40,6 +40,7 @@ import {
   mkdir,
   preview,
   readLink,
+  reorderProfiles,
   rename,
   saveProfile,
   saveSettings,
@@ -85,9 +86,13 @@ describe("connection and session commands", () => {
     await listProfiles();
     await saveProfile(profile);
     await deleteProfile("p-1");
+    await reorderProfiles(["p-2", "p-1"]);
     expect(invoke).toHaveBeenCalledWith("list_profiles");
     expect(invoke).toHaveBeenCalledWith("save_profile", { profile });
     expect(invoke).toHaveBeenCalledWith("delete_profile", { id: "p-1" });
+    expect(invoke).toHaveBeenCalledWith("reorder_profiles", {
+      ids: ["p-2", "p-1"],
+    });
   });
 
   it("sends absent secrets as null and remember as false", async () => {

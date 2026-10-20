@@ -195,7 +195,7 @@ export function beginPaneDrag(
  * A drag that ends on the row it started on would still "click" it; the
  * click that follows the release belongs to the drag, not to the row.
  */
-function swallowNextClick() {
+export function swallowNextClick() {
   const swallow = (e: MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();

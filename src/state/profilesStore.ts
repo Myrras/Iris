@@ -9,6 +9,7 @@ import { create } from "zustand";
 import {
   deleteProfile,
   listProfiles,
+  reorderProfiles,
   saveProfile,
   toIpcError,
 } from "../ipc/commands";
@@ -27,9 +28,18 @@ interface ProfilesState {
   refresh: () => Promise<void>;
   /** Create or replace; rejects with the `IpcError` for the form to show. */
   save: (input: ConnectionProfileInput) => Promise<ConnectionProfile>;
+  /**
+   * Put the connections in the order of `ids` (every saved id once). Applied
+   * locally at once, then sent; either way the list is re-read afterwards.
+   * A refusal toasts and puts the backend's order back, so it never rejects.
+   */
+  reorder: (ids: ProfileId[]) => Promise<void>;
   /** Delete; rejects with the `IpcError` for the caller to show. */
   remove: (id: ProfileId) => Promise<void>;
 }
+
+/** The latest reorder; an older one that finishes late leaves the list alone. */
+let reorderSeq = 0;
 
 export const useProfilesStore = create<ProfilesState>((set, get) => ({
   profiles: [],
@@ -46,6 +56,23 @@ export const useProfilesStore = create<ProfilesState>((set, get) => ({
     const saved = await saveProfile(input);
     await get().refresh();
     return saved;
+  },
+  reorder: async (ids) => {
+    const previous = get().profiles;
+    const byId = new Map(previous.map((p) => [p.id, p]));
+    const local = ids.flatMap((id) => byId.get(id) ?? []);
+    // Not a permutation of what is shown: the backend would refuse it too.
+    const plausible = local.length === previous.length;
+    const seq = ++reorderSeq;
+    if (plausible) set({ profiles: local });
+    try {
+      await reorderProfiles(ids);
+    } catch (e) {
+      if (seq !== reorderSeq) return;
+      set({ profiles: previous });
+      toastError("Could not reorder connections", toIpcError(e).message);
+    }
+    if (seq === reorderSeq) await get().refresh();
   },
   remove: async (id) => {
     await deleteProfile(id);

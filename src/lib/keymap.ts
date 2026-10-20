@@ -11,7 +11,8 @@
  * Settings → Shortcuts stores only the bindings the user changed
  * (`settingsStore.shortcuts`); `resolveKeymap` lays them over the defaults,
  * so an action added later still gets its default. Enter, Space, the arrow
- * keys, F5 and Cmd+O / Cmd+Down / Cmd+Up stay fixed (`RESERVED`).
+ * keys, F5, Cmd+O / Cmd+Down / Cmd+Up and Option+Cmd+Up / Down (moving a
+ * connection in the sidebar) stay fixed (`RESERVED`).
  *
  * Pure rules, no React: `Pane.tsx` and `useTabShortcuts.ts` dispatch with
  * `findAction`.
@@ -377,6 +378,25 @@ export function findAction(
 
 // -- Rules for what can be bound ---------------------------------------------
 
+/**
+ * Move the focused connection in the sidebar up / down. Handled by the row
+ * itself (`ConnectionRow`), not through the keymap: the action is bound to
+ * the focused sidebar row, which neither the `pane` nor the `app` scope
+ * express. The bindings are fixed and reserved, so no action can take them.
+ */
+export const MOVE_CONNECTION_UP = "Mod+Alt+ArrowUp";
+export const MOVE_CONNECTION_DOWN = "Mod+Alt+ArrowDown";
+
+/** −1 / 1 when the key press moves a connection up / down, else null. */
+export function connectionMoveOf(
+  e: KeyEventLike,
+  mac: boolean = isMac,
+): -1 | 1 | null {
+  if (matches(e, MOVE_CONNECTION_UP, mac)) return -1;
+  if (matches(e, MOVE_CONNECTION_DOWN, mac)) return 1;
+  return null;
+}
+
 /** Keys that are not rebindable, with what they do (Mod = Cmd / Ctrl). */
 const RESERVED: [string, string][] = [
   ["Mod+KeyA", "Select all"],
@@ -389,6 +409,8 @@ const RESERVED: [string, string][] = [
   ["Mod+ArrowDown", "Open"],
   ["Mod+ArrowUp", "Enclosing folder"],
   ["F5", "Copy to the other pane"],
+  [MOVE_CONNECTION_UP, "Move connection up"],
+  [MOVE_CONNECTION_DOWN, "Move connection down"],
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n): [string, string] => [
     `Mod+Digit${n}`,
     "Switch tab",

@@ -1,6 +1,31 @@
 /* Copied from Podium's ProcessRow.module.css (session tint, rename field and
    activity rules left out). */
 
+/* The list item around a row: anchors the insertion line of a reorder drag. */
+.item {
+  position: relative;
+}
+
+.item[data-insert]::after {
+  content: "";
+  position: absolute;
+  left: var(--sp-3);
+  right: var(--sp-3);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.item[data-insert="before"]::after {
+  top: 0;
+}
+
+.item[data-insert="after"]::after {
+  bottom: 0;
+}
+
 .row {
   display: flex;
   align-items: center;
@@ -15,8 +40,16 @@
   transition: background var(--dur-1) var(--ease-out);
 }
 
-.row:hover {
+/* Not while dragging: WebKit does not refresh :hover with the button held, so
+   it would stick to rows (same gate as the file table). */
+:where(html:not([data-dragging])) .row:hover {
   background: var(--surface-hover);
+}
+
+/* The row being dragged stays in place, dimmed, while the line shows where it
+   goes. */
+.row[data-reordering="true"] {
+  opacity: 0.5;
 }
 
 .row[data-selected="true"] {
@@ -45,7 +78,7 @@
   flex-shrink: 0;
 }
 
-.row:hover .actions,
+:where(html:not([data-dragging])) .row:hover .actions,
 .row:focus-within .actions,
 .row[data-selected="true"] .actions {
   display: flex;
