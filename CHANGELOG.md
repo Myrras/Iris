@@ -11,6 +11,10 @@ when it merges.
 
 ## [Unreleased]
 
+- Fixed dialogs painting on top of each other: when a second dialog opens over
+  one that is showing (a host key question during a password prompt that is
+  connecting, a transfer conflict over Sync), only the newest is shown, so
+  their Cancel buttons no longer overlap. Escape closes just that one.
 - Connections can be reordered: drag a connection up or down in the sidebar (Escape
   cancels), press ⌥⌘↑ / ⌥⌘↓ (Ctrl+Alt+↑ / ↓) on a focused one, or use Move Up /
   Move Down in its menu. The order is kept.

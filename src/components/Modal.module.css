@@ -16,6 +16,12 @@
   animation: fade var(--dur-2) var(--ease-in) reverse forwards;
 }
 
+/* Another dialog is on top (`lib/modalLayer`): this one stays mounted but is
+   not painted, so two cards never overlap. */
+.overlay[data-covered="true"] {
+  visibility: hidden;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border-strong);

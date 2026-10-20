@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { MOTION, usePresence } from "../lib/motion";
+import { useModalLayer } from "../lib/modalLayer";
 import { CloseIcon } from "./icons";
 import styles from "./Modal.module.css";
 
@@ -33,15 +34,44 @@ export function Modal({
   const cardRef = useRef<HTMLDivElement>(null);
   // Keep the dialog mounted while it animates closed (see `usePresence`).
   const { mounted, state } = usePresence(open, MOTION.base);
+  // Only the newest open dialog is shown: see `lib/modalLayer`.
+  const { covered, isTop } = useModalLayer(open);
 
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      // A dialog underneath must not close with the one on top.
+      if (e.key === "Escape" && isTop()) onClose();
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, isTop]);
+
+  // The dialog on top closed and this one is back: nothing hidden holds the
+  // focus, so put it on the card (not on the very first show, which the effect
+  // below handles).
+  const shownOnce = useRef(false);
+  const wasCovered = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      shownOnce.current = false;
+      wasCovered.current = false;
+      return;
+    }
+    if (!covered) {
+      const card = cardRef.current;
+      if (
+        shownOnce.current &&
+        wasCovered.current &&
+        card &&
+        !card.contains(document.activeElement)
+      ) {
+        card.focus({ preventScroll: true });
+      }
+      shownOnce.current = true;
+    }
+    wasCovered.current = covered;
+  }, [open, covered]);
 
   // Focus the card only when the dialog *opens* — keyed on `open` alone so an
   // unstable `onClose` (a fresh closure each render of the parent) can't re-fire
@@ -58,6 +88,8 @@ export function Modal({
     <div
       className={styles.overlay}
       data-state={state}
+      data-covered={covered ? "true" : undefined}
+      aria-hidden={covered ? true : undefined}
       role="presentation"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
