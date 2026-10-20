@@ -310,4 +310,61 @@ describe("FileTable", () => {
     rerender(<FileTable {...props} dropDir={null} />);
     expect(targets()).toEqual([]);
   });
+
+  describe("keyboard mode (hover hidden)", () => {
+    const grid = () => screen.getByRole("grid", { name: "Test files list" });
+
+    it("is set by a type-ahead letter and by an arrow key", () => {
+      renderTable([entry("a.txt")]);
+      expect(grid()).not.toHaveAttribute("data-keyboard");
+      fireEvent.keyDown(grid(), { key: "a" });
+      expect(grid()).toHaveAttribute("data-keyboard", "true");
+      fireEvent.mouseMove(grid(), { clientX: 1, clientY: 1 });
+      fireEvent.mouseMove(grid(), { clientX: 9, clientY: 9 });
+      expect(grid()).not.toHaveAttribute("data-keyboard");
+      fireEvent.keyDown(grid(), { key: "ArrowDown" });
+      expect(grid()).toHaveAttribute("data-keyboard", "true");
+    });
+
+    it("ignores a lone modifier key", () => {
+      renderTable([entry("a.txt")]);
+      fireEvent.keyDown(grid(), { key: "Shift" });
+      expect(grid()).not.toHaveAttribute("data-keyboard");
+    });
+
+    it("is cleared by a mousemove with changed coordinates only", () => {
+      renderTable([entry("a.txt")]);
+      fireEvent.mouseMove(grid(), { clientX: 10, clientY: 20 });
+      fireEvent.keyDown(grid(), { key: "ArrowDown" });
+      // A synthetic move (content scrolled under the pointer): same spot.
+      fireEvent.mouseMove(grid(), { clientX: 10, clientY: 20 });
+      expect(grid()).toHaveAttribute("data-keyboard", "true");
+      fireEvent.mouseMove(grid(), { clientX: 11, clientY: 20 });
+      expect(grid()).not.toHaveAttribute("data-keyboard");
+    });
+
+    it("does not touch drag mode, drop target or selected rows", () => {
+      document.documentElement.setAttribute("data-dragging", "true");
+      try {
+        renderTable([entry("a", { kind: { type: "dir" } }), entry("b.txt")], {
+          dropDir: "/srv/a",
+          selection: new Set(["/srv/b.txt"]),
+        });
+        fireEvent.keyDown(grid(), { key: "b" });
+        expect(grid()).toHaveAttribute("data-keyboard", "true");
+        expect(document.documentElement).toHaveAttribute("data-dragging");
+        const rows = dataRows();
+        expect(rows[0]).toHaveAttribute("data-drop-target", "true");
+        expect(rows[1]).toHaveAttribute("data-selected", "true");
+        fireEvent.mouseMove(grid(), { clientX: 1, clientY: 1 });
+        fireEvent.mouseMove(grid(), { clientX: 2, clientY: 2 });
+        expect(grid()).not.toHaveAttribute("data-keyboard");
+        expect(document.documentElement).toHaveAttribute("data-dragging");
+        expect(dataRows()[0]).toHaveAttribute("data-drop-target", "true");
+        expect(dataRows()[1]).toHaveAttribute("data-selected", "true");
+      } finally {
+        document.documentElement.removeAttribute("data-dragging");
+      }
+    });
+  });
 });

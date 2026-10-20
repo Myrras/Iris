@@ -26,6 +26,7 @@ import { formatModified, formatModifiedFull } from "../lib/dateFormat";
 import { isDirLike, type SortKey, type SortSpec } from "../lib/entries";
 import { formatPermissions, formatSize } from "../lib/fileFormat";
 import { renameSelection } from "../lib/fileName";
+import { useKeyboardMode } from "../lib/useKeyboardMode";
 import {
   ChevronDownIcon,
   ChevronUpIcon,
@@ -295,7 +296,9 @@ export function FileTable({
 
   // Keys this table does not handle (Cmd+arrows included) bubble on to the
   // pane, which owns the file-operation shortcuts.
-  function onKeyDown(e: React.KeyboardEvent) {
+  const keyboardMode = useKeyboardMode();
+  function onKeyDown(e: React.KeyboardEvent<HTMLElement>) {
+    keyboardMode.onKeyDown(e);
     if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !e.metaKey) {
       e.preventDefault();
       onMove(e.key === "ArrowDown" ? 1 : -1, e.shiftKey);
@@ -322,6 +325,7 @@ export function FileTable({
       aria-multiselectable="true"
       tabIndex={0}
       onKeyDown={onKeyDown}
+      onMouseMove={keyboardMode.onMouseMove}
       onContextMenu={(e) => {
         e.preventDefault();
         onContextMenu?.(null, e);

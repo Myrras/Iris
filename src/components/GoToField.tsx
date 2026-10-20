@@ -14,6 +14,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { homeDir, listDir, toIpcError } from "../ipc/commands";
 import type { FsTarget } from "../ipc/types";
 import { isDirLike } from "../lib/entries";
+import { useKeyboardMode } from "../lib/useKeyboardMode";
 import {
   completeSegment,
   completionFolder,
@@ -148,6 +149,8 @@ export function GoToField({
     if (!result.ok) setError(result.message);
   }
 
+  const keyboardMode = useKeyboardMode();
+
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.nativeEvent.isComposing) return;
     if (e.key === "Enter") {
@@ -171,7 +174,11 @@ export function GoToField({
   }
 
   return (
-    <div className={styles.field}>
+    <div
+      className={styles.field}
+      onKeyDown={keyboardMode.onKeyDown}
+      onMouseMove={keyboardMode.onMouseMove}
+    >
       <input
         ref={input}
         type="text"

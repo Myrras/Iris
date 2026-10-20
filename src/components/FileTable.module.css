@@ -88,8 +88,10 @@
 }
 
 /* Not while dragging: WebKit does not refresh :hover with the button held, so
-   it would stick to rows; only the drop target lights up then. */
-:where(html:not([data-dragging])) .row:hover {
+   it would stick to rows; only the drop target lights up then. Nor while the
+   keyboard drives (Finder): the cursor row is the highlight, not the pointer. */
+:where(html:not([data-dragging]) .scroll:not([data-keyboard="true"]))
+  .row:hover {
   background: var(--surface-hover);
 }
 

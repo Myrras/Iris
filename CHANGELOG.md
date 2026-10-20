@@ -11,6 +11,8 @@ when it merges.
 
 ## [Unreleased]
 
+- Row hover highlight is hidden while you use the keyboard (typing, arrows) until
+  the pointer moves again, as in Finder.
 - Sync only files changed within a time window: "Only files changed in" (last
   hour, today, last 24 hours, last 7 days, or since a date and time) compares
   just those files and looks them up on the other side, instead of walking

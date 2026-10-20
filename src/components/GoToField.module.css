@@ -59,7 +59,8 @@
   transition: background var(--dur-1) var(--ease-out);
 }
 
-.option:hover,
+/* Not while typing: the active option is the highlight (Finder). */
+:where(.field:not([data-keyboard="true"])) .option:hover,
 .option[aria-selected="true"] {
   background: var(--surface-hover);
 }
