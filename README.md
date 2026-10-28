@@ -15,15 +15,13 @@ there as a PR.
 
 ```
 Cargo.toml                 # [workspace]; [workspace.package] version is the source of truth
-justfile                   # dev/build/check/test/lint/format/version recipes
-scripts/sync-version.sh    # propagates the version to tauri.conf.json + package.json
-scripts/{next-version,changelog}.sh  # release helpers used by CI (+ *.test.sh)
+justfile                   # dev/build/test-integration/format/version recipes; imports shared common.just
 CHANGELOG.md               # Keep a Changelog; PRs add entries under [Unreleased]
 crates/iris-core/          # the domain: single entry point (Core), zero Tauri dependency
 src-tauri/                 # thin Tauri IPC adapter over iris-core
 src/                       # React frontend (presentation only)
-.github/workflows/ci.yml   # rustfmt, clippy -D warnings, cargo test, typecheck, lint, vitest, build; changelog check; release
-.github/workflows/build.yml  # macOS .dmg + Windows .exe; dispatched by the release job, attached to the release
+.github/workflows/         # thin callers of RobbieMinderhoud/ci-workflows@v1: ci, pr-checks, build, integration
+.github/dependabot.yml     # weekly grouped updates: actions, cargo, npm
 ```
 
 ## Prerequisites
@@ -33,14 +31,14 @@ src/                       # React frontend (presentation only)
 - The Tauri 2 system prerequisites for your OS — see
   <https://tauri.app/start/prerequisites/>
 - `just` (optional but recommended: `brew install just`)
+- A clone of `RobbieMinderhoud/ci-workflows`, symlinked as `~/.ci-workflows` (for `just ci` and the shared scripts)
 
 ## Get started
 
 ```
 pnpm install
 just dev            # run the app (Vite + Tauri, hot reload)
-just test           # cargo test --workspace + frontend vitest
-just lint           # clippy -D warnings + eslint
+just ci             # fmt, clippy, tests, eslint, vitest, build (from the shared common.just)
 just build          # production desktop bundle
 ```
 
@@ -48,13 +46,13 @@ just build          # production desktop bundle
 
 Every merge to `main` is a release. Each PR adds its entry under
 `## [Unreleased]` in `CHANGELOG.md` (CI fails without one). On merge, CI picks
-the next version from the latest `v*` tag — patch by default, or minor/major
-when the PR has the `minor`/`major` label — bumps the manifests, commits
+the next version from the latest `v*` tag — by the PR's `patch`, `minor` or
+`major` label (exactly one, checked by `pr-checks`) — bumps the manifests, commits
 `Release vX.Y.Z`, tags it, creates the GitHub Release and builds the macOS and
 Windows installers onto it. Don't bump or tag by hand. The first release (no
 `v*` tag yet) ships the version in `Cargo.toml`.
 
-The repo is set up for this: labels `minor`/`major`, a protected `main`
+The repo is set up for this: labels `patch`/`minor`/`major`/`windows`, a protected `main`
 ruleset, and the `RELEASE_DEPLOY_KEY` deploy key in its bypass list.
 
 ## License

@@ -11,202 +11,24 @@ when it merges.
 
 ## [Unreleased]
 
-- Fixed dialogs painting on top of each other: when a second dialog opens over
-  one that is showing (a host key question during a password prompt that is
-  connecting, a transfer conflict over Sync), only the newest is shown, so
-  their Cancel buttons no longer overlap. Escape closes just that one.
-- Connections can be reordered: drag a connection up or down in the sidebar (Escape
-  cancels), press ⌥⌘↑ / ⌥⌘↓ (Ctrl+Alt+↑ / ↓) on a focused one, or use Move Up /
-  Move Down in its menu. The order is kept.
-- The islands are resizable: drag the gaps between the sidebar, the Local and
-  Remote panes, the preview and the transfers (or use the arrow keys, Shift for
-  bigger steps, Home/End; double-click resets). Sizes are remembered.
-- The transfer list shows where each file comes from and goes to ("Local: /folder → host: /folder", long paths cut in the middle, full paths on hover), with Copy Source Path, Copy Destination Path and Show in Finder in the row's right-click menu.
-- Row hover highlight is hidden while you use the keyboard (typing, arrows) until
-  the pointer moves again, as in Finder.
-- Sync only files changed within a time window: "Only files changed in" (last
-  hour, today, last 24 hours, last 7 days, or since a date and time) compares
-  just those files and looks them up on the other side, instead of walking
-  both folders. From the server it runs one `find` over SSH when the server
-  allows commands (GNU find), else it walks the folders with the same filter;
-  the plan says which, and notes a server clock that is off (the window then
-  follows the server's clock). The compare rule and options still apply.
-  Mirror is off while a window is set: deletions are not seen.
-- Export the transfer list to a CSV file (Transfers → Export CSV…): one row per
-  transfer with its connection, paths, size, state, error, start and end time,
-  duration and average speed. Opens fine in Excel and Numbers; the toast
-  offers to show the file in Finder.
-- Uploading or downloading a folder first counts what it will copy ("Counting…
-  1,234 files, 56 MB"), then starts with the total known: the progress bar no
-  longer jumps back as more files are found, and the Transfers header shows
-  "12 of 340 files · 3.1 MB of 56 MB · 1.5 MB/s · ~0:42". A count cut off by a
-  lost connection continues after the reconnect.
-- Comparing folders for a sync, and starting a folder upload, download or drag
-  out, is much faster on deep trees: several folders are listed at once
-  (a 1,300-folder project compares in about 3 s instead of 40 s on a server
-  5 ms away). The Sync dialog shows how far it got ("Scanning… 812 folders,
-  5,120 files").
-- Keyboard shortcuts are configurable (Settings → Shortcuts: record a new combination, conflicts are refused or swapped, reset per row or all). New defaults: ⌘P / Ctrl+P go to path (⌘L stays; ⇧⌘G is no longer bound), ⌘R / Ctrl+R refresh, ⌘F / Ctrl+F focus the filter (Escape clears it and returns to the file list), ⌥⌘P toggles the preview. Buttons and menus show the current binding.
-- Go to a typed path in either pane: ⌘P / Ctrl+P, ⌘L / Ctrl+L, or a click on the empty part of the path bar turns it into a text field. Absolute and relative paths (`..`, `./x`) and `~` work; Tab completes folder names; a file path opens its folder with the file selected.
-- Local files open in their application: double-click, Enter (not on macOS),
-  ⌘O / ⌘↓ or the context menu's Open use the app set in Settings → Editors,
-  else the system default. "Show in Finder" (Explorer / File Manager) in the
-  context menu or ⌥⌘R / Ctrl+Alt+R reveals the selection, or the folder.
-- Sync folders: the Sync button in either pane (also in the context menu,
-  ⌥⌘S / Ctrl+Alt+S) compares the Local and Remote folders and copies one
-  way, Local → Remote or Remote → Local. Update copies new and changed files;
-  Mirror also deletes what exists only on the target, after a second
-  confirm and only when every copy succeeded. Pick how files are compared
-  (size or date, newer only, size only, everything) and options (keep newer
-  target files, skip hidden files, copy empty folders, skip large files);
-  review the result per group and untick what should stay. Settings →
-  Transfers lists the names a sync leaves alone (.git, node_modules, …).
-- Transfers show their progress up to the last byte: a fast copy no longer
-  sits at its first chunk until the server has finished the file.
-- After going up a folder, the folder you came from is selected, like in Finder.
-- The active pane is marked with an accent ring and header; selected rows in the inactive pane turn grey.
-- Type a file name in a pane to select it, like in Finder.
-- Island layout in Podium's look: a sidebar with a Connections section, Local
-  and Remote file panes side by side, and a collapsible Transfers panel.
-- Dark, light and retro themes with a crossfade when switching.
-- Settings dialog (⌘, on macOS, the title-bar gear or Ctrl+, elsewhere) with
-  theme, reduced motion, show hidden files and a preview size limit.
-- Custom title bar: native traffic lights on macOS, own window controls on
-  Windows; window size and position are remembered.
-- A warning before quitting while work is still in progress.
-- Saved connections: name, host, port, user, authentication method and an
-  optional start folder. Passwords and passphrases are never stored with
-  the connection; you enter them when connecting.
-- Connect over SSH with a password or a private key file, including
-  passphrase-protected keys.
-- Host key verification against `~/.ssh/known_hosts`: a new server shows
-  its fingerprint for you to trust once; a changed host key blocks the
-  connection.
-- Browse remote folders over SFTP, with symlinks (and where they point) and
-  hidden files recognised; large folders list quickly.
-- Connections sidebar: saved servers with a live status dot; click to
-  connect, right-click to connect, disconnect, edit or delete. New and edit
-  forms check host, port, user and key file as you type, with a file picker
-  for the private key.
-- Password and passphrase prompts when connecting; a wrong one can be
-  retyped without starting over.
-- Local and Remote panes side by side: breadcrumb path, Back, Up and
-  Refresh, a filter box and a hidden-files toggle. Columns for name, size,
-  modified date and permissions; click a header to sort (folders stay on
-  top, names sort naturally).
-- Open folders (and links to folders) with a double-click, or Enter on
-  Windows and Linux; select with the arrow keys, Cmd/Ctrl-click and
-  Shift-click. Folders with thousands of entries scroll smoothly.
-- A dropped connection shows in its pane with a Reconnect button.
-- Log in with the keys in your running SSH agent.
-- Pick a host from `~/.ssh/config` in the connection form: host, port and
-  user are filled in, and connecting uses its IdentityFile keys (then your
-  SSH agent) and its ProxyJump, so config changes apply on the next connect.
-- Jump hosts (ProxyJump): reach a server through another saved connection,
-  a host from `~/.ssh/config` or any `user@host:port`. Chains of jump hosts
-  work, each with its own host key check.
-- "Remember in keychain" on the password and passphrase prompt stores the
-  secret in your system keychain, so the next connect asks nothing. If a
-  saved secret stops working you are asked again and can replace or forget
-  it; editing a connection can also forget it, and deleting one removes it.
-- New Folder from the pane toolbar, the right-click menu or ⇧⌘N
-  (Ctrl+Shift+N elsewhere): creates "untitled folder" and lets you name it
-  right away.
-- Rename in place with F2, Enter on macOS (as in Finder) or the right-click
-  menu; Escape cancels. A rename never overwrites an existing file. On
-  macOS, ⌘↓ opens a folder and ⌘↑ goes to the enclosing one.
-- Delete with the Delete key, ⌘⌫ (Ctrl+Backspace elsewhere) or the
-  right-click menu, always after a confirmation that lists what goes: local
-  files move to the Trash (Recycle Bin on Windows), remote files are deleted
-  permanently. A symbolic link is deleted itself, never what it points to.
-- Get Info / Permissions (⌘I, Ctrl+I elsewhere): kind, size and date, and
-  the permissions as a read/write/execute grid with a matching octal field;
-  for folders, optionally applied to everything inside.
-- Preview panel to the right of the panes (Space, as in Quick Look, or the
-  toolbar button): text files, and PNG, JPEG, GIF, WebP and SVG images on a
-  checkerboard. Large text files show their first part with a notice;
-  images over the preview size limit and binary files say so. The panel is
-  open by default at a fixed width, whatever it shows, until you close it.
-  Closed, it takes no space; a handle slides in from the window's right edge
-  for previewable files or when the pointer reaches the edge.
-- Right-click menu on files and on the empty part of a pane: Open, Preview,
-  New Folder, Rename, Get Info, Refresh and Delete.
-- Uploads and downloads of files and whole folders: folders are recreated
-  on the other side (empty ones included), files keep their modification
-  time and permissions, and several files copy at once (as many as the
-  "parallel transfers" setting allows; a change applies to the next file
-  that starts).
-- Upload and Download buttons in the pane toolbars and the right-click
-  menu, ⇧⌘U / ⇧⌘D (Ctrl+Shift+U / Ctrl+Shift+D elsewhere) or F5: copies the
-  selection into the folder the other pane shows.
-- Drag files and folders from one pane to the other, or onto a folder in
-  it; drag them in from Finder or Explorer onto the Remote pane to upload.
-  The pane and folder that would receive them light up.
-- Transfers panel: every file with its progress, size, speed and state (a
-  failure's reason on hover) and a cancel button; the header shows how many
-  are active and queued, the total speed and time left, with Cancel all and
-  Clear finished. It opens when a transfer starts, and the destination pane
-  refreshes when a transfer finishes.
-- When a file already exists at the destination you choose Replace, Skip,
-  Keep Both (saved as "name (2).ext") or Resume (continue a partial copy;
-  only offered when the existing file is smaller), optionally for the rest
-  of that transfer. The dialog compares both files' size and date.
-- A transfer cut off by a dropped connection pauses instead of failing and
-  can continue where it stopped; a cancelled one leaves its partial file,
-  which a later transfer can resume.
-- Links to files are copied as the file; links to folders inside a folder
-  are skipped (they could loop) and listed as skipped.
-- The quit warning now appears while transfers are still queued, running,
-  waiting for your answer or paused, and says how many of each.
-- Settings → Transfers: how many files transfer at once (1–16).
-- Tabs above the panes: each tab has its own Local and Remote panes and its
-  own connection, so the same server can be open in several tabs. ⌘T opens a
-  tab, ⌘W closes one, ⌘1–⌘8 jump to a tab and ⌘9 to the last (Ctrl
-  elsewhere); a middle-click closes a tab. Each tab shows its connection's
-  status dot. Clicking a server in the sidebar connects in the current tab,
-  or in a new tab when that one is already in use; "Connect in New Tab" is
-  in its menu.
-- Open tabs and their folders come back on the next start. They do not
-  connect by themselves: a Reconnect button in each tab does.
-- Closing a tab, or disconnecting, while its transfers are still running
-  asks first; going ahead cancels them.
-- A dropped connection is noticed within about half a minute and
-  reconnects by itself, waiting 1, 2, 4, 8, then 16 seconds between
-  attempts. The tab keeps its folder and its transfers continue where they
-  stopped once the connection is back. The Remote pane shows the attempt
-  and a countdown, with Retry now and Disconnect; a toast says whether the
-  reconnect worked.
-- Reconnecting stops, with the reason and a Retry button, when it would
-  need a password or passphrase that is not saved, or when the server's
-  host key changed or the login is refused. Retry asks for what is missing.
-- Settings → Transfers: Reconnect attempts (0–20; 0 turns reconnecting
-  off).
-- Failed transfers have a Retry button.
-- A folder transfer cut off by a dropped connection carries on with the
-  folders it had not listed yet instead of failing them.
-- Choosing to quit while transfers are in progress cancels them.
-- "Retry now" while reconnecting no longer gives up when that try fails:
-  the automatic attempts that were left carry on.
-- Edit remote files in your own editor: double-click a remote file, choose
-  "Open in Editor" in its menu, or press ⌘E (Ctrl+E elsewhere). Every save is
-  uploaded back to the server, with an "Uploaded" toast; a failed upload says
-  why and is tried again on the next save.
-- When the file changed on the server since you opened it, saving asks
-  whether to overwrite the server copy, discard your changes (the server
-  version reloads in your editor), or save yours next to it as
-  `name (edited).ext`.
-- Saves made while the connection is down are uploaded once it is back.
-  Quitting while a save is not uploaded yet warns first.
-- Local copies of edited files are deleted when you disconnect or quit.
-- Settings → Editors: choose which application opens each file extension
-  (e.g. `.md` in Typora); other files open in the system's default app.
-- Drag files and folders out of the window to Finder or Explorer. Local
-  items go out as they are; remote items are downloaded first, with the
-  progress on the drag label, and the drag carries on once they are there.
-- Remote selections larger than 200 MB or 500 files, or that take longer
-  than 20 seconds to fetch, offer "Download to…" instead of a drag.
-- "Download to…" in the Remote pane's context menu downloads the selection
-  into a folder you pick.
-- Iris has its own logo and app icon: a rainbow arch.
-- A folder download cut off by a connection that died silently now waits
-  for the reconnect instead of failing.
+### Added
+
+- Connect over SSH with a password, a private key (passphrase-protected too), your running SSH agent or a host from `~/.ssh/config`, including ProxyJump and chains of jump hosts. Host keys are checked against `~/.ssh/known_hosts`. "Remember in keychain" stores a password or passphrase in the system keychain.
+- Saved connections in a sidebar with a live status dot; drag to reorder them (or use ⌥⌘↑ / ⌥⌘↓).
+- Local and Remote panes side by side, in tabs that each keep their own connection and folders and come back on the next start. Breadcrumb, go-to-path (⌘P / Ctrl+P), filter, sortable columns, type-to-select, keyboard navigation and a preview panel for text and images.
+- Uploads and downloads of files and folders, with a transfer panel (progress, speed, time left, cancel, retry), a counted total for folders, parallel transfers, conflict choices (Replace, Skip, Keep Both, Resume) and a CSV export of the transfer list. Drag files between the panes, in from Finder or Explorer, or out of the window.
+- Dropped connections are noticed and reconnect by themselves; transfers pause and continue where they stopped.
+- Sync folders in either direction (Update or Mirror) with several compare rules and options, review per group, and an "only files changed in" time window. Comparing deep trees is much faster.
+- Edit remote files in your own editor: every save is uploaded back, with a warning when the server copy changed meanwhile.
+- New Folder, rename, delete (local files go to the Trash or Recycle Bin), Get Info / Permissions, open local files in their application and show them in Finder or Explorer.
+- Settings for theme (dark, light, retro), reduced motion, hidden files, preview size limit, parallel transfers, reconnect attempts, editors and configurable keyboard shortcuts.
+- Resizable panes, a custom title bar and a warning before quitting while work is still in progress.
+
+### Changed
+
+- CI now uses the shared workflows from ci-workflows.
+
+### Fixed
+
+- Dialogs that open over each other no longer paint on top of one another; only the newest shows.
+- Transfers report progress up to the last byte instead of sitting at the first chunk.

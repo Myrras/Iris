@@ -14,7 +14,7 @@ macOS-first; Windows kept in mind.
 
 Iris's shared skeleton — the Cargo workspace shape (a `*-core` crate with zero
 Tauri dependency + a thin `src-tauri` IPC layer + a presentation-only React
-frontend), the `justfile`, `scripts/sync-version.sh`, CI, the shared config
+frontend), the `justfile`, CI (shared via ci-workflows), the shared config
 files, the design tokens, and the layering/IPC conventions — comes from a
 standalone template:
 
@@ -958,9 +958,6 @@ dependency** (plain-`cargo test`-able). `src-tauri` is a thin IPC adapter. `src/
 is the React app (presentation only).
 
 ```
-scripts/
-  sync-version.sh            # propagates the version to tauri.conf.json + package.json
-  next-version.sh, changelog.sh  # CI release helpers (+ *.test.sh)
 crates/iris-core/src/
   lib.rs      # Core — THE single entry point (all mutation goes through it)
   error.rs    # CoreError / CoreResult + CoreError::kind (app-owned text, never secrets)
@@ -1098,26 +1095,65 @@ Prefer `just` (run `just` to list recipes). The Tauri CLI is the local
 just dev            # run the app (Vite + Tauri, hot reload)
 just build          # production bundle
 just dev-signed     # debug .app, stable signing identity, launches it (macOS)
-just build-signed   # release .app, stable signing identity (macOS)
+just build-signed   # release .app, stable signing identity (macOS, shared recipe)
 just install-signed # build-signed + copy to /Applications/Iris.app
 just check          # cargo check --workspace
-just test           # cargo test --workspace + frontend vitest
+just ci             # shared: rustfmt, clippy -D warnings, cargo test, prettier, eslint, vitest, build
 just test-core      # iris-core tests only
-just test-integration  # Docker OpenSSH tests (needs Docker; not in `just test`)
-just lint           # clippy -D warnings + eslint
+just test-integration  # Docker OpenSSH tests (needs Docker; opt-in, not in `just ci`)
 just format         # rustfmt + prettier
 just version 0.2.0  # bump + sync version across all manifests (emergencies only; CI bumps on merge)
 just version-check  # verify versions are in sync
 ```
 
-CI (`.github/workflows/ci.yml`) is one `macos-latest` job: rustfmt, clippy
-`-D warnings`, `cargo test --workspace`, then typecheck, ESLint, Vitest, and a
-production `pnpm build`. A stub `dist/` is created first so
-`tauri::generate_context!` compiles. A PR-only `changelog` job requires an
-`## [Unreleased]` entry, and a `release` job turns every merge to `main` into a
-tagged GitHub Release (see _Versioning & CI_). `.github/workflows/
-integration.yml` runs the Docker SSH tests nightly and on demand
-(ubuntu, `libdbus-1-dev` for keyring's Linux backend).
+Shared recipes (`rust`, `frontend`, `ci`, `build-signed`, `sweep`) come from
+`~/.ci-workflows/common.just` (symlink to a clone of
+`RobbieMinderhoud/ci-workflows`); don't redefine those names.
+`test-integration` must not depend on them: in CI the import resolves to nothing.
+
+CI is shared: `.github/workflows/` holds thin callers pinned to
+`RobbieMinderhoud/ci-workflows@v1`. `ci.yml` = `tauri-ci.yml` (frontend + Rust
+job on ubuntu, Windows tests `-p iris-core`) and, on push to `main`,
+`release.yml`; `pr-checks.yml` = changelog entry + release label; `build.yml` =
+installers dispatched by the release; `integration.yml` = nightly
+`just test-integration` on ubuntu (`libdbus-1-dev` for keyring's Linux
+backend). Behaviour and the release scripts live in that repo; see its README.
+
+Windows runs on pushes to `main` and on PRs that carry the `windows` label
+(adding the label re-runs CI for the PR). Required checks: `ci / ci-ok`,
+`pr-checks / Changelog entry` and `pr-checks / Release label`; don't require
+`ci / frontend`, `ci / rust` or `ci / windows`. The labels `patch`, `minor`,
+`major` and `windows` must exist.
+
+### When to add the `windows` label
+
+Add `windows` to a PR when it:
+
+- touches `cfg(windows)`, `cfg(unix)` or `target_os` code, or platform-specific modules
+- changes file paths, path separators, drive letters or case sensitivity; process spawning, PTY or shell quoting; environment variables; WSL
+- changes the Windows settings in `tauri.conf.json` (bundle, NSIS) or installer scripts
+- adds or upgrades a dependency with platform-specific code (`tauri`, `windows-rs`, `portable-pty`, …) or bumps the Rust toolchain
+- fixes a Windows bug
+
+Skip it for frontend-only, docs-only and purely cross-platform logic changes. If unsure, add it: `main` runs Windows after the merge anyway, and a failure there blocks the release.
+
+Windows-sensitive spots in Iris (all `crates/iris-core/tests/*` except
+`core.rs` are `cfg(unix)`, so Windows CI compiles them out; Windows coverage is
+the lib unit tests):
+
+- `crates/iris-core/src/fs/local.rs`: local paths (verbatim `\\?\` prefix), hidden
+  attribute, case-insensitive names
+- `crates/iris-core/src/transfer/naming.rs`: forbidden characters (`\`, `:`)
+- `crates/iris-core/src/ssh/agent.rs`: OpenSSH agent pipe / Pageant (never run on Windows yet)
+- `crates/iris-core/src/ssh_config.rs`: `~/.ssh/config` and `known_hosts` locations
+- `crates/iris-core/src/secrets.rs` and `Cargo.toml` (`keyring` backends per OS)
+- `crates/iris-core/src/fs/trash.rs`: Recycle Bin
+- `crates/iris-core/src/drag_out.rs`, `src-tauri/src/commands/drag_out.rs`
+  (`tauri-plugin-drag`): dragging out to Explorer
+- `src-tauri/src/opener.rs`: open in editor / reveal (`ShellExecute`)
+- `src-tauri/tauri.windows.conf.json`, `src-tauri/tauri.conf.json` (bundle, NSIS
+  installer built by the shared `build.yml`) and `windows_subsystem` in
+  `src-tauri/src/main.rs`
 
 ### macOS keychain prompt during development
 
@@ -1158,33 +1194,31 @@ never sticks. Release builds signed with a stable identity don't have this.
 ## Versioning & CI
 
 - **SemVer.** The `[workspace.package]` version in the root `Cargo.toml` is the
-  single source of truth; `scripts/sync-version.sh` propagates it to
+  single source of truth; the shared `sync-version.sh` propagates it to
   `tauri.conf.json` and `package.json` (`just version-check` detects drift).
 - **`CHANGELOG.md`** follows _Keep a Changelog_ and lists **only functional
   (user-facing) changes**. Every PR adds its entry under `## [Unreleased]`; the
-  PR-only `changelog` job in `ci.yml` fails unless the PR touches
-  `CHANGELOG.md` and that section holds at least one `- ` entry
-  (`scripts/changelog.sh unreleased`). It also runs the release-script tests
-  (`scripts/*.test.sh`).
-- **Releasing is automatic: every merge to `main` is a release.** Before
-  merging, set a `minor` or `major` label on the PR if it warrants more than a
-  patch. The `release` job in `ci.yml` runs after `ci` on each push to `main`
+  `pr-checks / Changelog entry` check fails unless the PR touches
+  `CHANGELOG.md` and that section holds at least one `- ` entry.
+- **Releasing is automatic: every merge to `main` is a release.** Every
+  PR needs exactly one of the labels `patch`, `minor` or `major`, enforced by
+  the `pr-checks / Release label` check. The `release` job in `ci.yml` runs after `ci` on each push to `main`
   (its own non-cancelling `release` concurrency group; the workflow never
   cancels runs on `main`, so no merge is left without a version). It checks out
   `main` itself, not the pushed sha, so a queued second run sees the first
   one's bump; an empty `## [Unreleased]` means already released, and it exits.
   Otherwise the version is the latest `v*` tag bumped by
-  `scripts/next-version.sh` — **patch by default**, `minor`/`major` when the
-  merged PR carries that label (`major` wins); with no `v*` tag yet, the first
+  the shared `next-version.sh` — the merged PR's label (`major` wins; patch for a
+  push without a PR); with no `v*` tag yet, the first
   release ships the `Cargo.toml` version as-is. It renames `## [Unreleased]` to
-  `## [X.Y.Z] - date` (`scripts/changelog.sh release`), runs
+  `## [X.Y.Z] - date` (shared `changelog.sh release`), runs
   `sync-version.sh --set` and `cargo update --workspace` (Cargo.lock), commits
   `Release vX.Y.Z [skip ci]` to `main` as `github-actions[bot]`, pushes it with
   the annotated tag `vX.Y.Z` (`--atomic`), creates the GitHub Release with the
   section as notes, and dispatches `build.yml` on the tag.
-- **Bundle build** (`.github/workflows/build.yml`): a matrix over macOS and
+- **Bundle build** (`build.yml`, shared): a matrix over macOS and
   Windows, each building natively. macOS packages the `.app` + APFS `.dmg`
-  (`scripts/make-dmg.sh`); Windows the NSIS `.exe`. Runs on
+  (shared `make-dmg.sh`); Windows the NSIS `.exe`. Runs on
   `workflow_dispatch` only; on a tag ref (the release job's dispatch) it
   attaches the installers to that tag's GitHub Release. There is deliberately
   **no tag trigger**: a deploy-key push fires workflows, and GitHub's docs don't

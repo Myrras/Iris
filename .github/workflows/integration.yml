@@ -1,10 +1,8 @@
+# Runs `just test-integration` from this repo's justfile.
+# Off the per-PR path on purpose: image pulls and real external services make
+# these slow and occasionally flaky. They run nightly and on demand.
 name: Integration tests
 
-# Dockerized SSH integration tests: testcontainers starts real OpenSSH
-# servers (linuxserver/openssh-server, ephemeral host ports) and a jump host
-# on a shared network. Kept off the per-PR path to keep PR feedback fast and
-# avoid the image pulls on every PR — runs nightly and on demand from the
-# Actions tab.
 on:
   schedule:
     - cron: "0 3 * * *" # 03:00 UTC daily
@@ -15,28 +13,6 @@ permissions:
 
 jobs:
   integration:
-    name: SSH integration
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # iris-core has no Tauri/WebKitGTK dependency, but it does pull in
-      # keyring's Linux Secret Service backend, which links libdbus via
-      # libdbus-sys (its build script needs the headers + pkg-config).
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: integration
-
-      # testcontainers talks to the Docker daemon preinstalled on GitHub's
-      # ubuntu runners. Scoped to the ssh_integration binary: a bare
-      # `-- --ignored` would also run the lib's `live_keychain_round_trip`,
-      # which needs a real Secret Service daemon.
-      - name: Run SSH integration tests
-        run: cargo test -p iris-core --test ssh_integration -- --ignored
+    uses: RobbieMinderhoud/ci-workflows/.github/workflows/integration.yml@v1
+    with:
+      apt-packages: libdbus-1-dev pkg-config
