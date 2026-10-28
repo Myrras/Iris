@@ -11,6 +11,8 @@ when it merges.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-28
+
 ### Added
 
 - Connect over SSH with a password, a private key (passphrase-protected too), your running SSH agent or a host from `~/.ssh/config`, including ProxyJump and chains of jump hosts. Host keys are checked against `~/.ssh/known_hosts`. "Remember in keychain" stores a password or passphrase in the system keychain.
