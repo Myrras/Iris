@@ -10,3 +10,7 @@ request adds its entry under `## [Unreleased]`; the version number is assigned
 when it merges.
 
 ## [Unreleased]
+
+### Changed
+
+- Every pull request now needs exactly one release label (`patch`, `minor` or `major`). The `Release label` check fails without it, and the label sets the version bump on merge.
