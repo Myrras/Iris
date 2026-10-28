@@ -368,11 +368,12 @@ Host *
         assert_eq!(bastion.user.as_deref(), Some("jumper"));
         assert_eq!(bastion.port, Some(2200));
         assert_eq!(bastion.proxy_jump, None);
+        // Compared as paths: on Windows `~` expands to `C:\Users\x/.ssh/…`,
+        // mixed separators that name the same file.
         let home = std::env::home_dir().unwrap();
-        assert_eq!(
-            bastion.identity_files,
-            [home.join(".ssh/id_bastion").to_string_lossy().into_owned()]
-        );
+        let identity_files: Vec<PathBuf> =
+            bastion.identity_files.iter().map(PathBuf::from).collect();
+        assert_eq!(identity_files, [home.join(".ssh").join("id_bastion")]);
 
         let app = &hosts[1];
         // The Match block is ignored: its User does not leak into `app`.

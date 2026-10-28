@@ -155,12 +155,13 @@ impl FileSystem for LocalFs {
         let path = path.to_string();
         blocking(move || {
             let at = |e| CoreError::from_io_at(e, &path);
-            let mut file = std::fs::File::open(&path).map_err(at)?;
-            let meta = file.metadata().map_err(at)?;
-            if meta.is_dir() {
+            // Check before opening: Windows refuses to open a folder as a
+            // file (access denied), which would read as a permission error.
+            if std::fs::metadata(&path).map_err(at)?.is_dir() {
                 return Err(CoreError::InvalidInput(format!("{path} is a folder")));
             }
-            let total_size = meta.len();
+            let mut file = std::fs::File::open(&path).map_err(at)?;
+            let total_size = file.metadata().map_err(at)?.len();
             file.seek(SeekFrom::Start(offset)).map_err(at)?;
             let capacity = max_bytes.min(total_size.saturating_sub(offset));
             let mut bytes = Vec::with_capacity(usize::try_from(capacity).unwrap_or(0));
