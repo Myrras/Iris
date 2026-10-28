@@ -1122,8 +1122,8 @@ backend). Behaviour and the release scripts live in that repo; see its README.
 Windows runs on pushes to `main` and on PRs that carry the `windows` label
 (adding the label re-runs CI for the PR). Required checks: `ci / ci-ok`,
 `pr-checks / Changelog entry` and `pr-checks / Release label`; don't require
-`ci / frontend`, `ci / rust` or `ci / windows`. The labels `patch`, `minor`,
-`major` and `windows` must exist.
+`ci / frontend`, `ci / rust` or `ci / windows`. The labels `release:patch`, `release:minor`,
+`release:major`, `no-release` and `windows` must exist.
 
 ### When to add the `windows` label
 
@@ -1201,14 +1201,14 @@ never sticks. Release builds signed with a stable identity don't have this.
   `pr-checks / Changelog entry` check fails unless the PR touches
   `CHANGELOG.md` and that section holds at least one `- ` entry.
 - **Releasing is automatic: every merge to `main` is a release.** Every
-  PR needs exactly one of the labels `patch`, `minor` or `major`, enforced by
-  the `pr-checks / Release label` check. The `release` job in `ci.yml` runs after `ci` on each push to `main`
+  PR needs exactly one of the labels `release:patch`, `release:minor` or `release:major` (`no-release` for
+  CI, config or docs-only PRs), enforced by the `pr-checks / Release label` check. The `release` job in `ci.yml` runs after `ci` on each push to `main`
   (its own non-cancelling `release` concurrency group; the workflow never
   cancels runs on `main`, so no merge is left without a version). It checks out
   `main` itself, not the pushed sha, so a queued second run sees the first
   one's bump; an empty `## [Unreleased]` means already released, and it exits.
   Otherwise the version is the latest `v*` tag bumped by
-  the shared `next-version.sh` — the merged PR's label (`major` wins; patch for a
+  the shared `next-version.sh` — the merged PR's label (`release:major` wins; patch for a
   push without a PR); with no `v*` tag yet, the first
   release ships the `Cargo.toml` version as-is. It renames `## [Unreleased]` to
   `## [X.Y.Z] - date` (shared `changelog.sh release`), runs
@@ -1228,7 +1228,7 @@ never sticks. Release builds signed with a stable identity don't have this.
 - **Protected `main`** (optional, one-off setup per repo): the release job must
   push to `main`, which a ruleset requiring PRs would block (`GH013`); GitHub
   refuses the Actions app as a bypass actor on a user-owned repo (an org-owned repo can add the Actions app as a bypass actor instead), so
-  `GITHUB_TOKEN` cannot get through. Create the labels `patch`, `minor` and `major`,
+  `GITHUB_TOKEN` cannot get through. Create the labels `release:patch`, `release:minor`, `release:major` and `no-release`,
   then add a **deploy key with write access** and its private half as the
   secret **`RELEASE_DEPLOY_KEY`**:
   `ssh-keygen -t ed25519 -N '' -C release -f release_key`,
