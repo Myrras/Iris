@@ -39,13 +39,15 @@ build:
 # (identity lives in the gitignored src-tauri/tauri.dev-signed.conf.json).
 
 # Build + launch a debug .app signed with a STABLE certificate (macOS).
-dev-signed: _signed-conf
+dev-signed:
+    @just _signed-conf
     pnpm tauri build --debug --bundles app --config src-tauri/tauri.dev-signed.conf.json
     @just sweep
     open "$CARGO_TARGET_DIR/debug/bundle/macos/Iris.app"
 
 # Build the signed release and copy it straight into /Applications.
-install-signed: build-signed
+install-signed:
+    @just build-signed
     rm -rf "/Applications/Iris.app"
     cp -R "$CARGO_TARGET_DIR/release/bundle/macos/Iris.app" "/Applications/Iris.app"
     @echo "Installed → /Applications/Iris.app"
@@ -67,7 +69,7 @@ test-core:
     cargo test -p iris-core
 
 # Scoped to the ssh_integration binary so it does not also run the lib's manual
-# `live_keychain_round_trip` test. Must not depend on common.just recipes (CI).
+# `live_keychain_round_trip` test. Must not use common.just recipes (CI has no import), not even as a dependency.
 
 # Run the Dockerized OpenSSH integration tests (needs Docker).
 test-integration:
