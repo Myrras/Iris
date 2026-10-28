@@ -1,0 +1,18 @@
+# Runs `just test-integration` from this repo's justfile.
+# Off the per-PR path on purpose: image pulls and real external services make
+# these slow and occasionally flaky. They run nightly and on demand.
+name: Integration tests
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    uses: RobbieMinderhoud/ci-workflows/.github/workflows/integration.yml@v1
+    with:
+      apt-packages: libdbus-1-dev pkg-config

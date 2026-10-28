@@ -1,0 +1,295 @@
+/* The bottom transfer island: same island chrome as the panes. */
+.panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  animation: islandIn var(--dur-3) var(--ease-out);
+}
+
+/* Header row: collapse toggle (sidebar section-header style), the live
+   summary, then the batch actions. */
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  height: var(--statusbar-h);
+  padding: 0 var(--sp-2) 0 0;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--sp-1);
+  height: 100%;
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+  border: none;
+  border-radius: 0;
+  background: none;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  text-align: left;
+  flex-shrink: 0;
+}
+
+/* Outrank the global button hover/press chrome: only recolour. */
+.toggle:hover:not(:disabled) {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+}
+
+.toggle:active:not(:disabled) {
+  transform: none;
+}
+
+.toggle:focus-visible {
+  outline-offset: -2px;
+}
+
+/* Points up while collapsed (the panel opens upward), down while open. */
+.caretWrap {
+  display: flex;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  transform: rotate(-90deg);
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.caretWrap[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+.icon {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.headerActions {
+  display: flex;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+}
+
+/* Quiet text buttons, like the sidebar's section actions. */
+.headerAction {
+  height: 20px;
+  padding: 0 var(--sp-2);
+  border: none;
+  background: none;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.headerAction:hover:not(:disabled) {
+  border: none;
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.headerAction:active:not(:disabled) {
+  transform: none;
+}
+
+/* Total progress, full width under the header. */
+.total {
+  padding: 0 var(--sp-3) var(--sp-2);
+}
+
+/* Grid trick (as in the sidebar) for a smooth auto → 0 height animation. */
+.body {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--dur-3) var(--ease-out);
+}
+
+.bodyCollapsed {
+  grid-template-rows: 0fr;
+}
+
+.bodyInner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.placeholder {
+  margin: 0;
+  height: var(--transfers-list-h);
+  padding: var(--sp-3);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+/* ── Job list ─────────────────────────────────────────────────────────────── */
+
+.list {
+  height: var(--transfers-list-h);
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+
+.canvas {
+  position: relative;
+  width: 100%;
+}
+
+.slot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+/* One job, in Podium's ProcessRow look: quiet row, hover tint, the cancel
+   action revealed on hover. */
+.row {
+  display: grid;
+  grid-template-columns: 14px minmax(80px, 1fr) 120px 128px 72px 104px 20px;
+  align-items: center;
+  gap: var(--sp-2);
+  height: 100%;
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.row:hover {
+  background: var(--surface-hover);
+}
+
+.row[data-state="cancelled"],
+.row[data-state="skipped"] {
+  color: var(--text-muted);
+}
+
+.direction {
+  color: var(--text-faint);
+}
+
+/* Name over the muted paths line. */
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.paths {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.error {
+  color: var(--danger);
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A folder placeholder (its listing was cut off): a leading glyph. */
+.folder {
+  vertical-align: -2px;
+  margin-right: var(--sp-1);
+  color: var(--text-faint);
+}
+
+.bytes,
+.speed {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.state {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.row[data-state="failed"] .stateText {
+  color: var(--danger);
+}
+
+.stateText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  opacity: 0;
+  transition:
+    opacity var(--dur-1) var(--ease-out),
+    background var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+
+.row:hover .action,
+.action:focus-visible {
+  opacity: 1;
+}
+
+.action:hover:not(:disabled) {
+  border: none;
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.action:active:not(:disabled) {
+  transform: none;
+}
+
+@keyframes islandIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}

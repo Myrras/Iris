@@ -9,16 +9,110 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 44px;
+  height: 40px;
   flex-shrink: 0;
-  padding: 0 var(--sp-4);
+  padding: 0 var(--sp-3);
+  /* A slim brand strip that blends into the canvas — no dividing line. */
   background: var(--canvas);
+  /* Anchors .brandCentered (macOS) — see below. */
+  position: relative;
+}
+
+/* Windows: the strip IS the (custom) title bar, so the controls run flush to the
+   top-right corner — drop the right padding the macOS brand strip uses. */
+.titlebarWindows {
+  padding-right: 0;
+}
+
+/* macOS: the native traffic lights overlay the top-left corner
+   (titleBarStyle: Overlay) — keep clear of them. */
+.titlebarMac {
+  padding-left: 78px;
 }
 
 .brand {
   display: flex;
   align-items: baseline;
   gap: var(--sp-2);
+}
+
+/* macOS: the traffic lights occupy the leading edge, so centering the brand
+   the normal flex way (space-between's midpoint) would skew it off-center —
+   anchor it to the header's own true center instead, independent of how wide
+   the control clusters on either side are. */
+.brandCentered {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* Right-hand cluster: settings gear (+ window controls on Windows). Opt out of
+   the drag region so the buttons receive clicks instead of moving the window. */
+.titlebarRight {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+/* macOS: .brandCentered is out of the flex flow, leaving this cluster as the
+   only child — space-between would then park it at the leading edge. */
+.titlebarMac .titlebarRight {
+  margin-left: auto;
+}
+
+.settingsBtn {
+  width: 44px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  transition:
+    background var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+
+.settingsBtn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border: none;
+  color: var(--text);
+}
+
+.settingsBtn:active:not(:disabled) {
+  transform: none;
+  background: var(--surface-2);
+}
+
+.settingsBtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Playful quarter-turn on hover, echoing the brand logo's tilt. */
+.settingsBtn svg {
+  transition: transform var(--dur-3) var(--ease-spring);
+}
+
+.settingsBtn:hover svg {
+  transform: rotate(90deg);
+}
+
+.logo {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+  align-self: center;
+  flex-shrink: 0;
+  transition: transform var(--dur-3) var(--ease-spring);
+}
+
+/* Playful tilt when hovering the brand. */
+.brand:hover .logo {
+  transform: rotate(-8deg) translateY(-1px);
 }
 
 .product {
@@ -32,82 +126,4 @@
   font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-}
-
-.body {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-4);
-  padding: var(--sp-4);
-  background: var(--canvas);
-}
-
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-md);
-  padding: var(--sp-4);
-  animation: cardIn var(--dur-3) var(--ease-out);
-}
-
-@keyframes cardIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.99);
-  }
-}
-
-.heading {
-  margin: 0 0 var(--sp-3);
-  font-size: var(--fs-md);
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.row {
-  display: flex;
-  gap: var(--sp-2);
-  align-items: center;
-}
-
-.row button {
-  flex-shrink: 0;
-}
-
-.result {
-  margin: var(--sp-3) 0 0;
-  color: var(--success);
-}
-
-.error {
-  margin: var(--sp-3) 0 0;
-  color: var(--danger);
-}
-
-.empty {
-  margin: var(--sp-3) 0 0;
-  color: var(--text-faint);
-}
-
-.notes {
-  list-style: none;
-  margin: var(--sp-3) 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-}
-
-.note {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--sp-2) var(--sp-3);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
 }

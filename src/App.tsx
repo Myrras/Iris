@@ -1,127 +1,160 @@
 /**
- * Application shell.
+ * Iris — application shell (Podium's island layout).
  *
- * A minimal, self-contained demo of the whole stack: a greet form that calls a
- * pure core command, and a notes list backed by the core's state through the
- * `notesStore`. Replace this with your real UI — the wiring (typed IPC, a
- * Zustand store mirroring the backend, token-driven styling, a theme toggle) is
- * the part worth keeping.
+ * Layout: a slim title bar on the canvas; below it `Shell` — the sidebar
+ * island on the left and the work column on the right (the Local and Remote
+ * pane islands side by side with the collapsible preview island at their
+ * right, the collapsible transfer island underneath, the tab strip above the
+ * panes; each tab its own pane pair and session, `tabsStore`), with
+ * splitters between the islands. This
+ * component also owns the app-level wiring: the backend events
+ * (`useCoreEvents`), files dragged in from the OS (`useNativeDrop`), the
+ * pane-drag chip (`DragGhost`), the Sync dialog (`SyncDialog`), opening
+ * the active tab's panes and the app shortcuts (`lib/keymap`), settings access (native menu on
+ * macOS, title-bar gear elsewhere), the close-warning event, and suppressing
+ * webview-only behaviour (reload shortcuts, the browser context menu).
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { greet, toIpcError } from "./ipc/commands";
-import { useNotesStore } from "./state/notesStore";
-import { useThemeStore } from "./state/themeStore";
+import { onMenuOpenSettings, onWindowCloseRequested } from "./ipc/events";
+import { withHint } from "./lib/keymap";
+import { isMac, isWindows } from "./lib/platform";
+import { useCoreEvents } from "./lib/useCoreEvents";
+import { useKeymap } from "./lib/useKeymap";
+import { useNativeDrop } from "./lib/useNativeDrop";
+import { useTabShortcuts } from "./lib/useTabShortcuts";
+import { useTabsStore } from "./state/tabsStore";
+import { useSettingsRequestStore } from "./state/settingsRequestStore";
+import { CloseWarningModal } from "./components/CloseWarningModal";
+import { ConnectionForm } from "./components/ConnectionForm";
+import { DragGhost } from "./components/DragGhost";
+import { LogoMark } from "./components/LogoMark";
+import { PromptHost } from "./components/PromptHost";
+import { SettingsModal } from "./components/SettingsModal";
+import { Shell } from "./components/Shell";
+import { SyncDialog } from "./components/SyncDialog";
+import { TabCloseModal } from "./components/TabCloseModal";
+import { Toasts } from "./components/Toasts";
+import { WindowControls } from "./components/WindowControls";
+import { SettingsIcon } from "./components/icons";
 import styles from "./App.module.css";
 
 export default function App() {
-  const [name, setName] = useState("");
-  const [greeting, setGreeting] = useState("");
-  const [greetError, setGreetError] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
+  useCoreEvents();
+  useNativeDrop();
+  const keymap = useKeymap();
 
-  const themeMode = useThemeStore((s) => s.mode);
-  const toggleTheme = useThemeStore((s) => s.toggle);
-
-  const notes = useNotesStore((s) => s.notes);
-  const notesError = useNotesStore((s) => s.lastError);
-  const refreshNotes = useNotesStore((s) => s.refresh);
-  const addNote = useNotesStore((s) => s.add);
-  const removeNote = useNotesStore((s) => s.remove);
-
+  // Open the active tab's panes: the local pane in its restored folder (or
+  // home), the remote pane only once the user connects (never on its own).
   useEffect(() => {
-    void refreshNotes();
-  }, [refreshNotes]);
+    useTabsStore.getState().showActive();
+  }, []);
 
-  async function onGreet(e: React.FormEvent) {
-    e.preventDefault();
-    try {
-      setGreeting(await greet(name));
-      setGreetError(null);
-    } catch (err) {
-      setGreetError(toIpcError(err).message);
-      setGreeting("");
-    }
-  }
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Ctrl+, off macOS (rebindable); the browser shortcuts are swallowed there.
+  const openSettings = useCallback(() => setSettingsOpen(true), []);
+  useTabShortcuts({ onOpenSettings: openSettings });
+  const settingsRequest = useSettingsRequestStore((s) => s.request);
+  useEffect(() => {
+    if (settingsRequest) setSettingsOpen(true);
+  }, [settingsRequest]);
+  const [closeWarnOpen, setCloseWarnOpen] = useState(false);
 
-  async function onAddNote(e: React.FormEvent) {
-    e.preventDefault();
-    if (!draft.trim()) return;
-    await addNote(draft);
-    setDraft("");
-  }
+  // The backend blocked a quit because work is still in flight — surface the
+  // warning so the user can confirm or cancel.
+  useEffect(() => {
+    const sub = onWindowCloseRequested(() => setCloseWarnOpen(true));
+    return () => {
+      sub.then((unlisten) => unlisten()).catch(() => undefined);
+    };
+  }, []);
+
+  // Suppress the webview's default right-click menu (the browser-y "Save as /
+  // Print / Share" items, most glaring on Windows' WebView2). Kept inside
+  // editable surfaces so native copy/paste still works there.
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.closest(
+          'input, textarea, [contenteditable=""], [contenteditable="true"]',
+        )
+      ) {
+        return;
+      }
+      e.preventDefault();
+    };
+    window.addEventListener("contextmenu", onContextMenu);
+    return () => window.removeEventListener("contextmenu", onContextMenu);
+  }, []);
+
+  // macOS: the native menu's Settings… item (⌘,) emits `menu:open-settings`.
+  // Elsewhere the shortcut comes from the keymap (`useTabShortcuts`), so
+  // the two never double-fire.
+  useEffect(() => {
+    const menuSub = onMenuOpenSettings(() => setSettingsOpen(true));
+    return () => {
+      menuSub.then((unlisten) => unlisten()).catch(() => undefined);
+    };
+  }, []);
 
   return (
     <div className={styles.app}>
-      <header className={styles.titlebar}>
-        <div className={styles.brand}>
+      <header
+        className={`${styles.titlebar}${isWindows ? ` ${styles.titlebarWindows}` : ""}${isMac ? ` ${styles.titlebarMac}` : ""}`}
+        // Windows has no native title bar (decorations: false) and macOS
+        // overlays its traffic lights on our strip (titleBarStyle: Overlay) —
+        // see CLAUDE.md's "Window chrome" — so the whole strip is the drag
+        // handle on either. Linux keeps its native title bar for now.
+        data-tauri-drag-region={isWindows || isMac ? true : undefined}
+      >
+        {/* macOS draws its own traffic lights top-left (.titlebarMac leaves
+            room for them), so the brand is centered instead of leading. */}
+        <div
+          className={`${styles.brand}${isMac ? ` ${styles.brandCentered}` : ""}`}
+        >
+          <LogoMark size={18} className={styles.logo} aria-hidden />
           <span className={styles.product}>Iris</span>
           <span className={styles.tagline}>remote file manager</span>
         </div>
-        <button
-          type="button"
-          className="ghost"
-          onClick={toggleTheme}
-          aria-label="Toggle theme"
-        >
-          {themeMode === "dark" ? "Light" : "Dark"} theme
-        </button>
+        <div className={styles.titlebarRight}>
+          {/* macOS reaches Settings via the native menu bar (⌘,); the gear
+              lives in the custom title bar on the other platforms. */}
+          {!isMac && (
+            <button
+              type="button"
+              className={styles.settingsBtn}
+              aria-label="Settings"
+              title={withHint("Settings", keymap, "openSettings")}
+              onClick={() => setSettingsOpen(true)}
+            >
+              <SettingsIcon size={16} />
+            </button>
+          )}
+          {isWindows && <WindowControls />}
+        </div>
       </header>
 
-      <main className={styles.body}>
-        <section className={styles.card}>
-          <h2 className={styles.heading}>Greet (pure core command)</h2>
-          <form className={styles.row} onSubmit={onGreet}>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Your name"
-              aria-label="Your name"
-            />
-            <button type="submit" className="primary">
-              Greet
-            </button>
-          </form>
-          {greeting && <p className={styles.result}>{greeting}</p>}
-          {greetError && <p className={styles.error}>{greetError}</p>}
-        </section>
+      <Shell />
 
-        <section className={styles.card}>
-          <h2 className={styles.heading}>Notes (core state via store)</h2>
-          <form className={styles.row} onSubmit={onAddNote}>
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="Add a note…"
-              aria-label="Add a note"
-            />
-            <button type="submit" className="primary">
-              Add
-            </button>
-          </form>
-          {notesError && <p className={styles.error}>{notesError.message}</p>}
-          {notes.length === 0 ? (
-            <p className={styles.empty}>No notes yet.</p>
-          ) : (
-            <ul className={styles.notes}>
-              {notes.map((note) => (
-                <li key={note.id} className={styles.note}>
-                  <span>{note.text}</span>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => void removeNote(note.id)}
-                    aria-label={`Remove ${note.text}`}
-                  >
-                    ✕
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </main>
+      <Toasts />
+      <DragGhost />
+      <ConnectionForm />
+      <PromptHost />
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => {
+          setSettingsOpen(false);
+          useSettingsRequestStore.getState().clear();
+        }}
+      />
+      <SyncDialog />
+      <TabCloseModal />
+      <CloseWarningModal
+        open={closeWarnOpen}
+        onClose={() => setCloseWarnOpen(false)}
+      />
     </div>
   );
 }

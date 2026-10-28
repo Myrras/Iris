@@ -1,5 +1,13 @@
 //! IPC command modules. Each command is a thin (de)serialization shim over
 //! [`iris_core::Core`]; no domain logic lives here.
 
-pub mod greet;
-pub mod notes;
+pub mod connection;
+pub mod drag_out;
+pub mod edit;
+pub mod fs;
+pub mod open;
+pub mod session;
+pub mod settings;
+pub mod sync;
+pub mod transfers;
+pub mod window;

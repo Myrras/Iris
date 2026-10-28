@@ -1,0 +1,204 @@
+/* Layout adapted from Selene's ResultsGrid.module.css: one scroll container,
+   a sticky header, absolutely positioned (virtualised) rows. Rows lay their
+   cells out with the shared `--cols` grid template. */
+
+.scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.scroll:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.canvas {
+  position: relative;
+  /* Fill the pane; never shrink below the columns' minimums (then scroll). */
+  min-width: max(100%, var(--min-w));
+}
+
+.headerRow {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  width: 100%;
+  display: grid;
+  grid-template-columns: var(--cols);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.headerCell {
+  display: flex;
+  min-width: 0;
+}
+
+.sortBtn {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 2px;
+  padding: 0 var(--sp-2);
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sortBtn[data-align="right"] {
+  justify-content: flex-end;
+}
+
+.sortBtn:hover:not(:disabled) {
+  border: none;
+  background: var(--surface-hover);
+  color: var(--text-muted);
+}
+
+.sortBtn:active:not(:disabled) {
+  transform: none;
+}
+
+.row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: var(--cols);
+  align-items: center;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  cursor: default;
+  /* Only `background` transitions — the virtualiser's inline translateY must
+     stay instant while scrolling. */
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+/* Not while dragging: WebKit does not refresh :hover with the button held, so
+   it would stick to rows; only the drop target lights up then. Nor while the
+   keyboard drives (Finder): the cursor row is the highlight, not the pointer.
+   Nor while an island is being resized (`data-resizing`). */
+:where(
+    html:not([data-dragging]):not([data-resizing])
+      .scroll:not([data-keyboard="true"])
+  )
+  .row:hover {
+  background: var(--surface-hover);
+}
+
+.row[data-selected="true"] {
+  background: var(--selection);
+}
+
+/* Finder: selected rows in the inactive pane turn neutral grey. */
+.row[data-selected="true"][data-pane-active="false"] {
+  background: var(--selection-inactive);
+}
+
+.scroll:focus .row[data-cursor="true"] {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.row[data-hidden="true"] {
+  color: var(--text-muted);
+}
+
+/* A transfer drag would drop into this folder. */
+.row[data-drop-target="true"] {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.cell {
+  min-width: 0;
+  padding: 0 var(--sp-2);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.cell[data-align="right"] {
+  text-align: right;
+}
+
+.cell[data-mono="true"] {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-ligatures: none;
+}
+
+.name {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  color: var(--text);
+}
+
+.row[data-hidden="true"] .name {
+  color: var(--text-muted);
+}
+
+.kindIcon {
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+
+.kindIcon[data-dir="true"] {
+  color: var(--accent);
+}
+
+.nameText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.linkIcon {
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+
+.linkIcon[data-broken="true"] {
+  color: var(--danger);
+}
+
+.empty {
+  padding: var(--sp-5) var(--sp-4);
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+/* Inline rename (Selene's rename field): fills the name cell. */
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  transition: box-shadow var(--dur-1) var(--ease-out);
+}
+
+.renameInput:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}

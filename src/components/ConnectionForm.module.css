@@ -1,0 +1,136 @@
+/* Form layout from Selene's ConnectionDialog.module.css; the error block from
+   its PasswordPrompt.module.css. */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.row {
+  display: flex;
+  gap: var(--sp-3);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.narrow {
+  width: 96px;
+  flex-shrink: 0;
+}
+
+/* The key path input + its Browse button on one line. */
+.fileRow {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.fileRow button {
+  flex-shrink: 0;
+}
+
+/* A control stacked under another in the same field (custom jump host). */
+.below {
+  margin-top: var(--sp-2);
+}
+
+/* "Forget saved password and passphrase" + its confirmation. */
+.forgetRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.forgetRow .hint {
+  margin-top: 0;
+}
+
+.hint {
+  margin-top: var(--sp-1);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+/* Label of a control group that has no single input to point at. */
+.groupLabel {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  margin-bottom: var(--sp-1);
+}
+
+/* Auth method switch (Password | Key file | SSH agent | SSH config), styled
+   like the settings tabs. */
+.segmented {
+  display: flex;
+  padding: 2px;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.segment {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+}
+
+.segment:hover:not(:disabled) {
+  border: none;
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.segment[data-active="true"],
+.segment[data-active="true"]:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.form input[aria-invalid="true"],
+.form select[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.form input[aria-invalid="true"]:focus,
+.form select[aria-invalid="true"]:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+.fieldError {
+  margin-top: var(--sp-1);
+  color: var(--danger);
+  font-size: var(--fs-xs);
+  animation: errorIn var(--dur-2) var(--ease-out);
+}
+
+.saveError {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  animation: errorIn var(--dur-2) var(--ease-out);
+}
+
+@keyframes errorIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}

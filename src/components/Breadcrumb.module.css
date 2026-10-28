@@ -1,0 +1,59 @@
+.crumbs {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+/* Clicking the empty part types a path instead. */
+.editable {
+  cursor: text;
+}
+
+.crumbs::-webkit-scrollbar {
+  display: none;
+}
+
+.list {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  white-space: nowrap;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.sep {
+  color: var(--text-faint);
+  margin: 0 1px;
+}
+
+.segment,
+.current {
+  padding: 1px var(--sp-1);
+  font-size: var(--fs-sm);
+  border-radius: var(--radius-sm);
+}
+
+.segment {
+  border: none;
+  background: none;
+  color: var(--text-muted);
+}
+
+.segment:hover:not(:disabled) {
+  border: none;
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.current {
+  color: var(--text);
+  font-weight: 600;
+}

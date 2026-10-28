@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <!-- Iris mark: a rainbow of two bands over a core, on the 100x100 grid
+       the Podium and Selene marks use (same opacity steps). Iris, the
+       messenger of the gods, travelled on the rainbow; the arch also reads
+       as a passage between two sides. LogoMark.tsx draws these paths in
+       currentColor; iris.svg puts them on the app-icon tile. -->
+  <g fill="#4493f8">
+    <path d="M6 76V64A44 44 0 0 1 94 64V76H84V64A34 34 0 0 0 16 64V76Z" opacity="0.45"/>
+    <path d="M20 76V64A30 30 0 0 1 80 64V76H70V64A20 20 0 0 0 30 64V76Z" opacity="0.72"/>
+    <path d="M34 76V64A16 16 0 0 1 66 64V76Z"/>
+  </g>
+</svg>

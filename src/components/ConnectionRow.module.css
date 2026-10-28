@@ -1,0 +1,108 @@
+/* Copied from Podium's ProcessRow.module.css (session tint, rename field and
+   activity rules left out). */
+
+/* The list item around a row: anchors the insertion line of a reorder drag. */
+.item {
+  position: relative;
+}
+
+.item[data-insert]::after {
+  content: "";
+  position: absolute;
+  left: var(--sp-3);
+  right: var(--sp-3);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.item[data-insert="before"]::after {
+  top: 0;
+}
+
+.item[data-insert="after"]::after {
+  bottom: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-3);
+  min-height: 28px;
+  font-size: var(--fs-md);
+  color: var(--text);
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+/* Not while dragging: WebKit does not refresh :hover with the button held, so
+   it would stick to rows (same gate as the file table). */
+:where(html:not([data-dragging])) .row:hover {
+  background: var(--surface-hover);
+}
+
+/* The row being dragged stays in place, dimmed, while the line shows where it
+   goes. */
+.row[data-reordering="true"] {
+  opacity: 0.5;
+}
+
+.row[data-selected="true"] {
+  background: var(--surface-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Actions appear on hover/selection to keep rows quiet. */
+.actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+:where(html:not([data-dragging])) .row:hover .actions,
+.row:focus-within .actions,
+.row[data-selected="true"] .actions {
+  display: flex;
+}
+
+.action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out);
+}
+
+.action:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border: none;
+  color: var(--text);
+}

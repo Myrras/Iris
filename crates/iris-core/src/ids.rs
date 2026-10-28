@@ -1,26 +1,30 @@
 //! Strongly-typed UUID newtypes.
 //!
 //! A `uuid_newtype!` macro keeps ids distinct at the type level (you cannot pass
-//! a `NoteId` where some other id is expected) while serializing transparently
+//! one kind of id where another is expected) while serializing transparently
 //! as a plain UUID string across the IPC boundary.
 
-use std::fmt;
-use std::str::FromStr;
-
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
+// Paths inside are fully qualified so the macro works in any module.
 macro_rules! uuid_newtype {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(
+            Debug,
+            Clone,
+            Copy,
+            PartialEq,
+            Eq,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+        )]
         #[serde(transparent)]
-        pub struct $name(Uuid);
+        pub struct $name(::uuid::Uuid);
 
         impl $name {
             /// Generate a fresh random (v4) id.
             pub fn new() -> Self {
-                Self(Uuid::new_v4())
+                Self(::uuid::Uuid::new_v4())
             }
         }
 
@@ -30,42 +34,86 @@ macro_rules! uuid_newtype {
             }
         }
 
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 self.0.fmt(f)
             }
         }
 
-        impl FromStr for $name {
-            type Err = uuid::Error;
+        impl ::std::str::FromStr for $name {
+            type Err = ::uuid::Error;
 
             fn from_str(s: &str) -> Result<Self, Self::Err> {
-                Ok(Self(Uuid::from_str(s)?))
+                Ok(Self(<::uuid::Uuid as ::std::str::FromStr>::from_str(s)?))
             }
         }
     };
 }
 
 uuid_newtype!(
-    /// Identifies a note owned by the [`Core`](crate::Core).
-    NoteId
+    /// A saved connection profile (`connection::ConnectionProfile`).
+    ProfileId
+);
+
+uuid_newtype!(
+    /// A live SSH/SFTP session owned by the session manager.
+    SessionId
+);
+
+uuid_newtype!(
+    /// One pending "trust this host key?" prompt, answered through
+    /// `Core::answer_host_key`.
+    HostKeyRequestId
+);
+
+uuid_newtype!(
+    /// One file transfer job (`transfer::TransferJob`).
+    TransferId
+);
+
+uuid_newtype!(
+    /// The jobs one `enqueue_transfers` call created.
+    BatchId
+);
+
+uuid_newtype!(
+    /// One remote file opened for editing in a local editor
+    /// (`edit::EditInfo`).
+    EditId
+);
+
+uuid_newtype!(
+    /// One drag of remote files out of the window (`drag_out`). Chosen by
+    /// the caller, so it can match progress events and cancel before
+    /// `prepare_drag_out` returns.
+    DragOutId
+);
+
+uuid_newtype!(
+    /// One folder comparison made by `Core::plan_sync`, run by
+    /// `Core::run_sync`.
+    SyncPlanId
 );
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
+    uuid_newtype!(
+        /// A test-only id, standing in for the real ones.
+        SampleId
+    );
 
     #[test]
     fn serializes_as_plain_uuid_string() {
-        let id = NoteId::new();
+        let id = SampleId::new();
         let json = serde_json::to_string(&id).unwrap();
         assert_eq!(json, format!("\"{id}\""));
     }
 
     #[test]
     fn round_trips_through_from_str() {
-        let id = NoteId::new();
-        let parsed: NoteId = id.to_string().parse().unwrap();
+        let id = SampleId::new();
+        let parsed: SampleId = id.to_string().parse().unwrap();
         assert_eq!(parsed, id);
     }
 }

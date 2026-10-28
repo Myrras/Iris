@@ -1,0 +1,55 @@
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  /* The "desktop" the islands float on: canvas shows in the padding and in
+     the gaps between islands. Each gap between two islands is a Splitter (or
+     a plain spacer), so there is no flex gap here. The sizes come from CSS
+     variables the shell sets on this element (`useShellLayout`). */
+  background: var(--canvas);
+  padding: var(--gap-island);
+  gap: 0;
+}
+
+/* The work column: tab strip, the pane row, the transfer island. It has no
+   island chrome of its own — the canvas shows in the gaps between islands. */
+.work {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.tabs {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-width: 0;
+  margin-bottom: var(--gap-island);
+}
+
+.panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 0;
+}
+
+/* A pane island and its share of the row: the two weights add up to 1000, the
+   minimum keeps the file table usable (`PANE_MIN_PX` in lib/resize). */
+.paneLocal,
+.paneRemote {
+  display: flex;
+  min-width: var(--pane-min-w);
+  min-height: 0;
+}
+
+.paneLocal {
+  flex: var(--pane-local-grow, 500) 1 0px;
+}
+
+.paneRemote {
+  flex: var(--pane-remote-grow, 500) 1 0px;
+}

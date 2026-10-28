@@ -35,6 +35,9 @@ impl IpcError {
     }
 
     /// Invalid command input detected at the IPC layer.
+    // Part of the documented IPC contract (CLAUDE.md); Phase 0's commands
+    // validate in the core, so the first IPC-layer caller arrives later.
+    #[allow(dead_code)]
     pub fn invalid_input(message: impl Into<String>) -> Self {
         Self::new("invalidInput", message)
     }
@@ -48,17 +51,71 @@ impl std::fmt::Display for IpcError {
 
 impl std::error::Error for IpcError {}
 
+impl From<std::io::Error> for IpcError {
+    fn from(err: std::io::Error) -> Self {
+        Self::new("io", err.to_string())
+    }
+}
+
 impl From<CoreError> for IpcError {
     fn from(err: CoreError) -> Self {
         // The `message` is `CoreError`'s own `Display`, which is built from
-        // app-owned text only — safe to forward verbatim.
-        let kind = match &err {
-            CoreError::NotFound => "notFound",
-            CoreError::InvalidInput(_) => "invalidInput",
-        };
+        // app-owned text only — safe to forward verbatim. The `kind` comes
+        // from the core so the mapping lives next to the variants.
         Self {
-            kind: kind.to_string(),
+            kind: err.kind().to_string(),
             message: err.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_errors_map_to_stable_kinds() {
+        let cases = [
+            (CoreError::Io(std::io::Error::other("x")), "io"),
+            (CoreError::Config("x".into()), "config"),
+            (CoreError::InvalidInput("x".into()), "invalidInput"),
+            (CoreError::NotFound("/x".into()), "notFound"),
+            (CoreError::AlreadyExists("/x".into()), "alreadyExists"),
+            (CoreError::PermissionDenied("/x".into()), "permissionDenied"),
+            (CoreError::ConnectFailed("x".into()), "connectFailed"),
+            (CoreError::AuthFailed, "authFailed"),
+            (CoreError::PasswordRequired, "passwordRequired"),
+            (CoreError::PassphraseRequired, "passphraseRequired"),
+            (CoreError::KeyFile("x".into()), "keyFile"),
+            (CoreError::Agent("x".into()), "agent"),
+            (CoreError::Keychain("x".into()), "keychain"),
+            (CoreError::JumpHost("x".into()), "jumpHost"),
+            (
+                CoreError::HostKeyChanged {
+                    host: "sftp.example.test".into(),
+                    port: 22,
+                },
+                "hostKeyChanged",
+            ),
+            (CoreError::HostKeyRejected, "hostKeyRejected"),
+            (CoreError::NotConnected, "notConnected"),
+            (CoreError::Remote("x".into()), "remote"),
+            (CoreError::NoAnswer, "remote"),
+            (CoreError::TooLarge("x".into()), "tooLarge"),
+            (CoreError::Cancelled, "cancelled"),
+        ];
+        for (err, kind) in cases {
+            let message = err.to_string();
+            let ipc = IpcError::from(err);
+            assert_eq!(ipc.kind, kind);
+            assert_eq!(ipc.message, message);
+        }
+    }
+
+    #[test]
+    fn serializes_as_kind_and_message() {
+        let json = serde_json::to_value(IpcError::invalid_input("bad")).unwrap();
+        assert_eq!(json["kind"], "invalidInput");
+        assert_eq!(json["message"], "bad");
     }
 }

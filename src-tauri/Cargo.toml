@@ -20,10 +20,21 @@ iris-core = { path = "../crates/iris-core" }
 tauri = { version = "2", features = [] }
 # Global logger sink (stdout + per-OS log dir + webview console).
 tauri-plugin-log = "2"
+# Native file picker for the key-file field of the connection form.
+tauri-plugin-dialog = "2"
+# Native drag of files out of the window to Finder / Explorer (CrabNebula's
+# `drag` crate underneath: NSDraggingSession on macOS, DoDragDrop on Windows).
+tauri-plugin-drag = "2.1.1"
 # Persist and restore window size/position across runs.
 tauri-plugin-window-state = "2"
 serde.workspace = true
 serde_json.workspace = true
+# `broadcast::error::RecvError` for the core-event forwarder (`events.rs`).
+tokio.workspace = true
 # Structured instrumentation. The `log` feature makes `tracing` events fall
 # through to the global `log` logger that `tauri-plugin-log` installs.
 tracing = { workspace = true, features = ["log"] }
+# Opens a file being edited in the user's editor (`opener.rs`). Only its
+# Rust `open_path` is used — the plugin is not registered, so the webview
+# gets no opener commands (and the capability grants none).
+tauri-plugin-opener = "2.5.5"

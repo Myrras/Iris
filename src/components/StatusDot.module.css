@@ -1,0 +1,40 @@
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-faint);
+  transition: background var(--dur-2) var(--ease-out);
+}
+
+.dot[data-tone="ok"] {
+  background: var(--success);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--success) 60%, transparent);
+}
+
+.dot[data-tone="busy"] {
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.dot[data-tone="warning"] {
+  background: var(--warning);
+}
+
+.dot[data-tone="error"] {
+  background: var(--danger);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--danger) 60%, transparent);
+}
+
+/* In progress: pulse the dot. Opacity-only so the compositor handles the
+ * infinite animation (per the motion rule); the global reduced-motion guard
+ * neutralizes it. */
+.dot[data-pulse="true"] {
+  animation: dotPulse var(--dur-pulse) var(--ease-in-out) infinite;
+}
+
+@keyframes dotPulse {
+  50% {
+    opacity: 0.35;
+  }
+}

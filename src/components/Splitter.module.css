@@ -1,0 +1,68 @@
+/* The handle IS the gap between two islands: same size as --gap-island. A
+   centred accent line shows on hover, keyboard focus and while dragging, so
+   the affordance is discoverable without adding chrome at rest. */
+.splitter,
+.gap {
+  flex-shrink: 0;
+}
+
+.splitter[data-orientation="vertical"],
+.gap[data-orientation="vertical"] {
+  width: var(--gap-island);
+  align-self: stretch;
+}
+
+.splitter[data-orientation="horizontal"],
+.gap[data-orientation="horizontal"] {
+  height: var(--gap-island);
+}
+
+.splitter {
+  position: relative;
+  z-index: 1;
+  outline: none;
+  touch-action: none; /* a touch or pen drag is a resize, not a scroll */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.splitter[data-orientation="vertical"] {
+  cursor: col-resize;
+}
+
+.splitter[data-orientation="horizontal"] {
+  cursor: row-resize;
+}
+
+.splitter::after {
+  content: "";
+  position: absolute;
+  background: transparent;
+  border-radius: 2px;
+  transition: background var(--dur-1) var(--ease-out);
+}
+
+.splitter[data-orientation="vertical"]::after {
+  top: 10%;
+  bottom: 10%;
+  left: 50%;
+  width: 3px;
+  transform: translateX(-50%);
+}
+
+.splitter[data-orientation="horizontal"]::after {
+  left: 10%;
+  right: 10%;
+  top: 50%;
+  height: 3px;
+  transform: translateY(-50%);
+}
+
+/* Hover only while nothing is being dragged: WebKit does not refresh :hover
+   with the button held, so it would stick to whichever handle was passed
+   (same gate as the file table's row hover). */
+:where(html:not([data-dragging]):not([data-resizing])) .splitter:hover::after,
+.splitter[data-active="true"]::after,
+.splitter:focus-visible::after {
+  background: var(--accent);
+}
