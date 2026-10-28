@@ -46,13 +46,13 @@ just build          # production desktop bundle
 
 Every merge to `main` is a release. Each PR adds its entry under
 `## [Unreleased]` in `CHANGELOG.md` (CI fails without one). On merge, CI picks
-the next version from the latest `v*` tag — by the PR's `patch`, `minor` or
-`major` label (exactly one, checked by `pr-checks`) — bumps the manifests, commits
+the next version from the latest `v*` tag — by the PR's `release:patch`, `release:minor` or
+`release:major` label (exactly one, checked by `pr-checks`; `no-release` for CI, config and docs-only PRs) — bumps the manifests, commits
 `Release vX.Y.Z`, tags it, creates the GitHub Release and builds the macOS and
 Windows installers onto it. Don't bump or tag by hand. The first release (no
 `v*` tag yet) ships the version in `Cargo.toml`.
 
-The repo is set up for this: labels `patch`/`minor`/`major`/`windows`, a protected `main`
+The repo is set up for this: labels `release:patch`/`release:minor`/`release:major`/`no-release`/`windows`, a protected `main`
 ruleset, and the `RELEASE_DEPLOY_KEY` deploy key in its bypass list.
 
 ## License
