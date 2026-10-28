@@ -32,3 +32,9 @@ when it merges.
 
 - Dialogs that open over each other no longer paint on top of one another; only the newest shows.
 - Transfers report progress up to the last byte instead of sitting at the first chunk.
+
+## [0.1.0] - 2026-10-28
+
+### Changed
+
+- Every pull request now needs exactly one release label (`patch`, `minor` or `major`). The `Release label` check fails without it, and the label sets the version bump on merge.

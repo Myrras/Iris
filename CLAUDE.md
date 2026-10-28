@@ -1228,7 +1228,7 @@ never sticks. Release builds signed with a stable identity don't have this.
 - **Protected `main`** (optional, one-off setup per repo): the release job must
   push to `main`, which a ruleset requiring PRs would block (`GH013`); GitHub
   refuses the Actions app as a bypass actor on a user-owned repo (an org-owned repo can add the Actions app as a bypass actor instead), so
-  `GITHUB_TOKEN` cannot get through. Create the labels `minor` and `major`,
+  `GITHUB_TOKEN` cannot get through. Create the labels `patch`, `minor` and `major`,
   then add a **deploy key with write access** and its private half as the
   secret **`RELEASE_DEPLOY_KEY`**:
   `ssh-keygen -t ed25519 -N '' -C release -f release_key`,
