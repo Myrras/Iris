@@ -149,16 +149,17 @@ tagged GitHub Release (see _Versioning & CI_).
   `CHANGELOG.md` and that section holds at least one `- ` entry
   (`scripts/changelog.sh unreleased`). It also runs the release-script tests
   (`scripts/*.test.sh`).
-- **Releasing is automatic: every merge to `main` is a release.** Before
-  merging, set a `minor` or `major` label on the PR if it warrants more than a
-  patch. The `release` job in `ci.yml` runs after `ci` on each push to `main`
+- **Releasing is automatic: every merge to `main` is a release.** Every
+  PR needs exactly one of the labels `patch`, `minor` or `major`, enforced by
+  the `Release label` check (`release-label.yml`, separate from `ci.yml` so
+  labeling doesn't re-run CI). The `release` job in `ci.yml` runs after `ci` on each push to `main`
   (its own non-cancelling `release` concurrency group; the workflow never
   cancels runs on `main`, so no merge is left without a version). It checks out
   `main` itself, not the pushed sha, so a queued second run sees the first
   one's bump; an empty `## [Unreleased]` means already released, and it exits.
   Otherwise the version is the latest `v*` tag bumped by
-  `scripts/next-version.sh` — **patch by default**, `minor`/`major` when the
-  merged PR carries that label (`major` wins); with no `v*` tag yet, the first
+  `scripts/next-version.sh` — the merged PR's label (`major` wins; patch for a push
+  without a PR); with no `v*` tag yet, the first
   release ships the `Cargo.toml` version as-is. It renames `## [Unreleased]` to
   `## [X.Y.Z] - date` (`scripts/changelog.sh release`), runs
   `sync-version.sh --set` and `cargo update --workspace` (Cargo.lock), commits
@@ -177,7 +178,7 @@ tagged GitHub Release (see _Versioning & CI_).
 - **Protected `main`** (optional, one-off setup per repo): the release job must
   push to `main`, which a ruleset requiring PRs would block (`GH013`); GitHub
   refuses the Actions app as a bypass actor on a user-owned repo (an org-owned repo can add the Actions app as a bypass actor instead), so
-  `GITHUB_TOKEN` cannot get through. Create the labels `minor` and `major`,
+  `GITHUB_TOKEN` cannot get through. Create the labels `patch`, `minor` and `major`,
   then add a **deploy key with write access** and its private half as the
   secret **`RELEASE_DEPLOY_KEY`**:
   `ssh-keygen -t ed25519 -N '' -C release -f release_key`,
