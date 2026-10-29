@@ -1,5 +1,83 @@
 # CLAUDE.md — Iris
 
+<!-- rust-base:start -->
+<!-- Synced from rust-base. Do not edit this block here; change it in rust-base. -->
+## Shared CI and recipes (rust-base)
+
+CI, release and installer builds come from
+<https://github.com/RobbieMinderhoud/rust-base>. `.github/workflows/` holds thin
+callers (`ci.yml`, `pr-checks.yml`, `build.yml`, `integration.yml`) of its
+reusable workflows, pinned `@v2`. The callers and the shared config files
+(`.gitattributes`, `.editorconfig`, `rust-toolchain.toml`, `.prettierrc.json`,
+`.prettierignore`, `eslint.config.js`, `tsconfig*.json`,
+`.github/dependabot.yml`) are synced from rust-base: **change them there**,
+not here. Behaviour is documented in the rust-base README.
+
+App-specific CI settings (runner, Windows test scope, extra recipe, release
+title prefix, integration packages and env) live in `.github/rust-base.json`.
+That file is owned by this repo.
+
+- **Required checks on `main`:** `ci / ci-ok`, `pr-checks / Changelog entry`,
+  `pr-checks / Release label`. Don't require `ci / frontend`, `ci / rust` or
+  `ci / windows`. The labels `release:patch`, `release:minor`, `release:major`,
+  `no-release` and `windows` must exist.
+- **Release labels:** every PR carries exactly one of `release:patch`,
+  `release:minor` or `release:major`, enforced by `pr-checks.yml`. Use
+  `no-release` for CI, config or docs-only PRs. Merging to `main` releases:
+  the version is the latest `v*` tag bumped by the highest label across the PRs
+  merged since. Never bump the version or create a tag by hand; `just version`
+  is for emergencies only.
+- **Changelog gate:** every PR adds an entry under `## [Unreleased]` in
+  `CHANGELOG.md` (user-facing changes only, _Keep a Changelog_). `pr-checks.yml`
+  fails unless the PR touches `CHANGELOG.md` and that section holds at least one
+  `- ` entry. The heading must stay exactly `## [Unreleased]`. `no-release` PRs
+  need no entry.
+- **`packageManager`:** don't add one to `package.json`. The shared workflows
+  set pnpm 10; a second version fails setup.
+- **Shared recipes** (`dev`, `dev-signed`, `build`, `build-signed`,
+  `install-signed`, `check`, `test-core`, `format`, `version`, `version-check`,
+  `rust`, `frontend`, `ci`, `sweep`) come from `ci/common.just` in rust-base.
+  The justfile imports it with `import? '~/.rust-base/ci/common.just'`; link
+  your clone with `ln -s /path/to/rust-base ~/.rust-base`. Don't redefine those
+  names (just rejects duplicates) and never add `set allow-duplicate-recipes`:
+  change the shared recipe in rust-base instead. Recipes that CI calls
+  (`test-integration`) must not depend on shared recipes: in CI the optional
+  import resolves to nothing.
+
+### When to add the `windows` label
+
+Windows CI runs on pushes to `main` and on PRs that carry the `windows` label
+(adding the label re-runs CI for the PR). It gates the release. Add `windows`
+to a PR when it:
+
+- touches `cfg(windows)`, `cfg(unix)` or `target_os` code, or platform-specific modules
+- changes file paths, path separators, drive letters or case sensitivity; process spawning, PTY or shell quoting; environment variables; WSL
+- changes the Windows settings in `tauri.conf.json` (bundle, NSIS) or installer scripts
+- adds or upgrades a dependency with platform-specific code (`tauri`, `windows-rs`, `portable-pty`, …) or bumps the Rust toolchain
+- fixes a Windows bug
+
+Skip it for frontend-only, docs-only and purely cross-platform logic changes. If unsure, add it: `main` runs Windows after the merge anyway, and a failure there blocks the release.
+<!-- rust-base:end -->
+
+### Windows-sensitive spots in Iris
+
+All `crates/iris-core/tests/*` except `core.rs` are `cfg(unix)`, so Windows CI
+compiles them out; Windows coverage is the lib unit tests.
+
+- `crates/iris-core/src/fs/local.rs`: local paths (verbatim `\\?\` prefix), hidden
+  attribute, case-insensitive names
+- `crates/iris-core/src/transfer/naming.rs`: forbidden characters (`\`, `:`)
+- `crates/iris-core/src/ssh/agent.rs`: OpenSSH agent pipe / Pageant (never run on Windows yet)
+- `crates/iris-core/src/ssh_config.rs`: `~/.ssh/config` and `known_hosts` locations
+- `crates/iris-core/src/secrets.rs` and `Cargo.toml` (`keyring` backends per OS)
+- `crates/iris-core/src/fs/trash.rs`: Recycle Bin
+- `crates/iris-core/src/drag_out.rs`, `src-tauri/src/commands/drag_out.rs`
+  (`tauri-plugin-drag`): dragging out to Explorer
+- `src-tauri/src/opener.rs`: open in editor / reveal (`ShellExecute`)
+- `src-tauri/tauri.windows.conf.json`, `src-tauri/tauri.conf.json` (bundle, NSIS
+  installer built by the shared `build.yml`) and `windows_subsystem` in
+  `src-tauri/src/main.rs`
+
 Guidance for AI agents (and humans) working in this repository.
 
 ## What Iris is
@@ -14,7 +92,7 @@ macOS-first; Windows kept in mind.
 
 Iris's shared skeleton — the Cargo workspace shape (a `*-core` crate with zero
 Tauri dependency + a thin `src-tauri` IPC layer + a presentation-only React
-frontend), the `justfile`, CI (shared via ci-workflows), the shared config
+frontend), the `justfile`, CI (shared via rust-base), the shared config
 files, the design tokens, and the layering/IPC conventions — comes from a
 standalone template:
 
@@ -1164,57 +1242,14 @@ just version 0.2.0  # bump + sync version across all manifests (emergencies only
 just version-check  # verify versions are in sync
 ```
 
-Shared recipes (`dev`, `dev-signed`, `build`, `build-signed`, `install-signed`,
-`check`, `test-core`, `format`, `version`, `version-check`, `rust`, `frontend`,
-`ci`, `sweep`) come from `~/.ci-workflows/common.just` (symlink to a clone of
-`RobbieMinderhoud/ci-workflows`); don't redefine those names. App name and core
-crate are derived (`productName`, the one `*-core` package). Only `default`,
-`icons` and `test-integration` live in the justfile.
-`test-integration` must not depend on them: in CI the import resolves to nothing.
+Shared recipes come from `~/.rust-base/ci/common.just` (see the block above);
+don't redefine those names. App name and core crate are derived (`productName`,
+the one `*-core` package). Only `default`, `icons` and `test-integration` live in
+the justfile. `test-integration` must not depend on shared recipes: in CI the
+import resolves to nothing.
 
-CI is shared: `.github/workflows/` holds thin callers pinned to
-`RobbieMinderhoud/ci-workflows@v1`. `ci.yml` = `tauri-ci.yml` (frontend + Rust
-job on ubuntu, Windows tests `-p iris-core`) and, on push to `main`,
-`release.yml`; `pr-checks.yml` = changelog entry + release label; `build.yml` =
-installers dispatched by the release; `integration.yml` = nightly
-`just test-integration` on ubuntu (`libdbus-1-dev` for keyring's Linux
-backend). Behaviour and the release scripts live in that repo; see its README.
-
-Windows runs on pushes to `main` and on PRs that carry the `windows` label
-(adding the label re-runs CI for the PR). Required checks: `ci / ci-ok`,
-`pr-checks / Changelog entry` and `pr-checks / Release label`; don't require
-`ci / frontend`, `ci / rust` or `ci / windows`. The labels `release:patch`, `release:minor`,
-`release:major`, `no-release` and `windows` must exist.
-
-### When to add the `windows` label
-
-Add `windows` to a PR when it:
-
-- touches `cfg(windows)`, `cfg(unix)` or `target_os` code, or platform-specific modules
-- changes file paths, path separators, drive letters or case sensitivity; process spawning, PTY or shell quoting; environment variables; WSL
-- changes the Windows settings in `tauri.conf.json` (bundle, NSIS) or installer scripts
-- adds or upgrades a dependency with platform-specific code (`tauri`, `windows-rs`, `portable-pty`, …) or bumps the Rust toolchain
-- fixes a Windows bug
-
-Skip it for frontend-only, docs-only and purely cross-platform logic changes. If unsure, add it: `main` runs Windows after the merge anyway, and a failure there blocks the release.
-
-Windows-sensitive spots in Iris (all `crates/iris-core/tests/*` except
-`core.rs` are `cfg(unix)`, so Windows CI compiles them out; Windows coverage is
-the lib unit tests):
-
-- `crates/iris-core/src/fs/local.rs`: local paths (verbatim `\\?\` prefix), hidden
-  attribute, case-insensitive names
-- `crates/iris-core/src/transfer/naming.rs`: forbidden characters (`\`, `:`)
-- `crates/iris-core/src/ssh/agent.rs`: OpenSSH agent pipe / Pageant (never run on Windows yet)
-- `crates/iris-core/src/ssh_config.rs`: `~/.ssh/config` and `known_hosts` locations
-- `crates/iris-core/src/secrets.rs` and `Cargo.toml` (`keyring` backends per OS)
-- `crates/iris-core/src/fs/trash.rs`: Recycle Bin
-- `crates/iris-core/src/drag_out.rs`, `src-tauri/src/commands/drag_out.rs`
-  (`tauri-plugin-drag`): dragging out to Explorer
-- `src-tauri/src/opener.rs`: open in editor / reveal (`ShellExecute`)
-- `src-tauri/tauri.windows.conf.json`, `src-tauri/tauri.conf.json` (bundle, NSIS
-  installer built by the shared `build.yml`) and `windows_subsystem` in
-  `src-tauri/src/main.rs`
+`.github/rust-base.json` sets Windows tests to `-p iris-core` and installs
+`libdbus-1-dev pkg-config` for `integration.yml` (keyring's Linux backend).
 
 ### macOS keychain prompt during development
 
@@ -1258,12 +1293,8 @@ never sticks. Release builds signed with a stable identity don't have this.
   single source of truth; the shared `sync-version.sh` propagates it to
   `tauri.conf.json` and `package.json` (`just version-check` detects drift).
 - **`CHANGELOG.md`** follows _Keep a Changelog_ and lists **only functional
-  (user-facing) changes**. Every PR adds its entry under `## [Unreleased]`; the
-  `pr-checks / Changelog entry` check fails unless the PR touches
-  `CHANGELOG.md` and that section holds at least one `- ` entry.
-- **Releasing is automatic: every merge to `main` is a release.** Every
-  PR needs exactly one of the labels `release:patch`, `release:minor` or `release:major` (`no-release` for
-  CI, config or docs-only PRs), enforced by the `pr-checks / Release label` check. The `release` job in `ci.yml` runs after `ci` on each push to `main`
+  (user-facing) changes**.
+- **Releasing is automatic: every merge to `main` is a release.** The `release` job in `ci.yml` runs after `ci` on each push to `main`
   (its own non-cancelling `release` concurrency group; the workflow never
   cancels runs on `main`, so no merge is left without a version). It checks out
   `main` itself, not the pushed sha, so a queued second run sees the first

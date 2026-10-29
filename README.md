@@ -20,7 +20,7 @@ CHANGELOG.md               # Keep a Changelog; PRs add entries under [Unreleased
 crates/iris-core/          # the domain: single entry point (Core), zero Tauri dependency
 src-tauri/                 # thin Tauri IPC adapter over iris-core
 src/                       # React frontend (presentation only)
-.github/workflows/         # thin callers of RobbieMinderhoud/ci-workflows@v1: ci, pr-checks, build, integration
+.github/workflows/         # thin callers of RobbieMinderhoud/rust-base (reusable workflows @v2): ci, pr-checks, build, integration
 .github/dependabot.yml     # weekly grouped updates: actions, cargo, npm
 ```
 
@@ -31,7 +31,7 @@ src/                       # React frontend (presentation only)
 - The Tauri 2 system prerequisites for your OS — see
   <https://tauri.app/start/prerequisites/>
 - `just` (optional but recommended: `brew install just`)
-- A clone of `RobbieMinderhoud/ci-workflows`, symlinked as `~/.ci-workflows` (for `just ci` and the shared scripts)
+- A clone of `RobbieMinderhoud/rust-base`, symlinked as `~/.rust-base` (for `just ci` and the shared scripts)
 
 ## Get started
 
