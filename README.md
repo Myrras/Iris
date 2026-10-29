@@ -15,7 +15,7 @@ there as a PR.
 
 ```
 Cargo.toml                 # [workspace]; [workspace.package] version is the source of truth
-justfile                   # dev/build/test-integration/format/version recipes; imports shared common.just
+justfile                   # icons + test-integration; imports shared dev recipes from common.just
 CHANGELOG.md               # Keep a Changelog; PRs add entries under [Unreleased]
 crates/iris-core/          # the domain: single entry point (Core), zero Tauri dependency
 src-tauri/                 # thin Tauri IPC adapter over iris-core
