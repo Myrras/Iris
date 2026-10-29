@@ -23,10 +23,12 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   listTransfers: vi.fn(() => new Promise(() => undefined)),
 }));
 vi.mock("../lib/connect", () => ({
-  connectInTab: vi.fn(),
+  connectProfile: vi.fn(),
   retrySession: vi.fn(() => Promise.resolve(true)),
 }));
-vi.mock("../lib/tabs", () => ({ requestDisconnectSession: vi.fn() }));
+vi.mock("../lib/connections", () => ({
+  requestDisconnectSession: vi.fn(),
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(() => Promise.resolve("/Users/alice/Downloads")),
 }));
@@ -43,8 +45,8 @@ import {
   revealLocal,
 } from "../ipc/commands";
 import type { ConnectionProfile, Entry, SessionState } from "../ipc/types";
-import { connectInTab, retrySession } from "../lib/connect";
-import { requestDisconnectSession } from "../lib/tabs";
+import { connectProfile, retrySession } from "../lib/connect";
+import { requestDisconnectSession } from "../lib/connections";
 import { useToastStore } from "../state/toastStore";
 import { useConnectionFormStore } from "../state/connectionFormStore";
 import { useDragStore } from "../state/dragStore";
@@ -70,6 +72,7 @@ const alpha: ConnectionProfile = {
   auth: { kind: "password" },
   startDir: null,
   jump: null,
+  favorites: [],
 };
 
 function entry(path: string, extra: Partial<Entry> = {}): Entry {
@@ -98,6 +101,15 @@ const rowNames = () =>
     .getAllByRole("row")
     .slice(1)
     .map((r) => within(r).getAllByRole("gridcell")[0].textContent);
+
+const menuLabels = () =>
+  screen.getAllByRole("menuitem").map((item) => item.firstChild?.textContent);
+
+/** The group captions of the open menu, in order (they are not menu items). */
+const menuHeaders = () =>
+  Array.from(screen.getByRole("menu").children)
+    .filter((el) => el.getAttribute("role") === "presentation")
+    .map((el) => el.textContent);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -158,7 +170,7 @@ describe("Pane", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     // The same session comes back: no new connect.
     expect(retrySession).toHaveBeenCalledWith("s-1");
-    expect(connectInTab).not.toHaveBeenCalled();
+    expect(connectProfile).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
     expect(requestDisconnectSession).toHaveBeenCalledWith("s-1");
   });
@@ -212,19 +224,51 @@ describe("Pane", () => {
     }
   });
 
-  it("offers Reconnect in a restored tab without connecting by itself", () => {
-    const tabId = useTabsStore.getState().activeTabId;
-    useTabsStore.getState().update(tabId, {
-      profileId: "p-1",
-      title: "Alpha",
-      pendingRemotePath: "/srv/www",
+  it("offers Reconnect for a disconnected connection, keeping its tabs", async () => {
+    vi.mocked(listDir).mockResolvedValue([]);
+    act(() => {
+      useTabsStore.getState().activate("p-1");
+      useTabsStore.getState().attachSession("p-1", "s-1", "/srv/www");
     });
     render(<Pane id="remote" title="Remote" Icon={ServerIcon} />);
+    await screen.findByRole("tab", { name: "www" });
+    act(() => void useTabsStore.getState().newTab("remote"));
+    act(() => useTabsStore.getState().detachSession("p-1"));
     expect(screen.getByText("Alpha — not connected")).toBeInTheDocument();
     expect(screen.getByText(/opens \/srv\/www again/)).toBeInTheDocument();
-    expect(connectInTab).not.toHaveBeenCalled();
+    // Both tabs are still there, waiting for the connection.
+    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(connectProfile).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
-    expect(connectInTab).toHaveBeenCalledWith(tabId, alpha);
+    expect(connectProfile).toHaveBeenCalledWith(alpha);
+  });
+
+  it("says so while a connection is connecting", () => {
+    act(() => {
+      useTabsStore.getState().activate("p-1");
+      useTabsStore.getState().setConnecting("p-1", true);
+    });
+    render(<Pane id="remote" title="Remote" Icon={ServerIcon} />);
+    expect(screen.getByText("Connecting to Alpha…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connecting…" })).toBeDisabled();
+  });
+
+  it("has folder tabs in the Local pane, and none in Remote without a connection", async () => {
+    render(
+      <>
+        <Pane id="local" title="Local" Icon={LocalIcon} />
+        <Pane id="remote" title="Remote" Icon={ServerIcon} />
+      </>,
+    );
+    await usePaneStore.getState().open("local", { kind: "local" }, null);
+    expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute(
+      "title",
+      "/home/alice",
+    );
+    expect(screen.getAllByRole("tablist")).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: "Connect to a server…" }),
+    ).toBeInTheDocument();
   });
 
   it("lists the folder with folders first and hidden files hidden", async () => {
@@ -437,46 +481,118 @@ describe("Pane", () => {
       );
     });
 
-    it("offers the file operations in the context menu", async () => {
+    it("offers the file operations in the context menu, grouped", async () => {
       await openLocal();
       fireEvent.contextMenu(screen.getByText("docs"));
       // Right-clicking selects the row.
       expect(usePaneStore.getState().panes.local.selection).toEqual([
         "/home/alice/docs",
       ]);
-      const labels = screen
-        .getAllByRole("menuitem")
-        .map((item) => item.firstChild?.textContent);
-      expect(labels).toEqual([
+      expect(menuLabels()).toEqual([
         "Open",
         "Open With Default App",
         "Show in File Manager",
         "Preview",
         "Upload to Remote",
         "Sync Folders…",
-        "New Folder",
+        "Add to Favorites",
         "Rename",
+        "Copy Path",
         "Get Info…",
-        "Refresh",
         "Delete…",
+        "New Folder",
+        "Refresh",
+      ]);
+      // The headers are captions, not menu items.
+      expect(menuHeaders()).toEqual([
+        "Open",
+        "Transfer",
+        "Organize",
+        "This folder",
       ]);
       fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
       expect(await screen.findByLabelText("Rename docs")).toBeInTheDocument();
     });
 
-    it("offers New Folder and Refresh on the empty area", async () => {
+    it("offers the folder actions on the empty area", async () => {
       await openLocal();
       fireEvent.contextMenu(grid());
-      expect(
-        screen
-          .getAllByRole("menuitem")
-          .map((item) => item.firstChild?.textContent),
-      ).toEqual([
+      expect(menuLabels()).toEqual([
         "New Folder",
-        "Sync Folders…",
+        "Copy Path",
         "Show in File Manager",
         "Refresh",
+        "Sync Folders…",
       ]);
+      expect(menuHeaders()).toEqual(["This folder", "Transfer"]);
+    });
+
+    describe("copy path", () => {
+      const writeText = vi.fn(() => Promise.resolve());
+      beforeEach(() => {
+        writeText.mockClear();
+        Object.defineProperty(navigator, "clipboard", {
+          value: { writeText },
+          configurable: true,
+        });
+      });
+
+      const messages = () =>
+        useToastStore.getState().toasts.map((t) => t.message);
+
+      it("copies the selected path from the menu", async () => {
+        await openLocal();
+        select("notes.txt");
+        fireEvent.contextMenu(screen.getByText("notes.txt"));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Copy Path" }));
+        expect(writeText).toHaveBeenCalledWith("/home/alice/notes.txt");
+        await waitFor(() => expect(messages()).toContain("Path copied"));
+      });
+
+      it("joins the paths of several selected rows", async () => {
+        await openLocal();
+        select("notes.txt");
+        fireEvent.click(screen.getByText("todo.txt"), { metaKey: true });
+        fireEvent.contextMenu(screen.getByText("todo.txt"));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Copy Path" }));
+        expect(writeText).toHaveBeenCalledWith(
+          "/home/alice/notes.txt\n/home/alice/todo.txt",
+        );
+        await waitFor(() => expect(messages()).toContain("2 paths copied"));
+      });
+
+      it("copies the folder shown from the background menu", async () => {
+        await openLocal();
+        fireEvent.contextMenu(grid());
+        fireEvent.click(screen.getByRole("menuitem", { name: "Copy Path" }));
+        expect(writeText).toHaveBeenCalledWith("/home/alice");
+      });
+
+      it("copies with Ctrl+Alt+C", async () => {
+        await openLocal();
+        select("notes.txt");
+        fireEvent.keyDown(grid(), {
+          key: "ç",
+          code: "KeyC",
+          ctrlKey: true,
+          altKey: true,
+        });
+        expect(writeText).toHaveBeenCalledWith("/home/alice/notes.txt");
+        // A plain Ctrl+C is the browser's copy, not this.
+        fireEvent.keyDown(grid(), { key: "c", code: "KeyC", ctrlKey: true });
+        expect(writeText).toHaveBeenCalledTimes(1);
+      });
+
+      it("toasts when the clipboard refuses", async () => {
+        writeText.mockRejectedValueOnce(new Error("denied"));
+        await openLocal();
+        select("notes.txt");
+        fireEvent.contextMenu(screen.getByText("notes.txt"));
+        fireEvent.click(screen.getByRole("menuitem", { name: "Copy Path" }));
+        await waitFor(() =>
+          expect(messages()).toContain("Could not copy the path"),
+        );
+      });
     });
 
     it("opens a local file on double-click and Enter; folders still navigate", async () => {

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::connection::ConnectionProfile;
 use crate::error::{CoreError, CoreResult};
+use crate::favorites::{self, Favorite, FavoriteSide};
 use crate::ids::ProfileId;
 use crate::persist::write_json_atomic;
 
@@ -81,13 +82,23 @@ impl ProfileStore {
 
     /// Validate and insert or replace (by id) `profile`, then persist.
     /// Returns what was stored. On error nothing changes.
+    ///
+    /// The favorites are not the form's to change: a replaced profile keeps
+    /// its stored ones and a new one starts without any, whatever
+    /// `profile.favorites` says (see [`ProfileStore::set_favorites`]).
     pub fn save(&self, profile: ConnectionProfile) -> CoreResult<ConnectionProfile> {
-        let profile = profile.normalized()?;
+        let mut profile = profile.normalized()?;
         let mut inner = self.inner.lock().expect(LOCK_POISONED);
         let mut next = inner.profiles.clone();
         match next.iter_mut().find(|p| p.id == profile.id) {
-            Some(existing) => *existing = profile.clone(),
-            None => next.push(profile.clone()),
+            Some(existing) => {
+                profile.favorites = std::mem::take(&mut existing.favorites);
+                *existing = profile.clone();
+            }
+            None => {
+                profile.favorites = Vec::new();
+                next.push(profile.clone());
+            }
         }
         persist(&inner, &next)?;
         inner.profiles = next;
@@ -126,6 +137,27 @@ impl ProfileStore {
         persist(&inner, &next)?;
         inner.profiles = next;
         Ok(())
+    }
+
+    /// Replace the favorite folders of profile `id` (`NotFound` if unknown)
+    /// with `list`, validated (`InvalidInput`: see
+    /// [`favorites::normalize`]), then persist. Returns what was stored. On
+    /// error nothing changes.
+    pub fn set_favorites(&self, id: ProfileId, list: Vec<Favorite>) -> CoreResult<Vec<Favorite>> {
+        let list = favorites::normalize(list, FavoriteSide::Remote)?;
+        let mut inner = self.inner.lock().expect(LOCK_POISONED);
+        let mut next = inner.profiles.clone();
+        let profile = next
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| CoreError::NotFound("connection".into()))?;
+        if profile.favorites == list {
+            return Ok(list);
+        }
+        profile.favorites = list.clone();
+        persist(&inner, &next)?;
+        inner.profiles = next;
+        Ok(list)
     }
 
     /// Remove a profile; `NotFound` when no profile has that id.
@@ -204,6 +236,7 @@ mod tests {
             },
             start_dir: Some("/srv/www".into()),
             jump: None,
+            favorites: Vec::new(),
         }
     }
 
@@ -381,6 +414,118 @@ mod tests {
         };
         assert!(matches!(store.save(bad), Err(CoreError::InvalidInput(_))));
         assert!(store.list().is_empty());
+    }
+
+    fn fav(path: &str) -> Favorite {
+        Favorite {
+            path: path.into(),
+            label: None,
+        }
+    }
+
+    #[test]
+    fn favorites_are_set_validated_and_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("profiles.json");
+        let store = ProfileStore::new();
+        store.set_path(file.clone());
+        let a = store.save(profile("A")).unwrap();
+        let b = store.save(profile("B")).unwrap();
+        let stored = store
+            .set_favorites(a.id, vec![fav("/var/www/"), fav("/var/log")])
+            .unwrap();
+        assert_eq!(stored, vec![fav("/var/www"), fav("/var/log")]);
+        assert!(store.get(b.id).unwrap().favorites.is_empty());
+
+        let reloaded = ProfileStore::new();
+        reloaded.set_path(file.clone());
+        assert_eq!(reloaded.get(a.id).unwrap().favorites, stored);
+
+        let before = std::fs::read_to_string(&file).unwrap();
+        for bad in [vec![fav("relative")], vec![fav("/x"), fav("/x/")]] {
+            let err = store.set_favorites(a.id, bad).unwrap_err();
+            assert_eq!(err.kind(), "invalidInput");
+        }
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+        assert_eq!(store.get(a.id).unwrap().favorites, stored);
+        let err = store
+            .set_favorites(ProfileId::new(), vec![fav("/x")])
+            .unwrap_err();
+        assert_eq!(err.kind(), "notFound");
+    }
+
+    #[test]
+    fn saving_from_the_form_keeps_the_favorites() {
+        let store = ProfileStore::new();
+        let a = store.save(profile("A")).unwrap();
+        store.set_favorites(a.id, vec![fav("/srv")]).unwrap();
+        // A form opened before the favorite was added sends none at all…
+        let saved = store
+            .save(ConnectionProfile {
+                name: "A2".into(),
+                favorites: Vec::new(),
+                ..a.clone()
+            })
+            .unwrap();
+        assert_eq!(saved.favorites, vec![fav("/srv")]);
+        // …or a stale list: neither replaces the stored one.
+        store
+            .save(ConnectionProfile {
+                favorites: vec![fav("/elsewhere")],
+                ..a.clone()
+            })
+            .unwrap();
+        assert_eq!(store.get(a.id).unwrap().favorites, vec![fav("/srv")]);
+        // A new profile starts without favorites.
+        let fresh = store
+            .save(ConnectionProfile {
+                favorites: vec![fav("/srv")],
+                ..profile("B")
+            })
+            .unwrap();
+        assert!(fresh.favorites.is_empty());
+    }
+
+    #[test]
+    fn deleting_a_profile_drops_its_favorites() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("profiles.json");
+        let store = ProfileStore::new();
+        store.set_path(file.clone());
+        let a = store.save(profile("A")).unwrap();
+        store.set_favorites(a.id, vec![fav("/srv/www")]).unwrap();
+        store.delete(a.id).unwrap();
+        assert!(!std::fs::read_to_string(&file).unwrap().contains("/srv/www"));
+    }
+
+    #[test]
+    fn a_file_without_favorites_loads_and_a_bad_favorite_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("profiles.json");
+        std::fs::write(
+            &file,
+            r#"{"profiles":[
+                {"id":"6f1c7f0e-0000-4000-8000-000000000001","name":"Old","host":"h.example.test",
+                 "user":"u","auth":{"kind":"password"}},
+                {"id":"6f1c7f0e-0000-4000-8000-000000000002","name":"Hand edited","host":"h.example.test",
+                 "user":"u","auth":{"kind":"password"},
+                 "favorites":[{"path":"relative"},{"path":"/ok","label":" Ok "}]}
+            ]}"#,
+        )
+        .unwrap();
+        let store = ProfileStore::new();
+        store.set_path(file.clone());
+        let list = store.list();
+        assert_eq!(list.len(), 2);
+        assert!(list[0].favorites.is_empty());
+        assert_eq!(
+            list[1].favorites,
+            vec![Favorite {
+                path: "/ok".into(),
+                label: Some("Ok".into()),
+            }]
+        );
+        assert!(!file.with_extension("json.bak").exists());
     }
 
     #[test]

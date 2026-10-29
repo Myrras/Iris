@@ -11,11 +11,13 @@ import {
   listProfiles,
   reorderProfiles,
   saveProfile,
+  setProfileFavorites,
   toIpcError,
 } from "../ipc/commands";
 import type {
   ConnectionProfile,
   ConnectionProfileInput,
+  Favorite,
   ProfileId,
 } from "../ipc/types";
 import { toastError } from "./toastStore";
@@ -36,10 +38,29 @@ interface ProfilesState {
   reorder: (ids: ProfileId[]) => Promise<void>;
   /** Delete; rejects with the `IpcError` for the caller to show. */
   remove: (id: ProfileId) => Promise<void>;
+  /**
+   * Replace a connection's favorite folders, like `reorder`: applied locally
+   * at once, then sent, then the list is re-read. A refusal toasts with
+   * `failure` as the title and puts the backend's list back; never rejects.
+   * Resolves whether the backend stored it.
+   */
+  setFavorites: (
+    id: ProfileId,
+    favorites: Favorite[],
+    failure: string,
+  ) => Promise<boolean>;
 }
 
 /** The latest reorder; an older one that finishes late leaves the list alone. */
 let reorderSeq = 0;
+/** The latest favorites change per profile (same rule as `reorderSeq`). */
+const favoritesSeq = new Map<ProfileId, number>();
+
+const withFavorites = (
+  profiles: ConnectionProfile[],
+  id: ProfileId,
+  favorites: Favorite[],
+) => profiles.map((p) => (p.id === id ? { ...p, favorites } : p));
 
 export const useProfilesStore = create<ProfilesState>((set, get) => ({
   profiles: [],
@@ -77,5 +98,23 @@ export const useProfilesStore = create<ProfilesState>((set, get) => ({
   remove: async (id) => {
     await deleteProfile(id);
     await get().refresh();
+  },
+  setFavorites: async (id, favorites, failure) => {
+    const previous = get().profiles.find((p) => p.id === id)?.favorites ?? [];
+    const seq = (favoritesSeq.get(id) ?? 0) + 1;
+    favoritesSeq.set(id, seq);
+    const latest = () => favoritesSeq.get(id) === seq;
+    set({ profiles: withFavorites(get().profiles, id, favorites) });
+    let stored = true;
+    try {
+      await setProfileFavorites(id, favorites);
+    } catch (e) {
+      stored = false;
+      if (!latest()) return false;
+      set({ profiles: withFavorites(get().profiles, id, previous) });
+      toastError(failure, toIpcError(e).message);
+    }
+    if (latest()) await get().refresh();
+    return stored;
   },
 }));

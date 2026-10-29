@@ -2,14 +2,14 @@
  * Opens the Sync dialog (`SyncDialog`, rendered once in `App`) from a
  * pane's toolbar, context menu or ⌥⌘S, with the direction that pane
  * suggests (Local → upload, Remote → download). Also reports a finished
- * run (`sync:finished`): a toast, and the tab's panes re-listed.
+ * run (`sync:finished`): a toast, and the panes showing it re-listed.
  */
 
 import { create } from "zustand";
 
 import type { SyncFinishedEvent, TransferDirection } from "../ipc/types";
 import { finishedToast } from "../lib/sync";
-import { refreshSessionPanes } from "../lib/tabs";
+import { refreshSessionPanes } from "../lib/connections";
 import { toastError, toastSuccess } from "./toastStore";
 
 export interface SyncRequest {

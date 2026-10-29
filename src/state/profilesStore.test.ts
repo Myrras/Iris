@@ -28,6 +28,7 @@ const alpha: ConnectionProfile = {
   auth: { kind: "password" },
   startDir: null,
   jump: null,
+  favorites: [],
 };
 
 const beta: ConnectionProfile = { ...alpha, id: "p-2", name: "Beta" };

@@ -75,3 +75,25 @@
   font-size: var(--fs-xs);
   color: var(--text-faint);
 }
+
+/* Group caption, in the panes' section-header look. */
+.header {
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--text-faint);
+  -webkit-user-select: none;
+  user-select: none;
+  /* A caption never takes a click meant for the item under the pointer. */
+  pointer-events: none;
+}
+
+/* A hairline above every group but the first, so the sections read apart. */
+.header:not(:first-child) {
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}

@@ -163,6 +163,7 @@ impl Fixture {
                 auth,
                 start_dir: None,
                 jump,
+                favorites: Vec::new(),
             })
             .unwrap()
             .id

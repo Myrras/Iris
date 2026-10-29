@@ -1,7 +1,8 @@
 /**
  * Persistent shell layout: the sizes of the resizable islands (sidebar width,
- * Local/Remote split, preview width, transfer list height) and the collapse
- * state of the transfer and preview islands.
+ * Local/Remote split, preview width, transfer list height), the collapse
+ * state of the transfer and preview islands, and which connections in the
+ * sidebar have their favorites folded away (expanded by default).
  *
  * The sizes are preferences, clamped here to their absolute bounds only; the
  * window-dependent limits are applied when drawing (`lib/resize`). Saved
@@ -31,13 +32,20 @@ import {
 
 const STORAGE_KEY = "iris.layout";
 
-const DEFAULTS: LayoutPrefs = {
+/** What is saved: the island sizes plus the sidebar's folded connections. */
+interface StoredLayout extends LayoutPrefs {
+  /** Profile ids whose favorites the sidebar hides. */
+  collapsedFavorites: string[];
+}
+
+const DEFAULTS: StoredLayout = {
   sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
   panesRatio: PANES_DEFAULT_RATIO,
   previewWidth: PREVIEW_DEFAULT_WIDTH,
   previewOpen: true,
   transfersHeight: TRANSFERS_DEFAULT_HEIGHT,
   transfersCollapsed: false,
+  collapsedFavorites: [],
 };
 
 const clampSidebar = (v: number) =>
@@ -48,11 +56,11 @@ const clampPreview = (v: number) =>
 const clampTransfers = (v: number) =>
   clamp(v, TRANSFERS_MIN_HEIGHT, TRANSFERS_STORED_MAX);
 
-function load(): LayoutPrefs {
+function load(): StoredLayout {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULTS };
-    const saved = JSON.parse(raw) as Partial<LayoutPrefs> | null;
+    const saved = JSON.parse(raw) as Partial<StoredLayout> | null;
     if (!saved || typeof saved !== "object") return { ...DEFAULTS };
     return {
       sidebarWidth: clampSidebar(
@@ -67,13 +75,16 @@ function load(): LayoutPrefs {
         finiteOr(saved.transfersHeight, DEFAULTS.transfersHeight),
       ),
       transfersCollapsed: saved.transfersCollapsed === true,
+      collapsedFavorites: Array.isArray(saved.collapsedFavorites)
+        ? saved.collapsedFavorites.filter((id) => typeof id === "string")
+        : [],
     };
   } catch {
     return { ...DEFAULTS };
   }
 }
 
-function persist(state: LayoutPrefs) {
+function persist(state: StoredLayout) {
   try {
     localStorage.setItem(
       STORAGE_KEY,
@@ -84,6 +95,7 @@ function persist(state: LayoutPrefs) {
         previewOpen: state.previewOpen,
         transfersHeight: state.transfersHeight,
         transfersCollapsed: state.transfersCollapsed,
+        collapsedFavorites: state.collapsedFavorites,
       }),
     );
   } catch {
@@ -91,7 +103,7 @@ function persist(state: LayoutPrefs) {
   }
 }
 
-interface LayoutState extends LayoutPrefs {
+interface LayoutState extends StoredLayout {
   setSidebarWidth: (width: number) => void;
   setPanesRatio: (ratio: number) => void;
   setPreviewWidth: (width: number) => void;
@@ -99,10 +111,12 @@ interface LayoutState extends LayoutPrefs {
   setTransfersCollapsed: (collapsed: boolean) => void;
   setPreviewOpen: (open: boolean) => void;
   togglePreview: () => void;
+  /** Show (`true`) or fold away a connection's favorites in the sidebar. */
+  setFavoritesExpanded: (profileId: string, expanded: boolean) => void;
 }
 
 export const useLayoutStore = create<LayoutState>((set, get) => {
-  const update = (patch: Partial<LayoutPrefs>) => {
+  const update = (patch: Partial<StoredLayout>) => {
     set(patch);
     persist(get());
   };
@@ -117,5 +131,9 @@ export const useLayoutStore = create<LayoutState>((set, get) => {
       update({ transfersCollapsed: collapsed }),
     setPreviewOpen: (open) => update({ previewOpen: open }),
     togglePreview: () => update({ previewOpen: !get().previewOpen }),
+    setFavoritesExpanded: (profileId, expanded) => {
+      const rest = get().collapsedFavorites.filter((id) => id !== profileId);
+      update({ collapsedFavorites: expanded ? rest : [...rest, profileId] });
+    },
   };
 });

@@ -14,6 +14,7 @@ import type {
   ConflictResolution,
   ConnectionProfile,
   ConnectionProfileInput,
+  Favorite,
   DragOutId,
   DragOutReady,
   EditId,
@@ -75,6 +76,15 @@ export function saveSettings(settings: IrisSettings): Promise<IrisSettings> {
   return invoke("save_settings", { settings });
 }
 
+/**
+ * Replace the Local favorite folders; resolves with what was stored, rejects
+ * with `invalidInput` (a relative path, a folder twice, a label over 255
+ * characters, more than 200). Emits `settings:changed`.
+ */
+export function setLocalFavorites(favorites: Favorite[]): Promise<Favorite[]> {
+  return invoke("set_local_favorites", { favorites });
+}
+
 // ---------------------------------------------------------------------------
 // Connections
 // ---------------------------------------------------------------------------
@@ -101,6 +111,19 @@ export function saveProfile(
  */
 export function reorderProfiles(ids: ProfileId[]): Promise<void> {
   return invoke("reorder_profiles", { ids });
+}
+
+/**
+ * Replace a saved connection's favorite remote folders; resolves with what
+ * was stored, rejects with `notFound` or `invalidInput` (a path not from `/`,
+ * a folder twice, a label over 255 characters, more than 200). Emits
+ * `profiles:changed`.
+ */
+export function setProfileFavorites(
+  profileId: ProfileId,
+  favorites: Favorite[],
+): Promise<Favorite[]> {
+  return invoke("set_profile_favorites", { profileId, favorites });
 }
 
 /**

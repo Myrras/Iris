@@ -105,6 +105,7 @@ beforeEach(() => {
         auth: { kind: "agent" },
         startDir: null,
         jump: null,
+        favorites: [],
       },
     ],
   });
@@ -319,7 +320,7 @@ describe("TransferPanel", () => {
       return row.querySelector<HTMLElement>("[data-paths] > span:last-child")!;
     }
 
-    it("shows the folders for an upload, Local first", () => {
+    it("shows the folders for an upload, Local on the left", () => {
       setJobs([
         job("a", {
           src: "/Users/me/project/src/a.txt",
@@ -332,7 +333,7 @@ describe("TransferPanel", () => {
       );
     });
 
-    it("shows the folders for a download, the connection first", () => {
+    it("shows the folders for a download, Local still on the left", () => {
       setJobs([
         job("a", {
           direction: "download",
@@ -342,8 +343,30 @@ describe("TransferPanel", () => {
       ]);
       render(<TransferPanel />);
       expect(pathsLine("a.txt")).toHaveTextContent(
-        "web.example.test: /var/www/site → Local: /Users/me/dl",
+        "Local: /Users/me/dl ← web.example.test: /var/www/site",
       );
+      expect(pathsLine("a.txt")).toHaveAttribute(
+        "title",
+        "Local: /Users/me/dl/a.txt ← web.example.test: /var/www/site/a.txt",
+      );
+    });
+
+    it("tells the two directions apart by the arrow alone", () => {
+      const local = "/Users/me/site/a.txt";
+      const server = "/var/www/site/a.txt";
+      setJobs([job("a", { src: local, dst: server })]);
+      const { unmount } = render(<TransferPanel />);
+      const up = pathsLine("a.txt").textContent ?? "";
+      unmount();
+
+      setJobs([job("a", { direction: "download", src: server, dst: local })]);
+      render(<TransferPanel />);
+      const down = pathsLine("a.txt").textContent ?? "";
+
+      expect(up).toBe(
+        "Local: /Users/me/site → web.example.test: /var/www/site",
+      );
+      expect(down.replace(" ← ", " → ")).toBe(up);
     });
 
     it("cuts long folders in the middle", () => {
@@ -354,6 +377,9 @@ describe("TransferPanel", () => {
       expect(text).toContain("…");
       expect(text).toContain("/Users/me");
       expect(text).toContain("/last");
+      // Both labels and the arrow survive the cut: the budget allows for them.
+      expect(text.startsWith("Local: /Users/me")).toBe(true);
+      expect(text).toContain(" → web.example.test: /srv");
     });
 
     it("carries both full paths in the tooltip", () => {

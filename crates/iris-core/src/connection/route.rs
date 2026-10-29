@@ -237,6 +237,7 @@ Host loop-b
             auth,
             start_dir: None,
             jump,
+            favorites: Vec::new(),
         }
     }
 

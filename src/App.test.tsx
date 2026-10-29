@@ -68,11 +68,14 @@ describe("App", () => {
     expect(screen.getByLabelText("Local files")).toBeInTheDocument();
     expect(screen.getByLabelText("Remote files")).toBeInTheDocument();
     expect(screen.getByLabelText("Transfers")).toBeInTheDocument();
-    expect(screen.getByRole("tablist", { name: "Tabs" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /New tab/ })).toHaveAttribute(
+    // No window-wide tab bar: the Local pane has its own folder tabs, the
+    // Remote pane none until a connection is picked.
+    expect(screen.getAllByRole("tablist")).toHaveLength(1);
+    expect(await screen.findByRole("tab", { name: "alice" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
+    expect(screen.getByRole("tablist")).toHaveAccessibleName("Local tabs");
   });
 
   it("shows the welcome content in the remote pane", () => {

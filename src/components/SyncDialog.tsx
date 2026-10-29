@@ -1,5 +1,6 @@
 /**
- * One-way sync between the active tab's Local and Remote folders, opened by
+ * One-way sync between the folders the Local and Remote panes show (their
+ * active tabs; the Remote one of the active connection), opened by
  * `syncStore` (pane toolbar, context menu, ⌥⌘S / Ctrl+Alt+S).
  *
  * Set up the direction (Local → Remote or Remote → Local, both full paths

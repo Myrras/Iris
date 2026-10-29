@@ -15,7 +15,8 @@
  * connection in the sidebar) stay fixed (`RESERVED`).
  *
  * Pure rules, no React: `Pane.tsx` and `useTabShortcuts.ts` dispatch with
- * `findAction`.
+ * `findAction`. The tab actions are window-wide (`app`) but act on the
+ * active pane's folder tabs.
  */
 
 import { isMac } from "./platform";
@@ -26,6 +27,7 @@ export type ActionId =
   | "find"
   | "newFolder"
   | "rename"
+  | "copyPath"
   | "delete"
   | "getInfo"
   | "upload"
@@ -95,6 +97,14 @@ export const ACTIONS: ActionDef[] = [
     note: "Enter also renames on macOS.",
   },
   {
+    id: "copyPath",
+    label: "Copy path",
+    group: "Files",
+    scope: "pane",
+    defaults: ["Mod+Alt+KeyC"],
+    note: "The folder shown when nothing is selected.",
+  },
+  {
     id: "delete",
     label: "Delete",
     group: "Files",
@@ -161,6 +171,7 @@ export const ACTIONS: ActionDef[] = [
     group: "Tabs",
     scope: "app",
     defaults: ["Mod+KeyT"],
+    note: "In the active pane, on the folder it shows.",
   },
   {
     id: "closeTab",
@@ -168,6 +179,7 @@ export const ACTIONS: ActionDef[] = [
     group: "Tabs",
     scope: "app",
     defaults: ["Mod+KeyW"],
+    note: "In the active pane; its last tab stays.",
   },
   {
     id: "nextTab",
@@ -175,7 +187,7 @@ export const ACTIONS: ActionDef[] = [
     group: "Tabs",
     scope: "app",
     defaults: ["Mod+Shift+BracketRight"],
-    note: "Cmd/Ctrl+1 to 9 switch to a tab.",
+    note: "In the active pane. Cmd/Ctrl+1 to 9 switch to a tab.",
   },
   {
     id: "prevTab",
@@ -183,6 +195,7 @@ export const ACTIONS: ActionDef[] = [
     group: "Tabs",
     scope: "app",
     defaults: ["Mod+Shift+BracketLeft"],
+    note: "In the active pane.",
   },
   {
     id: "openSettings",

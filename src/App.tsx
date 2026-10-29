@@ -2,15 +2,15 @@
  * Iris — application shell (Podium's island layout).
  *
  * Layout: a slim title bar on the canvas; below it `Shell` — the sidebar
- * island on the left and the work column on the right (the Local and Remote
- * pane islands side by side with the collapsible preview island at their
- * right, the collapsible transfer island underneath, the tab strip above the
- * panes; each tab its own pane pair and session, `tabsStore`), with
- * splitters between the islands. This
+ * island on the left (the connections; the selected one is what the Remote
+ * pane shows) and the work column on the right (the Local and Remote pane
+ * islands side by side, each with its own folder tabs, `tabsStore`; the
+ * collapsible preview island at their right, the collapsible transfer island
+ * underneath), with splitters between the islands. This
  * component also owns the app-level wiring: the backend events
  * (`useCoreEvents`), files dragged in from the OS (`useNativeDrop`), the
  * pane-drag chip (`DragGhost`), the Sync dialog (`SyncDialog`), opening
- * the active tab's panes and the app shortcuts (`lib/keymap`), settings access (native menu on
+ * the Local pane and the app shortcuts (`lib/keymap`), settings access (native menu on
  * macOS, title-bar gear elsewhere), the close-warning event, and suppressing
  * webview-only behaviour (reload shortcuts, the browser context menu).
  */
@@ -28,13 +28,13 @@ import { useTabsStore } from "./state/tabsStore";
 import { useSettingsRequestStore } from "./state/settingsRequestStore";
 import { CloseWarningModal } from "./components/CloseWarningModal";
 import { ConnectionForm } from "./components/ConnectionForm";
+import { DisconnectModal } from "./components/DisconnectModal";
 import { DragGhost } from "./components/DragGhost";
 import { LogoMark } from "./components/LogoMark";
 import { PromptHost } from "./components/PromptHost";
 import { SettingsModal } from "./components/SettingsModal";
 import { Shell } from "./components/Shell";
 import { SyncDialog } from "./components/SyncDialog";
-import { TabCloseModal } from "./components/TabCloseModal";
 import { Toasts } from "./components/Toasts";
 import { WindowControls } from "./components/WindowControls";
 import { SettingsIcon } from "./components/icons";
@@ -45,10 +45,10 @@ export default function App() {
   useNativeDrop();
   const keymap = useKeymap();
 
-  // Open the active tab's panes: the local pane in its restored folder (or
-  // home), the remote pane only once the user connects (never on its own).
+  // Open the Local pane at home. Nothing is restored and nothing connects
+  // on its own: the Remote pane waits for a connection from the sidebar.
   useEffect(() => {
-    useTabsStore.getState().showActive();
+    useTabsStore.getState().start();
   }, []);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -150,7 +150,7 @@ export default function App() {
         }}
       />
       <SyncDialog />
-      <TabCloseModal />
+      <DisconnectModal />
       <CloseWarningModal
         open={closeWarnOpen}
         onClose={() => setCloseWarnOpen(false)}

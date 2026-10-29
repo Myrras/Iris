@@ -51,6 +51,7 @@ impl Fixture {
                 auth: AuthMethod::Password,
                 start_dir: None,
                 jump: None,
+                favorites: Vec::new(),
             })
             .unwrap()
             .id;

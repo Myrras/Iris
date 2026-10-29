@@ -2,7 +2,8 @@
 //! (`settings.json`).
 //!
 //! These are the backend-relevant preferences (transfer parallelism, reconnect
-//! policy, per-extension editor overrides, the names a sync leaves alone). Purely visual preferences (theme,
+//! policy, per-extension editor overrides, the names a sync leaves alone) and
+//! the Local favorite folders. Purely visual preferences (theme,
 //! hidden files, preview cap) live in the frontend's `settingsStore`
 //! (localStorage) instead, since nothing in the core needs them.
 //!
@@ -17,6 +18,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, CoreResult};
+use crate::favorites::{self, Favorite, FavoriteSide};
 use crate::persist::write_json_atomic;
 
 const LOCK_POISONED: &str = "settings store lock poisoned";
@@ -52,6 +54,10 @@ pub struct IrisSettings {
     /// Name patterns a sync never copies or deletes, matched against each
     /// path segment (`*` and `?` wildcards; see [`crate::sync::exclude`]).
     pub sync_excludes: Vec<String>,
+    /// Favorite local folders, in the user's order. Changed only through
+    /// [`IrisSettingsStore::set_local_favorites`]: saving the settings keeps
+    /// the stored list whatever this field says.
+    pub local_favorites: Vec<Favorite>,
 }
 
 impl Default for IrisSettings {
@@ -61,6 +67,7 @@ impl Default for IrisSettings {
             reconnect_attempts: 5,
             editor_overrides: BTreeMap::new(),
             sync_excludes: default_sync_excludes(),
+            local_favorites: Vec::new(),
         }
     }
 }
@@ -94,9 +101,11 @@ impl IrisSettings {
             .filter(|(ext, app)| !ext.is_empty() && !app.is_empty())
             .collect();
         let sync_excludes = normalize_excludes(self.sync_excludes)?;
+        let local_favorites = favorites::sanitize(self.local_favorites, FavoriteSide::Local);
         Ok(Self {
             editor_overrides,
             sync_excludes,
+            local_favorites,
             ..self
         })
     }
@@ -166,15 +175,38 @@ impl IrisSettingsStore {
     }
 
     /// Validate, normalize and persist `settings` as the new document;
-    /// returns what was stored. On error nothing changes.
+    /// returns what was stored. On error nothing changes. The Local
+    /// favorites are kept as stored, whatever `settings` says (see
+    /// [`IrisSettingsStore::set_local_favorites`]).
     pub fn save(&self, settings: IrisSettings) -> CoreResult<IrisSettings> {
-        let settings = settings.normalized()?;
+        let mut settings = settings.normalized()?;
         let mut inner = self.inner.lock().expect(LOCK_POISONED);
+        settings.local_favorites = inner.settings.local_favorites.clone();
         if let Some(path) = &inner.path {
             write_json_atomic(path, &settings, "settings")?;
         }
         inner.settings = settings.clone();
         Ok(settings)
+    }
+
+    /// Replace the Local favorite folders with `list`, validated
+    /// (`InvalidInput`: see [`favorites::normalize`]), then persist.
+    /// Returns what was stored. On error nothing changes.
+    pub fn set_local_favorites(&self, list: Vec<Favorite>) -> CoreResult<Vec<Favorite>> {
+        let list = favorites::normalize(list, FavoriteSide::Local)?;
+        let mut inner = self.inner.lock().expect(LOCK_POISONED);
+        if inner.settings.local_favorites == list {
+            return Ok(list);
+        }
+        let next = IrisSettings {
+            local_favorites: list.clone(),
+            ..inner.settings.clone()
+        };
+        if let Some(path) = &inner.path {
+            write_json_atomic(path, &next, "settings")?;
+        }
+        inner.settings = next;
+        Ok(list)
     }
 }
 
@@ -263,6 +295,7 @@ mod tests {
             reconnect_attempts: 0,
             editor_overrides: overrides(&[("md", "/Applications/Typora.app")]),
             sync_excludes: vec!["*.log".into()],
+            local_favorites: Vec::new(),
         };
         let json = serde_json::to_string(&settings).unwrap();
         assert!(
@@ -296,6 +329,7 @@ mod tests {
                 reconnect_attempts: 9,
                 editor_overrides: overrides(&[("txt", "/usr/bin/nano")]),
                 sync_excludes: vec!["dist".into()],
+                local_favorites: Vec::new(),
             })
             .unwrap();
 
@@ -305,6 +339,101 @@ mod tests {
         assert_eq!(s.parallel_transfers, 2);
         assert_eq!(s.reconnect_attempts, 9);
         assert_eq!(s.editor_overrides, overrides(&[("txt", "/usr/bin/nano")]));
+    }
+
+    /// An absolute local path on this OS.
+    fn local(name: &str) -> String {
+        std::env::temp_dir()
+            .join(name)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn fav(path: &str) -> Favorite {
+        Favorite {
+            path: path.into(),
+            label: None,
+        }
+    }
+
+    #[test]
+    fn a_file_without_local_favorites_has_none() {
+        let old: IrisSettings = serde_json::from_str(r#"{"parallelTransfers":2}"#).unwrap();
+        assert!(old.local_favorites.is_empty());
+        let json = serde_json::to_string(&IrisSettings::default()).unwrap();
+        assert!(json.contains("\"localFavorites\":[]"), "json: {json}");
+    }
+
+    #[test]
+    fn local_favorites_are_set_validated_and_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let store = IrisSettingsStore::new();
+        store.set_path(file.clone());
+        let list = vec![fav(&local("projects")), fav(&local("Downloads"))];
+        assert_eq!(store.set_local_favorites(list.clone()).unwrap(), list);
+
+        let reloaded = IrisSettingsStore::new();
+        reloaded.set_path(file.clone());
+        assert_eq!(reloaded.get().local_favorites, list);
+
+        let before = std::fs::read_to_string(&file).unwrap();
+        for bad in [
+            vec![fav("relative")],
+            vec![fav(&local("a")), fav(&local("a"))],
+        ] {
+            let err = store.set_local_favorites(bad).unwrap_err();
+            assert_eq!(err.kind(), "invalidInput");
+        }
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+        assert_eq!(store.get().local_favorites, list);
+    }
+
+    #[test]
+    fn saving_the_settings_keeps_the_local_favorites() {
+        let store = IrisSettingsStore::new();
+        let list = vec![fav(&local("projects"))];
+        store.set_local_favorites(list.clone()).unwrap();
+        // The Settings dialog loaded its copy before the favorite was added.
+        let saved = store
+            .save(IrisSettings {
+                parallel_transfers: 2,
+                ..IrisSettings::default()
+            })
+            .unwrap();
+        assert_eq!(saved.local_favorites, list);
+        assert_eq!(saved.parallel_transfers, 2);
+        let saved = store
+            .save(IrisSettings {
+                local_favorites: vec![fav(&local("stale"))],
+                ..IrisSettings::default()
+            })
+            .unwrap();
+        assert_eq!(saved.local_favorites, list);
+        assert_eq!(store.get().local_favorites, list);
+    }
+
+    #[test]
+    fn a_bad_local_favorite_in_the_file_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let good = local("projects");
+        let raw = serde_json::json!({
+            "parallelTransfers": 3,
+            "localFavorites": [{ "path": "relative" }, { "path": good, "label": " P " }],
+        });
+        std::fs::write(&file, raw.to_string()).unwrap();
+        let store = IrisSettingsStore::new();
+        store.set_path(file);
+        let s = store.get();
+        assert_eq!(s.parallel_transfers, 3);
+        assert_eq!(
+            s.local_favorites,
+            vec![Favorite {
+                path: good,
+                label: Some("P".into()),
+            }]
+        );
     }
 
     #[test]

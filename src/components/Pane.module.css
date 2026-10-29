@@ -30,7 +30,8 @@
   color: var(--accent);
 }
 
-/* Section-header look from the sidebar (uppercase, faint). */
+/* Section-header look from the sidebar (uppercase, faint), with the pane's
+   folder tabs (`TabBar`) in the rest of the row. */
 .header {
   display: flex;
   align-items: center;
@@ -50,6 +51,7 @@
 }
 
 .title {
+  flex-shrink: 0;
   margin: 0;
   font-size: var(--fs-xs);
   font-weight: 600;
@@ -59,8 +61,10 @@
   transition: color var(--dur-2) var(--ease-out);
 }
 
-/* The connection shown in the remote pane. */
+/* The connection shown in the remote pane; gives way to the tab strip. */
 .subtitle {
+  flex: 0 1 auto;
+  max-width: 40%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -105,6 +109,12 @@
 
 .tool[aria-pressed="true"] {
   color: var(--accent);
+}
+
+/* The path bar's favorite star: filled and in the favorites' colour when
+   the folder is one. */
+.star[aria-pressed="true"] {
+  color: var(--warning);
 }
 
 .tool[data-loading="true"] svg {

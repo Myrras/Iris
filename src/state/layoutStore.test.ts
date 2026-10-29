@@ -26,6 +26,21 @@ describe("layoutStore", () => {
     expect(reloaded.getState().transfersCollapsed).toBe(true);
   });
 
+  it("shows favorites by default and remembers folding them per connection", async () => {
+    const store = await freshStore();
+    expect(store.getState().collapsedFavorites).toEqual([]);
+    store.getState().setFavoritesExpanded("p-1", false);
+    store.getState().setFavoritesExpanded("p-2", false);
+    store.getState().setFavoritesExpanded("p-2", true);
+    const reloaded = await freshStore();
+    expect(reloaded.getState().collapsedFavorites).toEqual(["p-1"]);
+    localStorage.setItem(
+      "iris.layout",
+      JSON.stringify({ collapsedFavorites: "nonsense" }),
+    );
+    expect((await freshStore()).getState().collapsedFavorites).toEqual([]);
+  });
+
   it("opens the preview by default and remembers closing it", async () => {
     const store = await freshStore();
     expect(store.getState().previewOpen).toBe(true);

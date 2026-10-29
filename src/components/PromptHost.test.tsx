@@ -19,6 +19,7 @@ const profile: ConnectionProfile = {
   auth: { kind: "password" },
   startDir: null,
   jump: null,
+  favorites: [],
 };
 
 beforeEach(() => {

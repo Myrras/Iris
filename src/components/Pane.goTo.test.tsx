@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,10 +16,12 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   listTransfers: vi.fn(() => new Promise(() => undefined)),
 }));
 vi.mock("../lib/connect", () => ({
-  connectInTab: vi.fn(),
+  connectProfile: vi.fn(),
   retrySession: vi.fn(),
 }));
-vi.mock("../lib/tabs", () => ({ requestDisconnectSession: vi.fn() }));
+vi.mock("../lib/connections", () => ({
+  requestDisconnectSession: vi.fn(),
+}));
 
 import { homeDir, listDir, stat } from "../ipc/commands";
 import type { Entry, EntryKind, IpcError } from "../ipc/types";
@@ -183,7 +186,11 @@ describe("opening the field", () => {
 
   it("opens with a double-click on the breadcrumb", async () => {
     await openLocal();
-    fireEvent.doubleClick(screen.getByText("alice"));
+    fireEvent.doubleClick(
+      within(screen.getByRole("navigation", { name: "Path" })).getByText(
+        "alice",
+      ),
+    );
     expect(field()).toHaveValue("/home/alice");
   });
 

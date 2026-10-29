@@ -62,6 +62,44 @@
   outline-offset: -1px;
 }
 
+/* The ▸/▾ in front of the dot of a connection with favorites; while any row
+   has one, the others keep its room so the dots line up. */
+.disclosure,
+.disclosureSpace {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: calc(-1 * var(--sp-1));
+  margin-right: calc(-1 * var(--sp-1));
+  flex-shrink: 0;
+}
+
+.disclosure {
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.disclosure:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border: none;
+  color: var(--text);
+}
+
+.caret {
+  display: flex;
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.caret[data-open="true"] {
+  transform: rotate(90deg);
+}
+
 .name {
   flex: 1;
   min-width: 0;

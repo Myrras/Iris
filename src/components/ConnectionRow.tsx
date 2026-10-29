@@ -1,27 +1,33 @@
 /**
  * One saved connection in the sidebar: status dot, name, hover actions —
- * Podium's ProcessRow, with a connection's lifecycle on the dot (across all
- * of the profile's tabs). Clicking connects (in the tab on screen when it is
- * free, else in a new tab); right-click opens the row's menu. Pressing and
+ * Podium's ProcessRow, with the connection's lifecycle on the dot. Clicking
+ * shows the connection in the Remote pane (connecting it when it has no
+ * session); the active one is drawn selected. Right-click opens the row's
+ * menu. Pressing and
  * dragging reorders (`lib/rowReorder`, driven by the sidebar), ⌥⌘↑ / ⌥⌘↓ moves
  * the focused row. The row renders its own list item so the insertion line
  * can sit on the item's edge.
+ *
+ * A connection with favorite folders gets a ▸/▾ disclosure in front of the
+ * dot; when it is open the favorites (`children`, a `FavoriteList`) show
+ * under the row, inside the same list item.
  */
 
-import type { ConnectionProfile } from "../ipc/types";
+import type { ReactNode } from "react";
+
+import type { ConnectionProfile, SessionState } from "../ipc/types";
 import { connectionMoveOf } from "../lib/keymap";
 import { sessionStatus } from "../lib/sessionStatus";
-import type { SessionInfo } from "../state/sessionStore";
 import { StatusDot } from "./StatusDot";
-import { DisconnectIcon, EditIcon } from "./icons";
+import { CaretIcon, DisconnectIcon, EditIcon } from "./icons";
 import styles from "./ConnectionRow.module.css";
 
 export function ConnectionRow({
   profile,
-  session,
+  state,
   active,
   canDisconnect,
-  onConnect,
+  onOpen,
   onEdit,
   onDisconnect,
   onContextMenu,
@@ -29,15 +35,19 @@ export function ConnectionRow({
   onMove,
   reordering,
   insert,
+  favorites,
+  alignWithDisclosures = false,
+  children,
 }: {
   profile: ConnectionProfile;
-  /** The session that speaks for the profile (`summarySessionFor`). */
-  session: SessionInfo | undefined;
-  /** The tab on screen is about this profile. */
+  /** The connection's state (`connectionState`); none = not connected. */
+  state: SessionState | undefined;
+  /** The Remote pane shows this connection. */
   active: boolean;
-  /** The tab on screen has a session of this profile to disconnect. */
+  /** The connection has a session to disconnect. */
   canDisconnect: boolean;
-  onConnect: () => void;
+  /** Show it in the Remote pane, connecting first when needed. */
+  onOpen: () => void;
   onEdit: () => void;
   onDisconnect: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -49,8 +59,14 @@ export function ConnectionRow({
   reordering: boolean;
   /** Draw the insertion line on this item's top or bottom edge. */
   insert: "before" | "after" | undefined;
+  /** It has favorites: the disclosure's state; none = no disclosure. */
+  favorites?: { expanded: boolean; onToggle: () => void };
+  /** Other rows have a disclosure: keep its room so the dots line up. */
+  alignWithDisclosures?: boolean;
+  /** Shown under the row while `favorites.expanded` (the favorites list). */
+  children?: ReactNode;
 }) {
-  const status = sessionStatus(session?.state);
+  const status = sessionStatus(state);
 
   return (
     <div
@@ -66,7 +82,7 @@ export function ConnectionRow({
         role="button"
         tabIndex={0}
         title={`${profile.user}@${profile.host}:${profile.port}`}
-        onClick={onConnect}
+        onClick={onOpen}
         onMouseDown={(e) => {
           // Not a context-menu click (Ctrl on a Mac), not the row's buttons.
           if (e.button !== 0 || e.ctrlKey) return;
@@ -82,9 +98,11 @@ export function ConnectionRow({
             onMove(delta);
             return;
           }
+          // Enter / Space on the row's own buttons press those instead.
+          if ((e.target as HTMLElement).closest("button")) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            onConnect();
+            onOpen();
           }
         }}
         onContextMenu={(e) => {
@@ -92,6 +110,28 @@ export function ConnectionRow({
           onContextMenu(e);
         }}
       >
+        {favorites ? (
+          <button
+            type="button"
+            className={styles.disclosure}
+            aria-expanded={favorites.expanded}
+            aria-label={`${favorites.expanded ? "Hide" : "Show"} favorites of ${profile.name}`}
+            title={favorites.expanded ? "Hide favorites" : "Show favorites"}
+            onClick={(e) => {
+              e.stopPropagation();
+              favorites.onToggle();
+            }}
+          >
+            <span
+              className={styles.caret}
+              data-open={favorites.expanded ? "true" : undefined}
+            >
+              <CaretIcon size={12} />
+            </span>
+          </button>
+        ) : alignWithDisclosures ? (
+          <span className={styles.disclosureSpace} aria-hidden />
+        ) : null}
         <StatusDot
           tone={status.tone}
           label={status.label}
@@ -121,6 +161,7 @@ export function ConnectionRow({
           </button>
         </span>
       </div>
+      {favorites?.expanded && children}
     </div>
   );
 }

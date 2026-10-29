@@ -11,6 +11,31 @@ when it merges.
 
 ## [Unreleased]
 
+### Added
+
+- Favorite folders: star a folder in a pane's path bar (or Add to Favorites
+  in a folder's right-click menu). Local favorites show under Home in the
+  sidebar's new Local section, a server's under its connection. Click one to
+  open it (connecting first if needed), ⌘-click (Ctrl-click) for a new tab;
+  rename, remove or drag them into order.
+- Copy the path of the selected files, or of the folder shown when nothing is
+  selected, with Copy Path in the right-click menu or ⌥⌘C (Ctrl+Alt+C).
+  Several files are copied one path per line.
+
+### Changed
+
+- Tabs moved into the panes and now hold folders: the Local pane has its own
+  folder tabs, and each connection its own Remote tabs on its one connection
+  (⌘T / ⌘W / ⇧⌘] / ⇧⌘[ act on the pane you are in). The top tab bar is gone:
+  click a connection in the sidebar to show it; connecting it again no longer
+  opens a second connection. Tabs are no longer restored after a restart.
+- The transfer list always shows the local folder on the left and the server
+  folder on the right, with the arrow pointing the way the files are moving
+  (→ for an upload, ← for a download), so uploads and downloads are easy to
+  tell apart.
+- The right-click menu in a file pane is grouped under headers (Open,
+  Transfer, Organize, This folder), so the action you want is easier to find.
+
 ## [1.0.0] - 2026-10-28
 
 ### Added

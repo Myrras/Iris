@@ -44,6 +44,8 @@ import {
   rename,
   saveProfile,
   saveSettings,
+  setLocalFavorites,
+  setProfileFavorites,
   setSecret,
   stat,
   toIpcError,
@@ -60,6 +62,7 @@ describe("IPC commands", () => {
       reconnectAttempts: 5,
       editorOverrides: { md: "/Applications/Example.app" },
       syncExcludes: [".git"],
+      localFavorites: [],
     };
     await saveSettings(settings);
     expect(invoke).toHaveBeenCalledWith("save_settings", { settings });
@@ -93,6 +96,17 @@ describe("connection and session commands", () => {
     expect(invoke).toHaveBeenCalledWith("reorder_profiles", {
       ids: ["p-2", "p-1"],
     });
+  });
+
+  it("sends favorites with camelCase keys", async () => {
+    const favorites = [{ path: "/var/www", label: null }];
+    await setProfileFavorites("p-1", favorites);
+    await setLocalFavorites(favorites);
+    expect(invoke).toHaveBeenCalledWith("set_profile_favorites", {
+      profileId: "p-1",
+      favorites,
+    });
+    expect(invoke).toHaveBeenCalledWith("set_local_favorites", { favorites });
   });
 
   it("sends absent secrets as null and remember as false", async () => {

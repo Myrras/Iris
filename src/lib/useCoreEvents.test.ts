@@ -32,6 +32,8 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/commands")>()),
   listProfiles: vi.fn(() => Promise.resolve([])),
   listDir: vi.fn(() => Promise.resolve([])),
+  homeDir: vi.fn(() => Promise.resolve("/home/alice")),
+  disconnect: vi.fn(() => Promise.resolve()),
   listTransfers: vi.fn(() =>
     Promise.resolve({
       jobs: [],
@@ -62,6 +64,7 @@ vi.mock("../state/toastStore", () => ({
 }));
 
 import {
+  disconnect,
   getSettings,
   listDir,
   listProfiles,
@@ -180,14 +183,13 @@ describe("useCoreEvents", () => {
             auth: { kind: "agent" },
             startDir: null,
             jump: null,
+            favorites: [],
           },
         ],
         loaded: true,
       });
-      const tabId = useTabsStore.getState().activeTabId;
-      useTabsStore
-        .getState()
-        .update(tabId, { sessionId: "s-1", profileId: "p-1" });
+      useTabsStore.getState().activate("p-1");
+      useTabsStore.getState().attachSession("p-1", "s-1", "/srv");
       usePaneStore.setState({
         panes: {
           local: initialPane(),
@@ -273,21 +275,33 @@ describe("useCoreEvents", () => {
     });
   });
 
-  it("turns restored tabs of deleted profiles into blank tabs", () => {
+  it("drops the connection of a deleted profile and closes its session", () => {
     resetTabs();
-    const tabId = useTabsStore.getState().activeTabId;
-    useTabsStore.getState().update(tabId, {
-      profileId: "p-gone",
-      title: "Gone",
-      pendingRemotePath: "/srv",
-    });
+    useTabsStore.getState().activate("p-gone");
+    useTabsStore.getState().attachSession("p-gone", "s-7", "/srv");
+    useTabsStore.getState().ensureConnection("p-kept");
     renderHook(() => useCoreEvents());
-    useProfilesStore.setState({ profiles: [], loaded: true });
-    expect(useTabsStore.getState().tabs[0]).toMatchObject({
-      profileId: null,
-      title: "New tab",
-      pendingRemotePath: null,
+    useProfilesStore.setState({
+      profiles: [
+        {
+          id: "p-kept",
+          name: "Kept",
+          host: "kept.example.test",
+          port: 22,
+          user: "alice",
+          auth: { kind: "agent" },
+          startDir: null,
+          jump: null,
+          favorites: [],
+        },
+      ],
+      loaded: true,
     });
+    const { connections, activeProfileId } = useTabsStore.getState();
+    expect(Object.keys(connections)).toEqual(["p-kept"]);
+    expect(activeProfileId).toBeNull();
+    expect(usePaneStore.getState().panes.remote.target).toBeNull();
+    expect(disconnect).toHaveBeenCalledWith("s-7");
   });
 
   it("unsubscribes on unmount", async () => {
@@ -365,6 +379,7 @@ describe("useCoreEvents", () => {
         reconnectAttempts: 3,
         editorOverrides: {},
         syncExcludes: [".git"],
+        localFavorites: [],
       },
     });
     handlers.settings();

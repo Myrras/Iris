@@ -75,6 +75,7 @@ impl Fixture {
                 auth,
                 start_dir: None,
                 jump,
+                favorites: Vec::new(),
             })
             .unwrap()
             .id
@@ -549,6 +550,7 @@ async fn secrets_belong_to_existing_profiles_and_go_with_them() {
             auth: AuthMethod::Password,
             start_dir: None,
             jump: None,
+            favorites: Vec::new(),
         })
         .unwrap();
     let err = f.core.connect(id, None, None).await.unwrap_err();

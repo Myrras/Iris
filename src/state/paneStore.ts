@@ -12,11 +12,12 @@
  * calls the backend, then re-reads the folder so the pane mirrors the disk.
  *
  * ## Tabs
- * This store holds the panes of the ACTIVE tab only; `tabsStore` keeps the
- * panes of the tabs in the background as snapshots and swaps them in with
- * `restore` on a switch. `restore` (like `open` and `close`) bumps the
- * per-pane request tokens and epochs, so a listing or `open` still in flight
- * for the tab that was left is dropped instead of landing in the new one.
+ * This store holds the tab ON SCREEN of each pane only (the active Local tab,
+ * the active connection's active Remote tab); `tabsStore` keeps the tabs in
+ * the background as snapshots and swaps one in with `restore` on a switch.
+ * `restore` (like `open` and `close`) bumps that pane's request token and
+ * epoch, so a listing or `open` still in flight for the tab that was left is
+ * dropped instead of landing in the new one.
  */
 
 import { create } from "zustand";
@@ -147,10 +148,10 @@ interface PaneStoreState {
   /** Detach the pane from its filesystem (the remote pane's welcome state). */
   close: (pane: PaneId) => void;
   /**
-   * Show another tab's panes (a snapshot), dropping every request in flight
-   * for the ones on screen. The caller re-lists them (`tabsStore`).
+   * Show another tab in `pane` (its snapshot), dropping every request in
+   * flight for the one on screen. The caller re-lists it (`tabsStore`).
    */
-  restore: (panes: Record<PaneId, PaneState>, active: PaneId) => void;
+  restore: (pane: PaneId, state: PaneState) => void;
 
   /** The pane the user last worked in (Preview follows it). */
   active: PaneId;
@@ -407,20 +408,14 @@ export const usePaneStore = create<PaneStoreState>((set, get) => {
       patch(pane, { ...initialPane(), sort, showHidden });
     },
 
-    restore: (panes, active) => {
-      for (const id of ["local", "remote"] as const) {
-        tokens[id] += 1;
-        epochs[id] += 1;
-      }
+    restore: (pane, state) => {
+      tokens[pane] += 1;
+      epochs[pane] += 1;
       // A snapshot taken mid-listing would spin forever: nothing in flight
       // belongs to it any more.
-      set({
-        panes: {
-          local: { ...panes.local, loading: false },
-          remote: { ...panes.remote, loading: false },
-        },
-        active,
-      });
+      set((s) => ({
+        panes: { ...s.panes, [pane]: { ...state, loading: false } },
+      }));
     },
 
     active: "local",

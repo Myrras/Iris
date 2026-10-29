@@ -8,10 +8,12 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   listTransfers: vi.fn(() => new Promise(() => undefined)),
 }));
 vi.mock("../lib/connect", () => ({
-  connectInTab: vi.fn(),
+  connectProfile: vi.fn(),
   retrySession: vi.fn(),
 }));
-vi.mock("../lib/tabs", () => ({ requestDisconnectSession: vi.fn() }));
+vi.mock("../lib/connections", () => ({
+  requestDisconnectSession: vi.fn(),
+}));
 
 import { listDir } from "../ipc/commands";
 import type { Entry } from "../ipc/types";

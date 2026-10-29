@@ -1,22 +1,30 @@
 /**
- * The sidebar's Connections section: saved connections with their live state
- * (summed over every tab's session of the profile), a context menu (connect,
- * connect in a new tab, disconnect, edit, delete) and the delete
- * confirmation. Connecting goes through `connectProfile`: in the tab on
- * screen when it is free, else in a new tab. Disconnect acts on the tab on
- * screen, so it is offered only on the row of that tab's profile.
+ * The sidebar's Connections section: saved connections with the state of
+ * their one session, a context menu (connect or disconnect, edit, move,
+ * delete) and the delete confirmation. A click picks the connection the
+ * Remote pane shows (`openConnection`): one with a session is just shown,
+ * one without connects first. The selected row is that active connection;
+ * the others keep running in the background. Disconnect acts on the row's
+ * own connection (its tabs stay, ready to Reconnect).
  *
  * The order is the user's: drag a row (`lib/rowReorder`), or ⌥⌘↑ / ⌥⌘↓ on a
  * focused row, or Move Up / Move Down in the menu. All three apply the new
  * order locally and hand it to `profilesStore.reorder`, which sends it to the
  * core and re-reads the list.
+ *
+ * A connection's favorite folders list under its row (`FavoriteList`),
+ * folded away with its disclosure (remembered in `layoutStore`). A click
+ * makes the connection active, connecting it when needed, and opens the
+ * folder there (`openRemoteFavorite`).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { toIpcError } from "../ipc/commands";
 import type { ConnectionProfile, ProfileId } from "../ipc/types";
-import { connectProfile, disconnectSession } from "../lib/connect";
+import { disconnectSession, openConnection } from "../lib/connect";
+import { hasUnfinishedTransfers } from "../lib/connections";
+import { openRemoteFavorite } from "../lib/favorites";
 import {
   formatBinding,
   MOVE_CONNECTION_DOWN,
@@ -24,12 +32,14 @@ import {
 } from "../lib/keymap";
 import { beginRowReorder, moveBy, moveToInsertion } from "../lib/rowReorder";
 import { useConnectionFormStore } from "../state/connectionFormStore";
+import { useLayoutStore } from "../state/layoutStore";
 import { useProfilesStore } from "../state/profilesStore";
-import { summarySessionFor, useSessionStore } from "../state/sessionStore";
-import { useTabsStore } from "../state/tabsStore";
+import { useSessionStore } from "../state/sessionStore";
+import { connectionState, useTabsStore } from "../state/tabsStore";
 import { toastError } from "../state/toastStore";
 import { ConnectionRow } from "./ConnectionRow";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { FavoriteList } from "./FavoriteList";
 import { Modal } from "./Modal";
 import { SectionTitle } from "./SectionTitle";
 import { ServerIcon } from "./icons";
@@ -39,10 +49,10 @@ export function ConnectionSidebar() {
   const profiles = useProfilesStore((s) => s.profiles);
   const loaded = useProfilesStore((s) => s.loaded);
   const sessions = useSessionStore((s) => s.sessions);
-  const activeTab = useTabsStore((s) =>
-    s.tabs.find((t) => t.id === s.activeTabId),
-  );
+  const connections = useTabsStore((s) => s.connections);
+  const activeProfileId = useTabsStore((s) => s.activeProfileId);
   const openEdit = useConnectionFormStore((s) => s.openEdit);
+  const collapsedFavorites = useLayoutStore((s) => s.collapsedFavorites);
 
   const [collapsed, setCollapsed] = useState(false);
   const [menu, setMenu] = useState<{
@@ -111,11 +121,9 @@ export function ConnectionSidebar() {
     void useProfilesStore.getState().reorder(ids);
   }
 
-  const activeProfileId = activeTab?.profileId ?? null;
-  // The session of the tab on screen: what Disconnect acts on.
-  const activeSession = activeTab?.sessionId
-    ? sessions[activeTab.sessionId]
-    : undefined;
+  /** The profile's session, if it has one: what Disconnect acts on. */
+  const sessionOf = (profile: ConnectionProfile) =>
+    connections[profile.id]?.sessionId ?? null;
 
   const closeMenu = useCallback(() => setMenuOpen(false), []);
   const closeDelete = useCallback(() => {
@@ -136,22 +144,17 @@ export function ConnectionSidebar() {
   }
 
   function menuItems(profile: ConnectionProfile): ContextMenuItem[] {
-    const ownsActive =
-      activeSession !== undefined && activeSession.profileId === profile.id;
+    const sessionId = sessionOf(profile);
     return [
-      ownsActive && activeSession.state.status !== "disconnected"
+      sessionId
         ? {
             label: "Disconnect",
-            onSelect: () => disconnectSession(activeSession.sessionId),
+            onSelect: () => disconnectSession(sessionId),
           }
         : {
             label: "Connect",
-            onSelect: () => void connectProfile(profile),
+            onSelect: () => void openConnection(profile),
           },
-      {
-        label: "Connect in New Tab",
-        onSelect: () => void connectProfile(profile, { newTab: true }),
-      },
       { label: "Edit…", onSelect: () => openEdit(profile) },
       {
         label: "Move Up",
@@ -182,6 +185,7 @@ export function ConnectionSidebar() {
     // The footer's "New connection…" is the one call to action.
     body = <div className={styles.placeholder}>No connections yet.</div>;
   } else {
+    const anyFavorites = profiles.some((p) => p.favorites.length > 0);
     body = (
       <div
         role="list"
@@ -190,8 +194,7 @@ export function ConnectionSidebar() {
         ref={listRef}
       >
         {profiles.map((profile, index) => {
-          const session = summarySessionFor(sessions, profile.id);
-          const active = activeProfileId === profile.id;
+          const sessionId = sessionOf(profile);
           // The line sits before the row the dragged one lands in front of,
           // or after the last row.
           const insert =
@@ -201,22 +204,18 @@ export function ConnectionSidebar() {
                   index === profiles.length - 1
                 ? "after"
                 : undefined;
+          const favorites = profile.favorites;
+          const expanded = !collapsedFavorites.includes(profile.id);
           return (
             <ConnectionRow
               key={profile.id}
               profile={profile}
-              session={session}
-              active={active}
-              canDisconnect={
-                active &&
-                activeSession?.profileId === profile.id &&
-                activeSession.state.status !== "disconnected"
-              }
-              onConnect={() => void connectProfile(profile)}
+              state={connectionState(connections[profile.id], sessions)}
+              active={activeProfileId === profile.id}
+              canDisconnect={sessionId !== null}
+              onOpen={() => void openConnection(profile)}
               onEdit={() => openEdit(profile)}
-              onDisconnect={() =>
-                activeSession && disconnectSession(activeSession.sessionId)
-              }
+              onDisconnect={() => sessionId && disconnectSession(sessionId)}
               onContextMenu={(e) => {
                 setMenu({ x: e.clientX, y: e.clientY, profile });
                 setMenuOpen(true);
@@ -225,7 +224,29 @@ export function ConnectionSidebar() {
               onMove={(delta) => moveProfile(profile, delta)}
               reordering={drag?.id === profile.id}
               insert={insert}
-            />
+              alignWithDisclosures={anyFavorites}
+              favorites={
+                favorites.length > 0
+                  ? {
+                      expanded,
+                      onToggle: () =>
+                        useLayoutStore
+                          .getState()
+                          .setFavoritesExpanded(profile.id, !expanded),
+                    }
+                  : undefined
+              }
+            >
+              <FavoriteList
+                scope={{ kind: "remote", profileId: profile.id }}
+                favorites={favorites}
+                label={`Favorites of ${profile.name}`}
+                nested
+                onOpen={(fav, newTab) =>
+                  void openRemoteFavorite(profile, fav.path, newTab)
+                }
+              />
+            </ConnectionRow>
           );
         })}
       </div>
@@ -282,6 +303,11 @@ export function ConnectionSidebar() {
         <p className={styles.confirmText}>
           Delete <strong>{deleting?.name}</strong>? The saved connection is
           removed; files on the server are not touched.
+          {deleting && sessionOf(deleting) !== null
+            ? hasUnfinishedTransfers(sessionOf(deleting))
+              ? " It is disconnected, and its unfinished transfers are cancelled."
+              : " It is disconnected."
+            : null}
         </p>
       </Modal>
     </section>

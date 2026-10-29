@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACTIONS,
   DEFAULT_KEYMAP,
+  actionDef,
   activeActions,
   bindingFromEvent,
   bindingProblem,
@@ -184,6 +185,8 @@ describe("defaults", () => {
     expect(DEFAULT_KEYMAP.goTo).toEqual(["Mod+KeyP", "Mod+KeyL"]);
     expect(DEFAULT_KEYMAP.refresh).toEqual(["Mod+KeyR"]);
     expect(DEFAULT_KEYMAP.find).toEqual(["Mod+KeyF"]);
+    // Finder's ⌥⌘C ("Copy as Pathname"); ⌘C stays the browser's copy.
+    expect(DEFAULT_KEYMAP.copyPath).toEqual(["Mod+Alt+KeyC"]);
     expect(DEFAULT_KEYMAP.goTo).not.toContain("Mod+Shift+KeyG");
   });
 
@@ -220,6 +223,7 @@ describe("defaults", () => {
       "rename",
       "delete",
       "getInfo",
+      "copyPath",
       "upload",
       "download",
       "sync",
@@ -230,6 +234,15 @@ describe("defaults", () => {
       "closeTab",
     ]) {
       expect(DEFAULT_KEYMAP).toHaveProperty(id);
+    }
+  });
+
+  it("bind the tab actions window-wide, acting on the active pane", () => {
+    for (const id of ["newTab", "closeTab", "nextTab", "prevTab"] as const) {
+      const def = actionDef(id);
+      expect(def.scope).toBe("app");
+      expect(def.group).toBe("Tabs");
+      expect(def.note).toMatch(/active pane/);
     }
   });
 

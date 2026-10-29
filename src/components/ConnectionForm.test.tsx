@@ -48,6 +48,7 @@ const saved: ConnectionProfile = {
   auth: { kind: "password" },
   startDir: null,
   jump: null,
+  favorites: [],
 };
 
 function type(label: string, value: string) {

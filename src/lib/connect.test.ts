@@ -30,9 +30,9 @@ import { resetTabs, useTabsStore } from "../state/tabsStore";
 import { toastError, toastSuccess } from "../state/toastStore";
 import { useTransferStore } from "../state/transferStore";
 import {
-  connectInTab,
   connectProfile,
   disconnectSession,
+  openConnection,
   retrySession,
 } from "./connect";
 
@@ -45,6 +45,7 @@ const passwordProfile: ConnectionProfile = {
   auth: { kind: "password" },
   startDir: "/srv",
   jump: null,
+  favorites: [],
 };
 const keyProfile: ConnectionProfile = {
   ...passwordProfile,
@@ -57,8 +58,8 @@ const keyProfile: ConnectionProfile = {
 const head = () => usePromptStore.getState().queue[0];
 const remote = () => usePaneStore.getState().panes.remote;
 
-const tabs = () => useTabsStore.getState().tabs;
-const activeId = () => useTabsStore.getState().activeTabId;
+const store = () => useTabsStore.getState();
+const conn = (profileId: string) => store().connections[profileId];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -90,9 +91,10 @@ describe("connectProfile", () => {
     await expect(connectProfile(passwordProfile)).resolves.toBe("s-1");
     expect(connect).toHaveBeenCalledWith("p-1");
     expect(head()).toBeUndefined();
-    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-1" });
-    await flush();
-    expect(remote().path).toBe("/srv");
+    expect(conn("p-1")).toMatchObject({ sessionId: "s-1", connecting: false });
+    // Connecting does not pick the connection the Remote pane shows.
+    expect(store().activeProfileId).toBeNull();
+    expect(remote().target).toBeNull();
   });
 
   it("asks for a missing password and passes remember along", async () => {
@@ -117,7 +119,7 @@ describe("connectProfile", () => {
       password: "example-password",
       remember: true,
     });
-    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-1" });
+    expect(conn("p-1").sessionId).toBe("s-1");
     expect(clearSecret).not.toHaveBeenCalled();
   });
 
@@ -275,89 +277,133 @@ describe("connectProfile", () => {
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("connects in the tab on screen and names it after the profile", async () => {
+  it("returns the session a connection already has, connecting nothing", async () => {
     vi.mocked(connect).mockResolvedValue("s-1");
-    await connectProfile(passwordProfile);
-    expect(tabs()).toHaveLength(1);
-    expect(tabs()[0]).toMatchObject({
-      sessionId: "s-1",
-      profileId: "p-1",
-      title: "Alpha",
-      connecting: false,
-    });
-  });
-
-  it("opens a new session in a new tab when the tab on screen has one", async () => {
-    vi.mocked(connect)
-      .mockResolvedValueOnce("s-1")
-      .mockResolvedValueOnce("s-2");
     await connectProfile(keyProfile);
-    const first = activeId();
-    // The same profile again: its own session, in its own tab.
-    await connectProfile(keyProfile);
-    expect(connect).toHaveBeenCalledTimes(2);
-    expect(tabs().map((t) => t.sessionId)).toEqual(["s-1", "s-2"]);
-    expect(activeId()).not.toBe(first);
-    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-2" });
+    await expect(connectProfile(keyProfile)).resolves.toBe("s-1");
+    expect(connect).toHaveBeenCalledTimes(1);
   });
 
-  it("can connect in a new tab even when the one on screen is free", async () => {
-    vi.mocked(connect).mockResolvedValue("s-1");
-    await connectProfile(keyProfile, { newTab: true });
-    expect(tabs()).toHaveLength(2);
-    expect(tabs()[1].sessionId).toBe("s-1");
-  });
-
-  it("shows the session in the tab that asked, even after a switch", async () => {
-    let release: (id: string) => void = () => undefined;
-    vi.mocked(connect).mockImplementationOnce(
-      () => new Promise((r) => (release = r)),
-    );
-    const origin = activeId();
-    const result = connectProfile(keyProfile);
-    expect(tabs()[0].connecting).toBe(true);
-    useTabsStore.getState().newTab();
-    release("s-3");
-    await result;
-    const tab = tabs().find((t) => t.id === origin);
-    expect(tab).toMatchObject({ sessionId: "s-3", connecting: false });
-    expect(tab?.remotePane.target).toEqual({
-      kind: "remote",
-      sessionId: "s-3",
-    });
-    // The tab on screen is untouched.
-    expect(remote().target).toBeNull();
-    useTabsStore.getState().switchTo(origin);
-    await flush();
-    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-3" });
-  });
-
-  it("disconnects a session whose tab was closed while connecting", async () => {
+  it("disconnects a session whose profile was deleted while connecting", async () => {
     let release: (id: string) => void = () => undefined;
     vi.mocked(connect).mockImplementationOnce(
       () => new Promise((r) => (release = r)),
     );
     vi.mocked(disconnect).mockResolvedValue(undefined);
-    useTabsStore.getState().newTab();
-    const tabId = activeId();
-    const result = connectInTab(tabId, keyProfile);
-    useTabsStore.getState().removeTab(tabId);
+    const result = connectProfile(keyProfile);
+    store().dropConnection("p-2");
     release("s-4");
     await expect(result).resolves.toBeNull();
     expect(disconnect).toHaveBeenCalledWith("s-4");
   });
 
-  it("ignores a second connect in the same tab while one is running", async () => {
+  it("ignores a second connect of the same profile while one is running", async () => {
     let release: (id: string) => void = () => undefined;
     vi.mocked(connect).mockImplementationOnce(
       () => new Promise((r) => (release = r)),
     );
-    const tabId = activeId();
-    const first = connectInTab(tabId, keyProfile);
-    await expect(connectInTab(tabId, keyProfile)).resolves.toBeNull();
+    const first = connectProfile(keyProfile);
+    expect(conn("p-2").connecting).toBe(true);
+    await expect(connectProfile(keyProfile)).resolves.toBeNull();
     release("s-3");
     await expect(first).resolves.toBe("s-3");
     expect(connect).toHaveBeenCalledTimes(1);
+    expect(conn("p-2").connecting).toBe(false);
+  });
+});
+
+describe("openConnection", () => {
+  it("connects a new connection and shows it in the Remote pane", async () => {
+    vi.mocked(connect).mockResolvedValue("s-1");
+    await openConnection(passwordProfile);
+    expect(store().activeProfileId).toBe("p-1");
+    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-1" });
+    await flush();
+    expect(remote().path).toBe("/srv");
+  });
+
+  it("shows a connected profile again without a new connect", async () => {
+    vi.mocked(connect)
+      .mockResolvedValueOnce("s-1")
+      .mockResolvedValueOnce("s-2");
+    await openConnection(passwordProfile);
+    await openConnection(keyProfile);
+    expect(store().activeProfileId).toBe("p-2");
+    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-2" });
+    await flush();
+
+    await openConnection(passwordProfile);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(store().activeProfileId).toBe("p-1");
+    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-1" });
+    // The other one keeps its session in the background.
+    expect(conn("p-2").sessionId).toBe("s-2");
+  });
+
+  it("shows a session the core gave up on instead of connecting anew", async () => {
+    vi.mocked(connect).mockResolvedValue("s-1");
+    await openConnection(passwordProfile);
+    await openConnection(keyProfile);
+    useSessionStore.getState().apply({
+      type: "sessionStateChanged",
+      sessionId: "s-1",
+      profileId: "p-1",
+      state: { status: "disconnected", reason: "the connection was lost" },
+    });
+    await openConnection(passwordProfile);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-1" });
+  });
+
+  it("connects again a connection the user disconnected, in its own tabs", async () => {
+    vi.mocked(connect)
+      .mockResolvedValueOnce("s-1")
+      .mockResolvedValueOnce("s-5");
+    vi.mocked(disconnect).mockResolvedValue(undefined);
+    await openConnection(passwordProfile);
+    await flush();
+    const tabIds = conn("p-1").remote.tabs.map((t) => t.id);
+    disconnectSession("s-1");
+    await flush();
+    await openConnection(passwordProfile);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(conn("p-1").remote.tabs.map((t) => t.id)).toEqual(tabIds);
+    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-5" });
+  });
+
+  it("goes back to the connection shown before when a new one does not come up", async () => {
+    vi.mocked(connect)
+      .mockResolvedValueOnce("s-1")
+      .mockRejectedValueOnce({ kind: "passwordRequired", message: "needed" });
+    await openConnection(keyProfile);
+    const result = openConnection(passwordProfile);
+    await flush();
+    // Shown at once, waiting for the password.
+    expect(store().activeProfileId).toBe("p-1");
+    const prompt = head();
+    if (prompt.kind !== "secret") throw new Error("unreachable");
+    prompt.onCancel();
+    await result;
+    expect(conn("p-1")).toBeUndefined();
+    expect(store().activeProfileId).toBe("p-2");
+    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-1" });
+  });
+
+  it("hands the session to its connection after a switch, in the background", async () => {
+    let release: (id: string) => void = () => undefined;
+    vi.mocked(connect)
+      .mockResolvedValueOnce("s-1")
+      .mockImplementationOnce(() => new Promise((r) => (release = r)));
+    await openConnection(passwordProfile);
+    const result = openConnection(keyProfile);
+    expect(conn("p-2").connecting).toBe(true);
+    await openConnection(passwordProfile);
+    release("s-3");
+    await result;
+    expect(conn("p-2")).toMatchObject({ sessionId: "s-3", connecting: false });
+    // The connection on screen is untouched.
+    expect(store().activeProfileId).toBe("p-1");
+    expect(remote().target).toEqual({ kind: "remote", sessionId: "s-1" });
   });
 });
 
@@ -373,7 +419,7 @@ describe("retrySession", () => {
 
   it("reconnects the same session and re-lists its pane", async () => {
     vi.mocked(connect).mockResolvedValue("s-1");
-    await connectProfile(keyProfile);
+    await openConnection(keyProfile);
     await flush();
     dropped("s-1", "p-2");
     vi.mocked(reconnect).mockResolvedValue(undefined);
@@ -422,20 +468,18 @@ describe("retrySession", () => {
 });
 
 describe("disconnectSession", () => {
-  it("disconnects and keeps the tab, ready to connect again", async () => {
+  it("disconnects and keeps the connection's tabs, ready to connect again", async () => {
     vi.mocked(connect).mockResolvedValue("s-1");
     vi.mocked(disconnect).mockResolvedValue(undefined);
-    await connectProfile(passwordProfile);
+    await openConnection(passwordProfile);
     await flush();
     disconnectSession("s-1");
     await flush();
     expect(disconnect).toHaveBeenCalledWith("s-1");
     expect(remote().target).toBeNull();
-    expect(tabs()[0]).toMatchObject({
-      sessionId: null,
-      profileId: "p-1",
-      pendingRemotePath: "/srv",
-    });
+    expect(store().activeProfileId).toBe("p-1");
+    expect(conn("p-1").sessionId).toBeNull();
+    expect(conn("p-1").remote.tabs[0].pendingPath).toBe("/srv");
   });
 
   it("asks first when the session still has transfers", async () => {
@@ -463,9 +507,6 @@ describe("disconnectSession", () => {
     });
     disconnectSession("s-1");
     expect(disconnect).not.toHaveBeenCalled();
-    expect(useTabsStore.getState().pending).toEqual({
-      tabId: activeId(),
-      action: "disconnect",
-    });
+    expect(store().pending).toEqual({ profileId: "p-1" });
   });
 });

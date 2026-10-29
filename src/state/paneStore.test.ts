@@ -378,30 +378,27 @@ describe("paneStore file operations", () => {
       "untitled folder",
     ]);
   });
-  it("restores another tab's panes and drops what was in flight", async () => {
+  it("restores another tab in one pane and drops what was in flight there", async () => {
     vi.clearAllMocks();
+    await usePaneStore.getState().open("remote", remote, "/srv");
     let answer: (entries: Entry[]) => void = () => {};
     vi.mocked(listDir).mockImplementationOnce(
       () => new Promise((resolve) => (answer = resolve)),
     );
     const opening = usePaneStore.getState().open("local", local, "/slow");
-    const snapshot = {
-      local: {
-        ...initialPane(),
-        target: local,
-        path: "/home/bob",
-        loading: true,
-      },
-      remote: { ...initialPane(), target: remote, path: "/srv" },
-    };
-    usePaneStore.getState().restore(snapshot, "remote");
+    usePaneStore.getState().restore("local", {
+      ...initialPane(),
+      target: local,
+      path: "/home/bob",
+      loading: true,
+    });
     answer([file("/slow/late.txt")]);
     await opening;
     expect(pane().path).toBe("/home/bob");
     // A snapshot taken mid-listing must not keep spinning.
     expect(pane().loading).toBe(false);
+    // The other pane is not touched.
     expect(pane("remote").path).toBe("/srv");
-    expect(usePaneStore.getState().active).toBe("remote");
     // The interrupted open did not carry on into the home folder.
     expect(homeDir).not.toHaveBeenCalled();
   });

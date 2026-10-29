@@ -8,12 +8,11 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
 }));
 
 import { connect, homeDir, listDir } from "../ipc/commands";
-import type { FsTarget } from "../ipc/types";
+import type { Entry, FsTarget } from "../ipc/types";
 import { initialPane, usePaneStore } from "./paneStore";
 import {
-  NEW_TAB_TITLE,
-  TABS_STORAGE_KEY,
-  loadTabs,
+  activeTabOf,
+  connectionState,
   resetTabs,
   useTabsStore,
 } from "./tabsStore";
@@ -21,12 +20,21 @@ import {
 const local: FsTarget = { kind: "local" };
 const remote = (sessionId: string): FsTarget => ({ kind: "remote", sessionId });
 
-const tabs = () => useTabsStore.getState().tabs;
-const activeId = () => useTabsStore.getState().activeTabId;
+const store = () => useTabsStore.getState();
 const panes = () => usePaneStore.getState().panes;
+const localTabs = () => store().local.tabs;
+const remoteTabs = (profileId: string) =>
+  store().connections[profileId]?.remote.tabs ?? [];
 
 async function flush() {
   await new Promise((r) => setTimeout(r, 0));
+}
+
+/** `profileId` connected as `sessionId` and shown in the Remote pane. */
+async function connected(profileId: string, sessionId: string, dir = "/srv") {
+  store().activate(profileId);
+  store().attachSession(profileId, sessionId, dir);
+  await flush();
 }
 
 beforeEach(() => {
@@ -39,233 +47,297 @@ beforeEach(() => {
   resetTabs();
 });
 
-describe("tabsStore", () => {
-  it("starts with one blank tab", () => {
-    expect(tabs()).toHaveLength(1);
-    expect(tabs()[0]).toMatchObject({
-      title: NEW_TAB_TITLE,
-      profileId: null,
-      sessionId: null,
-    });
-  });
-
-  it("opens a new tab after the active one, with the local pane at home", async () => {
-    const first = activeId();
-    const second = useTabsStore.getState().newTab();
-    expect(activeId()).toBe(second);
-    useTabsStore.getState().switchTo(first);
-    const third = useTabsStore.getState().newTab();
-    expect(tabs().map((t) => t.id)).toEqual([first, third, second]);
-    await flush();
-    expect(homeDir).toHaveBeenCalledWith(local);
-    expect(panes().local.path).toBe("/home/alice");
-    expect(panes().remote.target).toBeNull();
-  });
-
-  it("keeps each tab's panes when switching back and forth", async () => {
-    const first = activeId();
-    await usePaneStore.getState().open("local", local, "/home/alice/docs");
-    await usePaneStore.getState().open("remote", remote("s-1"), "/srv");
-    usePaneStore.getState().setActive("remote");
-    useTabsStore.getState().update(first, { sessionId: "s-1" });
-
-    useTabsStore.getState().newTab();
-    await flush();
-    expect(panes().remote.target).toBeNull();
-    expect(panes().local.path).toBe("/home/alice");
-    expect(usePaneStore.getState().active).toBe("local");
-
-    vi.mocked(listDir).mockClear();
-    useTabsStore.getState().switchTo(first);
-    expect(panes().local.path).toBe("/home/alice/docs");
-    expect(panes().remote).toMatchObject({
-      target: remote("s-1"),
-      path: "/srv",
-    });
-    expect(usePaneStore.getState().active).toBe("remote");
-    // Switching back re-lists both panes, so nothing stale stays up.
-    expect(listDir).toHaveBeenCalledWith(remote("s-1"), "/srv");
-    expect(listDir).toHaveBeenCalledWith(local, "/home/alice/docs");
-  });
-
-  it("switches by position, to the last one, and around", () => {
-    const [a] = tabs().map((t) => t.id);
-    const b = useTabsStore.getState().newTab();
-    const c = useTabsStore.getState().newTab();
-    useTabsStore.getState().switchToIndex(0);
-    expect(activeId()).toBe(a);
-    useTabsStore.getState().switchToIndex(-1);
-    expect(activeId()).toBe(c);
-    useTabsStore.getState().switchToIndex(7); // no such tab: stays
-    expect(activeId()).toBe(c);
-    useTabsStore.getState().cycle(1);
-    expect(activeId()).toBe(a);
-    useTabsStore.getState().cycle(-1);
-    expect(activeId()).toBe(c);
-    useTabsStore.getState().cycle(-1);
-    expect(activeId()).toBe(b);
-  });
-
-  it("closing the active tab shows its right neighbour, else its left one", () => {
-    const [a] = tabs().map((t) => t.id);
-    const b = useTabsStore.getState().newTab();
-    const c = useTabsStore.getState().newTab();
-    useTabsStore.getState().switchTo(b);
-    useTabsStore.getState().removeTab(b);
-    expect(activeId()).toBe(c);
-    useTabsStore.getState().removeTab(c);
-    expect(activeId()).toBe(a);
-    // A tab in the background goes without switching.
-    const d = useTabsStore.getState().newTab();
-    useTabsStore.getState().removeTab(a);
-    expect(activeId()).toBe(d);
-    expect(tabs().map((t) => t.id)).toEqual([d]);
-  });
-
-  it("always keeps a tab: closing the last one leaves a blank one", () => {
-    const only = activeId();
-    useTabsStore.getState().update(only, { profileId: "p-1", title: "Alpha" });
-    useTabsStore.getState().removeTab(only);
-    expect(tabs()).toHaveLength(1);
-    expect(activeId()).not.toBe(only);
-    expect(tabs()[0]).toMatchObject({ profileId: null, title: NEW_TAB_TITLE });
-  });
-
-  it("reorders by drag", () => {
-    const [a] = tabs().map((t) => t.id);
-    const b = useTabsStore.getState().newTab();
-    const c = useTabsStore.getState().newTab();
-    useTabsStore.getState().moveTab(c, a);
-    expect(tabs().map((t) => t.id)).toEqual([c, a, b]);
-  });
-
-  it("opens a session attached to a background tab when it is shown", async () => {
-    const first = activeId();
-    useTabsStore.getState().newTab();
-    useTabsStore
-      .getState()
-      .attachSession(first, "s-2", "p-1", "Alpha", "/srv/www");
-    // Not on screen yet.
-    expect(panes().remote.target).toBeNull();
-    useTabsStore.getState().switchTo(first);
-    await flush();
-    expect(panes().remote).toMatchObject({
-      target: remote("s-2"),
-      path: "/srv/www",
-    });
-    expect(tabs()[0]).toMatchObject({
-      sessionId: "s-2",
-      title: "Alpha",
-      pendingRemotePath: null,
-    });
-  });
-
-  it("detaching a session keeps the profile and remembers the folder", async () => {
-    const id = activeId();
-    useTabsStore.getState().attachSession(id, "s-1", "p-1", "Alpha", "/srv");
-    await flush();
-    useTabsStore.getState().detachSession(id);
-    expect(panes().remote.target).toBeNull();
-    expect(tabs()[0]).toMatchObject({
-      sessionId: null,
-      profileId: "p-1",
-      pendingRemotePath: "/srv",
-    });
-  });
-
-  it("persists the tabs with their folders", async () => {
-    const first = activeId();
-    useTabsStore.getState().attachSession(first, "s-1", "p-1", "Alpha", "/srv");
-    await usePaneStore.getState().open("local", local, "/home/alice/docs");
-    await flush();
-    useTabsStore.getState().newTab();
-    await flush();
-    const saved = JSON.parse(localStorage.getItem(TABS_STORAGE_KEY) ?? "null");
-    expect(saved).toEqual({
-      tabs: [
-        {
-          profileId: "p-1",
-          title: "Alpha",
-          localPath: "/home/alice/docs",
-          remotePath: "/srv",
-        },
-        {
-          profileId: null,
-          title: NEW_TAB_TITLE,
-          localPath: "/home/alice",
-          remotePath: null,
-        },
-      ],
-      active: 1,
-    });
-  });
-
-  it("restores saved tabs without connecting", async () => {
+describe("tabsStore: start", () => {
+  it("starts clean: one Local tab at home, no connection, nothing restored", async () => {
+    // An old saved document from when tabs were persisted is ignored.
     localStorage.setItem(
-      TABS_STORAGE_KEY,
+      "iris.tabs",
       JSON.stringify({
-        tabs: [
-          {
-            profileId: "p-1",
-            title: "Alpha",
-            localPath: "/home/alice/docs",
-            remotePath: "/srv",
-          },
-          { profileId: null, title: "", localPath: null, remotePath: "/x" },
-        ],
+        tabs: [{ profileId: "p-1", title: "Alpha", localPath: "/x" }],
         active: 0,
       }),
     );
-    const restored = loadTabs();
-    expect(restored.tabs).toHaveLength(2);
-    expect(restored.tabs[0]).toMatchObject({
-      profileId: "p-1",
-      title: "Alpha",
-      sessionId: null,
-      pendingLocalPath: "/home/alice/docs",
-      pendingRemotePath: "/srv",
-    });
-    // A tab without a profile has no remote folder to remember.
-    expect(restored.tabs[1]).toMatchObject({
-      title: NEW_TAB_TITLE,
-      pendingRemotePath: null,
-    });
-    expect(restored.activeTabId).toBe(restored.tabs[0].id);
-
-    useTabsStore.setState(restored);
-    useTabsStore.getState().showActive();
+    store().start();
     await flush();
-    expect(panes().local.path).toBe("/home/alice/docs");
+    expect(localTabs()).toHaveLength(1);
+    expect(store().connections).toEqual({});
+    expect(store().activeProfileId).toBeNull();
+    expect(homeDir).toHaveBeenCalledWith(local);
+    expect(panes().local.path).toBe("/home/alice");
     expect(panes().remote.target).toBeNull();
     expect(connect).not.toHaveBeenCalled();
-    // The remote folder waits for Reconnect.
-    expect(tabs()[0].pendingRemotePath).toBe("/srv");
-    expect(tabs()[0].pendingLocalPath).toBeNull();
+    expect(localStorage.getItem("iris.tabs")).toBeNull();
+  });
+});
+
+describe("tabsStore: folder tabs", () => {
+  beforeEach(async () => {
+    store().start();
+    await flush();
   });
 
-  it("starts fresh from a missing or broken document", () => {
-    expect(loadTabs().tabs).toHaveLength(1);
-    localStorage.setItem(TABS_STORAGE_KEY, "{not json");
-    expect(loadTabs().tabs).toHaveLength(1);
-    localStorage.setItem(TABS_STORAGE_KEY, JSON.stringify({ tabs: [] }));
-    expect(loadTabs().tabs[0].title).toBe(NEW_TAB_TITLE);
+  it("opens a new tab after the active one, on the same folder", async () => {
+    await usePaneStore.getState().navigate("local", "/home/alice/docs");
+    const first = store().local.activeTabId;
+    const second = store().newTab("local");
+    expect(store().local.activeTabId).toBe(second);
+    await flush();
+    expect(panes().local.path).toBe("/home/alice/docs");
+    // A fresh tab: no Back history of its own.
+    expect(panes().local.history).toEqual([]);
+    store().switchTab("local", first);
+    const third = store().newTab("local");
+    expect(localTabs().map((t) => t.id)).toEqual([first, third, second]);
   });
 
-  it("turns restored tabs of deleted profiles into blank tabs", () => {
-    const id = activeId();
-    useTabsStore.getState().update(id, {
-      profileId: "p-gone",
-      title: "Gone",
-      pendingRemotePath: "/srv",
+  it("opens a new tab on a given folder (a favorite)", async () => {
+    const first = store().local.activeTabId;
+    store().newTab("local", "/home/alice/projects");
+    await flush();
+    expect(panes().local.path).toBe("/home/alice/projects");
+    expect(listDir).toHaveBeenLastCalledWith(local, "/home/alice/projects");
+    store().switchTab("local", first);
+    await flush();
+    expect(panes().local.path).toBe("/home/alice");
+  });
+
+  it("keeps each tab's own pane state when switching back and forth", async () => {
+    const first = store().local.activeTabId;
+    await usePaneStore.getState().navigate("local", "/home/alice/docs");
+    usePaneStore.getState().setFilter("local", "rep");
+    usePaneStore.getState().setSort("local", "size");
+    usePaneStore.getState().setShowHidden("local", true);
+
+    store().newTab("local");
+    await flush();
+    await usePaneStore.getState().navigate("local", "/tmp");
+    expect(panes().local.filter).toBe("");
+
+    vi.mocked(listDir).mockClear();
+    store().switchTab("local", first);
+    expect(panes().local).toMatchObject({
+      path: "/home/alice/docs",
+      history: ["/home/alice"],
+      filter: "rep",
+      sort: { key: "size", dir: "asc" },
+      showHidden: true,
     });
-    const kept = useTabsStore.getState().newTab();
-    useTabsStore.getState().update(kept, { profileId: "p-1", title: "Alpha" });
-    useTabsStore.getState().forgetMissingProfiles(new Set(["p-1"]));
-    expect(tabs()[0]).toMatchObject({
-      profileId: null,
-      title: NEW_TAB_TITLE,
-      pendingRemotePath: null,
+    // Switching back re-lists the folder, so nothing stale stays up.
+    expect(listDir).toHaveBeenCalledWith(local, "/home/alice/docs");
+  });
+
+  it("drops a listing still in flight for the tab that was left", async () => {
+    const first = store().local.activeTabId;
+    store().newTab("local");
+    await flush();
+    let answer: (entries: Entry[]) => void = () => undefined;
+    vi.mocked(listDir).mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve)),
+    );
+    const slow = usePaneStore.getState().navigate("local", "/slow");
+    store().switchTab("local", first);
+    answer([]);
+    await slow;
+    await flush();
+    expect(panes().local.path).toBe("/home/alice");
+  });
+
+  it("switches by position, to the last one, and around", () => {
+    const a = store().local.activeTabId;
+    const b = store().newTab("local");
+    const c = store().newTab("local");
+    const active = () => store().local.activeTabId;
+    store().switchTabIndex("local", 0);
+    expect(active()).toBe(a);
+    store().switchTabIndex("local", -1);
+    expect(active()).toBe(c);
+    store().switchTabIndex("local", 7); // no such tab: stays
+    expect(active()).toBe(c);
+    store().cycleTab("local", 1);
+    expect(active()).toBe(a);
+    store().cycleTab("local", -1);
+    expect(active()).toBe(c);
+    store().cycleTab("local", -1);
+    expect(active()).toBe(b);
+  });
+
+  it("closing the active tab shows its right neighbour, else its left one", () => {
+    const a = store().local.activeTabId;
+    const b = store().newTab("local")!;
+    const c = store().newTab("local")!;
+    const active = () => store().local.activeTabId;
+    store().switchTab("local", b);
+    store().closeTab("local", b);
+    expect(active()).toBe(c);
+    store().closeTab("local", c);
+    expect(active()).toBe(a);
+    // A tab in the background goes without switching.
+    const d = store().newTab("local")!;
+    store().closeTab("local", a);
+    expect(active()).toBe(d);
+    expect(localTabs().map((t) => t.id)).toEqual([d]);
+  });
+
+  it("always keeps one tab per pane", () => {
+    const only = store().local.activeTabId;
+    store().closeTab("local", only);
+    expect(localTabs().map((t) => t.id)).toEqual([only]);
+  });
+
+  it("has no remote tabs without an active connection", () => {
+    expect(store().newTab("remote")).toBeNull();
+    store().cycleTab("remote", 1);
+    expect(panes().remote.target).toBeNull();
+  });
+});
+
+describe("tabsStore: connections", () => {
+  beforeEach(async () => {
+    store().start();
+    await flush();
+  });
+
+  it("shows a connection's session in its remote tab, at the start folder", async () => {
+    await connected("p-1", "s-1", "/srv/www");
+    expect(store().activeProfileId).toBe("p-1");
+    expect(store().connections["p-1"]).toMatchObject({
+      sessionId: "s-1",
+      connecting: false,
     });
-    expect(tabs()[1]).toMatchObject({ profileId: "p-1", title: "Alpha" });
+    expect(panes().remote).toMatchObject({
+      target: remote("s-1"),
+      path: "/srv/www",
+    });
+  });
+
+  it("opens new remote tabs on the same session, never a new connection", async () => {
+    await connected("p-1", "s-1");
+    await usePaneStore.getState().navigate("remote", "/srv/logs");
+    store().newTab("remote");
+    await flush();
+    expect(remoteTabs("p-1")).toHaveLength(2);
+    expect(panes().remote).toMatchObject({
+      target: remote("s-1"),
+      path: "/srv/logs",
+    });
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("swaps in each connection's own remote tabs on a switch", async () => {
+    await connected("p-1", "s-1");
+    await usePaneStore.getState().navigate("remote", "/srv/a");
+    store().newTab("remote");
+    await flush();
+    await usePaneStore.getState().navigate("remote", "/srv/b");
+
+    await connected("p-2", "s-2", "/home/bob");
+    expect(remoteTabs("p-2")).toHaveLength(1);
+    expect(panes().remote).toMatchObject({
+      target: remote("s-2"),
+      path: "/home/bob",
+    });
+
+    vi.mocked(listDir).mockClear();
+    store().activate("p-1");
+    expect(store().connections["p-1"].remote.tabs).toHaveLength(2);
+    expect(panes().remote).toMatchObject({
+      target: remote("s-1"),
+      path: "/srv/b",
+    });
+    expect(listDir).toHaveBeenCalledWith(remote("s-1"), "/srv/b");
+    store().switchTab("remote", remoteTabs("p-1")[0].id);
+    expect(panes().remote.path).toBe("/srv/a");
+  });
+
+  it("shares the Local tabs across connections", async () => {
+    await usePaneStore.getState().navigate("local", "/home/alice/docs");
+    store().newTab("local");
+    await flush();
+    await connected("p-1", "s-1");
+    await connected("p-2", "s-2");
+    expect(localTabs()).toHaveLength(2);
+    expect(panes().local.path).toBe("/home/alice/docs");
+    store().activate("p-1");
+    expect(localTabs()).toHaveLength(2);
+    expect(panes().local.path).toBe("/home/alice/docs");
+  });
+
+  it("keeps the active connection when another one connects in the background", async () => {
+    await connected("p-1", "s-1");
+    store().ensureConnection("p-2");
+    store().attachSession("p-2", "s-2", "/home/bob");
+    await flush();
+    expect(store().activeProfileId).toBe("p-1");
+    expect(panes().remote.target).toEqual(remote("s-1"));
+    store().activate("p-2");
+    await flush();
+    expect(panes().remote).toMatchObject({
+      target: remote("s-2"),
+      path: "/home/bob",
+    });
+  });
+
+  it("keeps the remote tabs on a disconnect and reopens their folders on reconnect", async () => {
+    await connected("p-1", "s-1");
+    await usePaneStore.getState().navigate("remote", "/srv/a");
+    store().newTab("remote");
+    await flush();
+    await usePaneStore.getState().navigate("remote", "/srv/b");
+    const ids = remoteTabs("p-1").map((t) => t.id);
+
+    store().detachSession("p-1");
+    expect(store().activeProfileId).toBe("p-1");
+    expect(store().connections["p-1"].sessionId).toBeNull();
+    expect(panes().remote.target).toBeNull();
+    expect(remoteTabs("p-1").map((t) => t.id)).toEqual(ids);
+    expect(remoteTabs("p-1").map((t) => t.pendingPath)).toEqual([
+      "/srv/a",
+      "/srv/b",
+    ]);
+
+    store().attachSession("p-1", "s-9", "/srv");
+    await flush();
+    expect(remoteTabs("p-1").map((t) => t.id)).toEqual(ids);
+    expect(panes().remote).toMatchObject({
+      target: remote("s-9"),
+      path: "/srv/b",
+    });
+    store().switchTab("remote", ids[0]);
+    await flush();
+    expect(panes().remote).toMatchObject({
+      target: remote("s-9"),
+      path: "/srv/a",
+    });
+  });
+
+  it("drops a connection and its tabs; the active one leaves the welcome screen", async () => {
+    await connected("p-1", "s-1");
+    store().dropConnection("p-1");
+    expect(store().connections["p-1"]).toBeUndefined();
+    expect(store().activeProfileId).toBeNull();
+    expect(panes().remote.target).toBeNull();
+  });
+
+  it("reads a connection's state for its dot", () => {
+    store().ensureConnection("p-1");
+    const conn = () => store().connections["p-1"];
+    expect(connectionState(conn(), {})).toBeUndefined();
+    store().setConnecting("p-1", true);
+    expect(connectionState(conn(), {})).toEqual({ status: "connecting" });
+    store().attachSession("p-1", "s-1", null);
+    // Up as soon as connect resolved, before the state event.
+    expect(connectionState(conn(), {})).toEqual({ status: "connected" });
+    const reconnecting = {
+      status: "reconnecting",
+      attempt: 1,
+      maxAttempts: 5,
+      nextRetryInSecs: 1,
+    } as const;
+    expect(
+      connectionState(conn(), {
+        "s-1": { sessionId: "s-1", profileId: "p-1", state: reconnecting },
+      }),
+    ).toEqual(reconnecting);
+    expect(activeTabOf(conn().remote).pendingPath).toBeNull();
   });
 });
