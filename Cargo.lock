@@ -2712,7 +2712,7 @@ dependencies = [
 name = "iris-core"
 version = "1.1.1"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "keyring",
  "notify",
