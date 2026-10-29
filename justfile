@@ -10,9 +10,9 @@ export CARGO_TARGET_DIR := `dirname "$(git rev-parse --path-format=absolute --gi
 
 # Shared recipes (dev, dev-signed, build, build-signed, install-signed, check,
 # test-core, format, version, version-check, rust, frontend, ci, sweep) come from
-# the ci-workflows clone: `ln -s /path/to/ci-workflows ~/.ci-workflows`.
+# the rust-base clone: `ln -s /path/to/rust-base ~/.rust-base`.
 # Run `just --list` to see them. Don't redefine those names here.
-import? '~/.ci-workflows/common.just'
+import? '~/.rust-base/ci/common.just'
 
 # Show available recipes.
 default:
