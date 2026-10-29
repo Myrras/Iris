@@ -5,7 +5,7 @@
 ## Shared CI and recipes (rust-base)
 
 CI, release and installer builds come from
-<https://github.com/RobbieMinderhoud/rust-base>. `.github/workflows/` holds thin
+<https://github.com/Myrras/rust-base>. `.github/workflows/` holds thin
 callers (`ci.yml`, `pr-checks.yml`, `build.yml`, `integration.yml`) of its
 reusable workflows, pinned `@v2`. The callers and the shared config files
 (`.gitattributes`, `.editorconfig`, `rust-toolchain.toml`, `.prettierrc.json`,
@@ -90,7 +90,7 @@ Iris is a cross-platform **desktop remote file manager over SSH** (in the spirit
 of Forklift), built in **Rust + Tauri 2 + React + TypeScript + Vite**.
 macOS-first; Windows kept in mind.
 
-> Public on GitHub: https://github.com/RobbieMinderhoud/Iris.
+> Public on GitHub: https://github.com/Myrras/Iris.
 
 ## Boilerplate (shared skeleton)
 
@@ -98,14 +98,13 @@ Iris's shared skeleton — the Cargo workspace shape (a `*-core` crate with zero
 Tauri dependency + a thin `src-tauri` IPC layer + a presentation-only React
 frontend), the `justfile`, CI (shared via rust-base), the shared config
 files, the design tokens, and the layering/IPC conventions — comes from a
-standalone template:
+shared skeleton, rust-base:
 
-- **Repo:** <https://github.com/RobbieMinderhoud/rust-application-boilerplate>
-  (`../rust-application-boilerplate` locally). It is the **upstream** source of
+- **Repo:** <https://github.com/Myrras/rust-base>. It is the **upstream** source of
   truth for the skeleton; Iris carries its domain (SSH connections, remote file
   browsing, transfers) on top.
 - **Rule:** when a change here touches the **shared skeleton or conventions**
-  (not Iris-specific domain code), also open a **PR against the boilerplate**
+  (not Iris-specific domain code), also open a **PR against rust-base**
   so it stays current. App-specific code does not flow back.
 
 ## Status — v0.1

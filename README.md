@@ -7,7 +7,7 @@ browsing over SFTP, and password / key / ssh-agent / `~/.ssh/config` logins
 with jump hosts and keychain-remembered secrets; transfers not yet).
 
 Forked from
-[rust-application-boilerplate](https://github.com/RobbieMinderhoud/rust-application-boilerplate);
+[rust-base](https://github.com/Myrras/rust-base);
 see `CLAUDE.md` for the conventions and the rule that skeleton changes flow back
 there as a PR.
 
@@ -20,7 +20,7 @@ CHANGELOG.md               # Keep a Changelog; PRs add entries under [Unreleased
 crates/iris-core/          # the domain: single entry point (Core), zero Tauri dependency
 src-tauri/                 # thin Tauri IPC adapter over iris-core
 src/                       # React frontend (presentation only)
-.github/workflows/         # thin callers of RobbieMinderhoud/rust-base (reusable workflows @v2): ci, pr-checks, build, integration
+.github/workflows/         # thin callers of Myrras/rust-base (reusable workflows @v2): ci, pr-checks, build, integration
 .github/dependabot.yml     # weekly grouped updates: actions, cargo, npm
 ```
 
@@ -31,7 +31,7 @@ src/                       # React frontend (presentation only)
 - The Tauri 2 system prerequisites for your OS — see
   <https://tauri.app/start/prerequisites/>
 - `just` (optional but recommended: `brew install just`)
-- A clone of `RobbieMinderhoud/rust-base`, symlinked as `~/.rust-base` (for `just ci` and the shared scripts)
+- A clone of `Myrras/rust-base`, symlinked as `~/.rust-base` (for `just ci` and the shared scripts)
 
 ## Get started
 
