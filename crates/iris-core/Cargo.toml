@@ -52,5 +52,5 @@ rand = "0.10"
 tokio-stream = { version = "0.1", features = ["net"] }
 # Dockerized OpenSSH servers for `tests/ssh_integration.rs` (ignored by
 # default; `just test-integration`).
-testcontainers = "0.27"
+testcontainers = "0.28"
 
