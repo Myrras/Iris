@@ -11,6 +11,8 @@ when it merges.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-29
+
 ### Added
 
 - Favorite folders: star a folder in a pane's path bar (or Add to Favorites
