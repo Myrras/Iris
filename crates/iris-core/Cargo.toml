@@ -18,7 +18,7 @@ uuid.workspace = true
 # SSH transport. Only `ssh/` and `fs/sftp.rs` touch it: russh's API churns
 # between minors, so the minor is pinned and the surface kept small. `ring` as
 # the crypto backend (no cmake/nasm needed on Windows, unlike aws-lc-rs).
-russh = { version = "0.64.1", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh = { version = "0.65.0", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "3.0.1"
 # Wipes `Secret` contents on drop.
 zeroize = "1"
