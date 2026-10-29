@@ -15,6 +15,7 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
       reconnectAttempts: 3,
       editorOverrides: {},
       syncExcludes: [".git"],
+      localFavorites: [],
     }),
   ),
   saveSettings: vi.fn((s: unknown) => Promise.resolve(s)),
@@ -131,6 +132,7 @@ describe("SettingsModal — Transfers tab", () => {
       reconnectAttempts: 3,
       editorOverrides: {},
       syncExcludes: [".git"],
+      localFavorites: [],
     });
     expect(
       screen.getByRole("button", { name: "Increase parallel transfers" }),
@@ -161,6 +163,7 @@ describe("SettingsModal — Transfers tab", () => {
       reconnectAttempts: 0,
       editorOverrides: {},
       syncExcludes: [".git"],
+      localFavorites: [],
     });
     expect(fewer).toBeDisabled();
 
@@ -171,6 +174,7 @@ describe("SettingsModal — Transfers tab", () => {
           reconnectAttempts: 20,
           editorOverrides: {},
           syncExcludes: [".git"],
+          localFavorites: [],
         },
       }),
     );
@@ -266,6 +270,7 @@ describe("SettingsModal — Editors tab", () => {
     reconnectAttempts: 3,
     editorOverrides,
     syncExcludes: [".git"],
+    localFavorites: [],
   });
 
   beforeEach(() => {

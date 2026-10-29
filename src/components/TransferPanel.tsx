@@ -6,10 +6,13 @@
  * indeterminately), else "12 of 340 files · 3.1 MB of 56 MB · 1.5 MB/s ·
  * ~0:42" — Cancel all, Clear finished and Export CSV…, and a total progress bar
  * underneath whose total is fixed once a batch is counted. Body: one row per job (Podium's ProcessRow look), with
- * direction, file name with a muted second line "Local: /from/folder →
- * host: /to/folder" (folders only, cut in the middle by `lib/pathEllipsis`
- * to what the column fits; a failed row shows its error there instead; both
- * full paths in the tooltip), progress, bytes, speed, a `StatusDot` + state,
+ * direction, file name with a muted second line that keeps the local folder
+ * on the left and the server's on the right, the arrow pointing the way the
+ * bytes move — "Local: /folder → host: /folder" for an upload, "Local:
+ * /folder ← host: /folder" for a download (folders only, cut in the middle by
+ * `lib/pathEllipsis` to what the column fits; a failed row shows its error
+ * there instead; both full paths in the tooltip), progress, bytes, speed, a
+ * `StatusDot` + state,
  * a cancel button while it is unfinished and a retry button once it failed.
  * Right-click a row: copy either path, show the local one in the file
  * manager. A folder
@@ -67,6 +70,8 @@ import styles from "./TransferPanel.module.css";
 const ROW_HEIGHT = 40;
 /** Characters of path shown before the list has been measured. */
 const DEFAULT_PATH_CHARS = 120;
+/** The paths line always starts with the local side, like the Local pane. */
+const LOCAL_LABEL = "Local";
 
 /** The folder a job's path lives in (a folder placeholder is its own). */
 function folderOf(path: string, isFolder: boolean): string {
@@ -118,15 +123,18 @@ const JobRow = memo(function JobRow({
   const fraction =
     job.size > 0 ? job.bytesDone / job.size : job.state === "done" ? 1 : 0;
   const upload = job.direction === "upload";
-  const srcLabel = upload ? "Local" : remote;
-  const dstLabel = upload ? remote : "Local";
-  const srcDir = folderOf(job.src, job.folder);
-  const dstDir = folderOf(job.dst, job.folder);
+  // Geography rather than source first: each side sits where its pane does,
+  // so only the arrow tells an upload from a download.
+  const arrow = upload ? "→" : "←";
+  const localPath = upload ? job.src : job.dst;
+  const remotePath = upload ? job.dst : job.src;
+  const localDir = folderOf(localPath, job.folder);
+  const remoteDir = folderOf(remotePath, job.folder);
   // Both sides share the line: what is left after the labels, split in two.
-  const overhead = srcLabel.length + dstLabel.length + 7; // ": " ×2, " → "
+  const overhead = LOCAL_LABEL.length + remote.length + 7; // ": " ×2, the arrow
   const sideChars = Math.max(8, Math.floor((pathChars - overhead) / 2));
-  const pathsLine = `${srcLabel}: ${ellipsizePath(srcDir, sideChars)} → ${dstLabel}: ${ellipsizePath(dstDir, sideChars)}`;
-  const fullPaths = `${srcLabel}: ${job.src} → ${dstLabel}: ${job.dst}`;
+  const pathsLine = `${LOCAL_LABEL}: ${ellipsizePath(localDir, sideChars)} ${arrow} ${remote}: ${ellipsizePath(remoteDir, sideChars)}`;
+  const fullPaths = `${LOCAL_LABEL}: ${localPath} ${arrow} ${remote}: ${remotePath}`;
   const bytes = job.folder
     ? "folder"
     : job.state === "done" || job.bytesDone === 0

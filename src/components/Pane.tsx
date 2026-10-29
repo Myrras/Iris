@@ -14,7 +14,8 @@
  * Cmd+Shift+N new folder; F2, or Enter on macOS, rename; Delete /
  * Cmd+Backspace delete (always confirmed); Cmd+I Get Info; Cmd+E open a
  * remote file in the editor; Option+Cmd+R show in Finder (Explorer / File
- * Manager); Option+Cmd+S Sync dialog (`SyncDialog`, this pane's folder to
+ * Manager); Option+Cmd+C copy the path of the selection, or of the folder
+ * shown when nothing is selected; Option+Cmd+S Sync dialog (`SyncDialog`, this pane's folder to
  * the other's); Option+Cmd+P or Space preview. Transfers: Cmd+Shift+U
  * uploads the Local selection, Cmd+Shift+D downloads the Remote selection,
  * and F5 (Total Commander's "copy to the other pane") does either, into the
@@ -35,9 +36,16 @@
  * Files dragged in from Finder / Explorer (`lib/useNativeDrop`) show a drop
  * overlay on the Remote pane.
  *
- * The remote pane without a session shows the welcome screen, or — in a
- * tab about a connection (restored at start, or disconnected by the user) —
- * "not connected" with Reconnect, which opens a new session for the tab.
+ * The star at the end of the path bar adds the folder shown to the pane's
+ * favorites (Local: app-wide; Remote: the connection's), or removes it; a
+ * folder row's menu does the same for that folder (`lib/favorites`). The
+ * Remote pane's needs a connected session.
+ *
+ * The header holds the pane's folder tabs (`TabBar`; the Remote pane shows
+ * the active connection's). The remote pane without a connection shows the
+ * welcome screen; a connection without a session (connecting, or
+ * disconnected by the user) shows "not connected" with Reconnect, which
+ * opens a new session for the connection and its tabs.
  * While the core reconnects a dropped session the listing stays visible
  * under a banner (attempt n of max, a countdown, Retry now, Disconnect); a
  * session the core gave up on shows why, with Retry (same session id) and
@@ -54,10 +62,19 @@ import {
 } from "react";
 
 import type { ConnectionProfile, Entry, SessionId } from "../ipc/types";
-import { connectInTab, retrySession } from "../lib/connect";
+import { connectProfile, retrySession } from "../lib/connect";
+import { requestDisconnectSession } from "../lib/connections";
 import { downloadTo } from "../lib/downloadTo";
 import { isEditable as isEditableFile, openForEdit } from "../lib/edit";
 import { isDirLike, visibleEntries } from "../lib/entries";
+import {
+  addFavorite,
+  isFavorite,
+  removeFavorite,
+  toggleFavorite,
+  useFavorites,
+  type FavoriteScope,
+} from "../lib/favorites";
 import {
   fileManagerName,
   openLocalFile,
@@ -75,7 +92,6 @@ import { startPaneDrag } from "../lib/paneDrag";
 import { baseName, parentPath } from "../lib/path";
 import { isMac, isWindows } from "../lib/platform";
 import { clickSelection, moveCursor } from "../lib/selection";
-import { requestDisconnectSession } from "../lib/tabs";
 import { useKeymap } from "../lib/useKeymap";
 import { createTypeAheadBuffer, matchTypeAhead } from "../lib/typeAhead";
 import { otherPane, startTransfer } from "../lib/transfer";
@@ -87,18 +103,31 @@ import { useProfilesStore } from "../state/profilesStore";
 import { useSessionStore } from "../state/sessionStore";
 import { useSettingsStore } from "../state/settingsStore";
 import { useSyncStore } from "../state/syncStore";
-import { useTabsStore, type Tab } from "../state/tabsStore";
+import { toastError, toastSuccess } from "../state/toastStore";
+import {
+  activeTabOf,
+  tabSetOf,
+  useTabsStore,
+  type Connection,
+} from "../state/tabsStore";
 import { Breadcrumb } from "./Breadcrumb";
 import { ChmodDialog, type ChmodRequest } from "./ChmodDialog";
-import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import {
+  ContextMenu,
+  type ContextMenuEntry,
+  type ContextMenuItem,
+} from "./ContextMenu";
 import { DeleteConfirmModal, type DeleteRequest } from "./DeleteConfirmModal";
 import { FileTable, type RowModifiers } from "./FileTable";
 import { GoToField } from "./GoToField";
+import { TabBar } from "./TabBar";
 import { WelcomeScreen } from "./WelcomeScreen";
 import {
   BackIcon,
   DisconnectIcon,
   DownloadIcon,
+  FavoriteIcon,
+  FavoriteOffIcon,
   FilterIcon,
   HideHiddenIcon,
   NewFolderIcon,
@@ -125,9 +154,13 @@ export function Pane({
   const session = useSessionStore((s) =>
     sessionId ? s.sessions[sessionId] : undefined,
   );
-  const tab = useTabsStore((s) => s.tabs.find((t) => t.id === s.activeTabId));
-  const profileId =
-    session?.profileId ?? (id === "remote" ? tab?.profileId : undefined);
+  // The connection the Remote pane shows (its tabs, or "not connected").
+  const connection = useTabsStore((s) =>
+    id === "remote" && s.activeProfileId
+      ? s.connections[s.activeProfileId]
+      : undefined,
+  );
+  const profileId = session?.profileId ?? connection?.profileId;
   const profile = useProfilesStore((s) =>
     profileId ? s.profiles.find((p) => p.id === profileId) : undefined,
   );
@@ -137,8 +170,8 @@ export function Pane({
   let body;
   if (!target) {
     body =
-      id === "remote" && tab && profile ? (
-        <NotConnected tab={tab} profile={profile} />
+      connection && profile ? (
+        <NotConnected connection={connection} profile={profile} />
       ) : (
         <WelcomeScreen onConnect={openNew} />
       );
@@ -193,6 +226,7 @@ export function Pane({
         <Icon className={styles.icon} />
         <h2 className={styles.title}>{title}</h2>
         {profile && <span className={styles.subtitle}>{profile.name}</span>}
+        <TabBar pane={id} />
       </header>
       <div className={styles.body}>{body}</div>
       {nativeOver && (
@@ -210,33 +244,36 @@ export function Pane({
 }
 
 /**
- * The remote pane of a tab about a connection without a session: restored
- * at start (Iris never connects on its own) or disconnected by the user.
+ * The remote pane of a connection without a session: connecting, or
+ * disconnected by the user (its tabs wait for Reconnect).
  */
 function NotConnected({
-  tab,
+  connection,
   profile,
 }: {
-  tab: Tab;
+  connection: Connection;
   profile: ConnectionProfile;
 }) {
+  const folder = activeTabOf(connection.remote).pendingPath;
   return (
     <div className={styles.notice}>
       <DisconnectIcon size={28} className={styles.noticeIcon} />
-      <p className={styles.noticeTitle}>{profile.name} — not connected</p>
-      {tab.pendingRemotePath && (
-        <p className={styles.noticeText}>
-          Reconnecting opens {tab.pendingRemotePath} again.
-        </p>
+      <p className={styles.noticeTitle}>
+        {connection.connecting
+          ? `Connecting to ${profile.name}…`
+          : `${profile.name} — not connected`}
+      </p>
+      {folder && !connection.connecting && (
+        <p className={styles.noticeText}>Reconnecting opens {folder} again.</p>
       )}
       <div className={styles.noticeActions}>
         <button
           type="button"
           className="primary"
-          disabled={tab.connecting}
-          onClick={() => void connectInTab(tab.id, profile)}
+          disabled={connection.connecting}
+          onClick={() => void connectProfile(profile)}
         >
-          {tab.connecting ? "Connecting…" : "Reconnect"}
+          {connection.connecting ? "Connecting…" : "Reconnect"}
         </button>
       </div>
     </div>
@@ -348,6 +385,18 @@ function ReconnectBanner({
   );
 }
 
+/** Puts the paths on the clipboard, one per line, and says so. */
+async function copyPathsToClipboard(paths: string[]) {
+  try {
+    await navigator.clipboard.writeText(paths.join("\n"));
+    toastSuccess(
+      paths.length > 1 ? `${paths.length} paths copied` : "Path copied",
+    );
+  } catch {
+    toastError("Could not copy the path");
+  }
+}
+
 /** Toolbar + table for a pane that has a filesystem. */
 function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   const pane = usePaneStore((s) => s.panes[id]);
@@ -386,11 +435,25 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   const dropDir = useDragStore((s) =>
     s.over?.pane === id ? s.over.dir : null,
   );
+  // Favorites: Local's for the Local pane, the active connection's for the
+  // Remote one (which needs its session connected to add or remove).
+  const remoteProfileId = useTabsStore((s) =>
+    id === "remote" ? s.activeProfileId : null,
+  );
+  const favoriteScope = useMemo<FavoriteScope | null>(() => {
+    if (id === "local") return { kind: "local" };
+    return remoteProfileId && editSession
+      ? { kind: "remote", profileId: remoteProfileId }
+      : null;
+  }, [id, remoteProfileId, editSession]);
+  const favorites = useFavorites(favoriteScope);
+  const folderIsFavorite =
+    pane.path !== null && isFavorite(favorites, pane.path);
 
   const [menu, setMenu] = useState<{
     x: number;
     y: number;
-    items: ContextMenuItem[];
+    items: ContextMenuEntry[];
   } | null>(null);
   // The menu keeps its last position and items while it animates out.
   const lastMenu = useRef(menu);
@@ -409,11 +472,11 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   useEffect(() => {
     if (goToOpen && !canGoTo) setGoToOpen(false);
   }, [goToOpen, canGoTo]);
-  const activeTabId = useTabsStore((s) => s.activeTabId);
+  const tabId = useTabsStore((s) => tabSetOf(s, id)?.activeTabId ?? null);
   // Another tab or location: the typed text no longer belongs here.
   useEffect(() => {
     setGoToOpen(false);
-  }, [pane.target, activeTabId]);
+  }, [pane.target, tabId]);
   const openGoTo = () => {
     if (canGoTo) setGoToOpen(true);
   };
@@ -473,7 +536,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   const typeAhead = useRef(createTypeAheadBuffer());
   useEffect(() => {
     typeAhead.current.reset();
-  }, [pane.target, pane.path, activeTabId]);
+  }, [pane.target, pane.path, tabId]);
   const typeSelect = (char: string) => {
     const at = matchTypeAhead(entries, typeAhead.current.push(char));
     if (at === null) return;
@@ -548,6 +611,13 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
   const revealFolder = () => {
     if (isLocal && pane.path) void revealLocalPath(pane.path);
   };
+  // The selection (or the cursor row), else the folder shown.
+  const copyPaths = () => {
+    const list = targets();
+    const paths =
+      list.length > 0 ? list.map((e) => e.path) : pane.path ? [pane.path] : [];
+    if (paths.length > 0) void copyPathsToClipboard(paths);
+  };
   const openCursor = () => {
     const [entry] = targets();
     if (entry) onOpen(entry);
@@ -611,6 +681,10 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         return true;
       case "showInFinder":
         reveal();
+        return true;
+      case "copyPath":
+        if (!hasFolder) return false;
+        copyPaths();
         return true;
       case "upload":
       case "download":
@@ -697,7 +771,21 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     setMenu({ x: e.clientX, y: e.clientY, items: menuItems(entry) });
   }
 
-  function menuItems(entry: Entry | null): ContextMenuItem[] {
+  /** Add or remove a folder row's folder; needs the pane's favorites. */
+  function favoriteItem(entry: Entry): ContextMenuItem {
+    const scope = favoriteScope;
+    const listed = isFavorite(favorites, entry.path);
+    return {
+      label: listed ? "Remove from Favorites" : "Add to Favorites",
+      disabled: scope === null,
+      onSelect: () => {
+        if (!scope) return;
+        void (listed ? removeFavorite : addFavorite)(scope, entry.path);
+      },
+    };
+  }
+
+  function menuItems(entry: Entry | null): ContextMenuEntry[] {
     const hint = (action: ActionId) => shortcutHint(keymap, action);
     const refresh: ContextMenuItem = {
       label: "Refresh",
@@ -716,6 +804,12 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
       disabled: !canCopy,
       onSelect: openSync,
     };
+    const copy: ContextMenuItem = {
+      label: "Copy Path",
+      shortcut: hint("copyPath"),
+      disabled: !hasFolder,
+      onSelect: copyPaths,
+    };
     const showInFileManager = (onSelect: () => void): ContextMenuItem => ({
       label: `Show in ${fileManagerName}`,
       shortcut: hint("showInFinder"),
@@ -724,16 +818,20 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
     });
     if (!entry) {
       return [
+        { kind: "header", label: "This folder" },
         create,
-        sync,
+        copy,
         ...(isLocal ? [showInFileManager(revealFolder)] : []),
         refresh,
+        { kind: "header", label: "Transfer" },
+        sync,
       ];
     }
     const list = targets();
     const single = list.length === 1;
     const noModes = list.every((t) => t.mode === null);
     return [
+      { kind: "header", label: "Open" },
       {
         label: "Open",
         disabled: !(
@@ -767,6 +865,7 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         disabled: !single,
         onSelect: () => useLayoutStore.getState().setPreviewOpen(true),
       },
+      { kind: "header", label: "Transfer" },
       {
         label: id === "local" ? "Upload to Remote" : "Download to Local",
         shortcut: hint(copyAction),
@@ -783,25 +882,29 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
           ]
         : []),
       sync,
-      create,
+      { kind: "header", label: "Organize" },
+      ...(single && isDirLike(entry) ? [favoriteItem(entry)] : []),
       {
         label: "Rename",
         shortcut: hint("rename"),
         disabled: !single,
         onSelect: () => rename(entry),
       },
+      copy,
       {
         label: noModes ? "Get Info…" : "Get Info / Permissions…",
         shortcut: hint("getInfo"),
         onSelect: getInfo,
       },
-      refresh,
       {
         label: list.length > 1 ? `Delete ${list.length} Items…` : "Delete…",
         shortcut: hint("delete"),
         danger: true,
         onSelect: askDelete,
       },
+      { kind: "header", label: "This folder" },
+      create,
+      refresh,
     ];
   }
 
@@ -870,6 +973,26 @@ function PaneBrowser({ id, label }: { id: PaneId; label: string }) {
         ) : (
           <span className={styles.crumbPlaceholder} />
         )}
+        <button
+          type="button"
+          className={`${styles.tool} ${styles.star}`}
+          aria-label={
+            folderIsFavorite ? "Remove from Favorites" : "Add to Favorites"
+          }
+          aria-pressed={folderIsFavorite}
+          title={
+            folderIsFavorite
+              ? "Remove this folder from Favorites"
+              : "Add this folder to Favorites"
+          }
+          disabled={favoriteScope === null || pane.path === null}
+          onClick={() => {
+            if (favoriteScope && pane.path)
+              void toggleFavorite(favoriteScope, pane.path);
+          }}
+        >
+          {folderIsFavorite ? <FavoriteIcon /> : <FavoriteOffIcon />}
+        </button>
         <label className={styles.filter}>
           <FilterIcon className={styles.filterIcon} />
           <span className="visually-hidden">Filter {label} files</span>

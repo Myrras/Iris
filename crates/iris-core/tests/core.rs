@@ -58,6 +58,7 @@ fn reordered_connections_persist_and_announce() {
             auth: AuthMethod::Agent,
             start_dir: None,
             jump: None,
+            favorites: Vec::new(),
         })
         .unwrap()
     };
@@ -85,6 +86,94 @@ fn reordered_connections_persist_and_announce() {
     let restarted = Core::new();
     restarted.set_profiles_path(file);
     assert_eq!(names(&restarted), ["C", "A", "B"]);
+}
+
+#[test]
+fn favorites_persist_survive_form_saves_and_go_with_their_profile() {
+    use iris_core::{AuthMethod, ConnectionProfile, Favorite, ProfileId};
+
+    let dir = tempfile::tempdir().unwrap();
+    let profiles_file = dir.path().join("profiles.json");
+    let settings_file = dir.path().join("settings.json");
+    let core = Core::new();
+    core.set_profiles_path(profiles_file.clone());
+    core.set_settings_path(settings_file.clone());
+    let fav = |path: &str, label: Option<&str>| Favorite {
+        path: path.into(),
+        label: label.map(String::from),
+    };
+
+    // Remote: on the profile.
+    let prod = core
+        .save_profile(ConnectionProfile {
+            id: ProfileId::new(),
+            name: "prod".into(),
+            host: "sftp.example.test".into(),
+            port: 22,
+            user: "demo".into(),
+            auth: AuthMethod::Agent,
+            start_dir: None,
+            jump: None,
+            favorites: Vec::new(),
+        })
+        .unwrap();
+    let mut rx = core.subscribe_events();
+    let remote = core
+        .set_profile_favorites(
+            prod.id,
+            vec![
+                fav("/var/www", None),
+                fav("/var/log/nginx/", Some(" logs ")),
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        remote,
+        vec![fav("/var/www", None), fav("/var/log/nginx", Some("logs"))]
+    );
+    assert_eq!(rx.try_recv().unwrap(), CoreEvent::ProfilesChanged);
+
+    // Local: in the settings.
+    let home = dir.path().join("home").to_string_lossy().into_owned();
+    let local = core
+        .set_local_favorites(vec![fav(&home, Some("Home"))])
+        .unwrap();
+    assert_eq!(rx.try_recv().unwrap(), CoreEvent::SettingsChanged);
+
+    // The connection form and the Settings dialog send what they loaded
+    // earlier: neither drops a favorite.
+    core.save_profile(ConnectionProfile {
+        name: "production".into(),
+        ..prod.clone()
+    })
+    .unwrap();
+    core.save_settings(IrisSettings {
+        parallel_transfers: 2,
+        ..IrisSettings::default()
+    })
+    .unwrap();
+
+    let restarted = Core::new();
+    restarted.set_profiles_path(profiles_file.clone());
+    restarted.set_settings_path(settings_file);
+    let profile = restarted.list_profiles().remove(0);
+    assert_eq!(profile.name, "production");
+    assert_eq!(profile.favorites, remote);
+    assert_eq!(restarted.settings().local_favorites, local);
+    assert_eq!(restarted.settings().parallel_transfers, 2);
+
+    // Refusals change nothing; the favorites go with their profile.
+    assert!(matches!(
+        restarted.set_profile_favorites(prod.id, vec![fav("www", None)]),
+        Err(CoreError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        restarted.set_profile_favorites(ProfileId::new(), Vec::new()),
+        Err(CoreError::NotFound(_))
+    ));
+    restarted.delete_profile(prod.id).unwrap();
+    let raw = std::fs::read_to_string(&profiles_file).unwrap();
+    assert!(!raw.contains("/var/www"), "{raw}");
 }
 
 // -- Local file operations ------------------------------------------------------

@@ -17,6 +17,7 @@ const stored: IrisSettings = {
   reconnectAttempts: 3,
   editorOverrides: {},
   syncExcludes: [".git"],
+  localFavorites: [],
 };
 
 beforeEach(() => {

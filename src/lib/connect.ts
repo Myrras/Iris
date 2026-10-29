@@ -14,10 +14,12 @@
  * - A wrong typed secret keeps the prompt open with the error; anything else
  *   closes it and is reported (a changed host key as a blocking warning).
  *
- * Connecting always opens a NEW session for the tab it was started from,
- * and shows it there even if the user switched tabs meanwhile. A manual
- * reconnect ("Retry") revives the SAME session id, so the tab and the
- * session's paused transfers need no remapping.
+ * One session per connection: clicking a connection in the sidebar
+ * (`openConnection`) shows the one it has, and only connects when it has
+ * none. A connect hands the session to the connection even if the user
+ * switched to another one meanwhile (it stays in the background). A manual
+ * reconnect ("Retry") revives the SAME session id, so the connection's tabs
+ * and its paused transfers need no remapping.
  *
  * SECURITY: secrets pass from the prompt's local state straight into
  * `connect` / `reconnect`; nothing here keeps or logs them.
@@ -35,9 +37,9 @@ import type { ConnectionProfile, IpcError, SessionId } from "../ipc/types";
 import { useProfilesStore } from "../state/profilesStore";
 import { usePromptStore, type SecretKind } from "../state/promptStore";
 import { useSessionStore } from "../state/sessionStore";
-import { activeTab, useTabsStore, type TabId } from "../state/tabsStore";
+import { useTabsStore } from "../state/tabsStore";
 import { toastError, toastSuccess } from "../state/toastStore";
-import { refreshSessionPanes, requestDisconnectSession } from "./tabs";
+import { refreshSessionPanes, requestDisconnectSession } from "./connections";
 
 /** Errors a retyped secret can fix: the prompt stays open for them. */
 const RETRYABLE: Record<SecretKind, ReadonlySet<string>> = {
@@ -45,7 +47,7 @@ const RETRYABLE: Record<SecretKind, ReadonlySet<string>> = {
   passphrase: new Set(["passphraseRequired", "keyFile", "authFailed"]),
 };
 
-/** Tabs and sessions with a connect in progress (no double connects). */
+/** Profiles and sessions with a connect in progress (no double connects). */
 const inFlight = new Set<string>();
 
 function report(profile: ConnectionProfile, err: IpcError, verb: string) {
@@ -142,63 +144,64 @@ async function withSecrets<T>(
 }
 
 /**
- * Connect `profile` in tab `tabId` (a new session, even when another tab
- * has one of the same profile) and show it there, starting in the tab's
- * remembered remote folder or the profile's start folder. Resolves with the
- * session id, or `null` when cancelled, failed (already reported) or a
- * connect for the tab is already running.
+ * Connect `profile`'s connection (created when there is none; the active
+ * connection stays as it is) and reopen its remote tabs' folders on the new
+ * session, the profile's start folder for a tab that never had one.
+ * Resolves with the session id: the one it already has, or `null` when
+ * cancelled, failed (already reported) or a connect is already running.
  */
-export async function connectInTab(
-  tabId: TabId,
+export async function connectProfile(
   profile: ConnectionProfile,
 ): Promise<SessionId | null> {
-  const tabs = useTabsStore.getState();
-  const tab = tabs.tabs.find((t) => t.id === tabId);
-  if (!tab || inFlight.has(tabId)) return null;
-  inFlight.add(tabId);
-  const path = tab.pendingRemotePath ?? profile.startDir;
-  tabs.update(tabId, {
-    profileId: profile.id,
-    title: profile.name,
-    connecting: true,
-  });
+  const existing = useTabsStore.getState().connections[profile.id];
+  if (existing?.sessionId) return existing.sessionId;
+  if (inFlight.has(profile.id)) return null;
+  inFlight.add(profile.id);
+  useTabsStore.getState().ensureConnection(profile.id);
+  useTabsStore.getState().setConnecting(profile.id, true);
   try {
     const sessionId = await withSecrets(profile, "connect to", (secrets) =>
       secrets ? connect(profile.id, secrets) : connect(profile.id),
     );
     if (sessionId === null) return null;
-    const still = useTabsStore.getState().tabs.some((t) => t.id === tabId);
-    if (!still) {
-      // The tab was closed while connecting: nothing would show it.
+    if (!useTabsStore.getState().connections[profile.id]) {
+      // The profile was deleted while connecting: nothing would show it.
       void disconnect(sessionId).catch(() => undefined);
       return null;
     }
     useTabsStore
       .getState()
-      .attachSession(tabId, sessionId, profile.id, profile.name, path);
+      .attachSession(profile.id, sessionId, profile.startDir);
     return sessionId;
   } finally {
-    inFlight.delete(tabId);
-    useTabsStore.getState().update(tabId, { connecting: false });
+    inFlight.delete(profile.id);
+    useTabsStore.getState().setConnecting(profile.id, false);
   }
 }
 
 /**
- * The sidebar's click: connect in the tab on screen when it has no session
- * and is not about another connection, else in a new tab.
+ * The sidebar's click: make `profile`'s connection the one the Remote pane
+ * shows. One with a session (whatever its state) is just shown; one without
+ * (new, or disconnected by the user) connects too. A brand-new connection
+ * that does not come up (cancelled, failed) leaves no trace: the Remote pane
+ * goes back to the connection it showed before.
  */
-export async function connectProfile(
+export async function openConnection(
   profile: ConnectionProfile,
-  options: { newTab?: boolean } = {},
-): Promise<SessionId | null> {
-  const tab = activeTab();
-  const reusable =
-    !options.newTab &&
-    tab.sessionId === null &&
-    !tab.connecting &&
-    (tab.profileId === null || tab.profileId === profile.id);
-  const tabId = reusable ? tab.id : useTabsStore.getState().newTab();
-  return connectInTab(tabId, profile);
+): Promise<void> {
+  const tabs = useTabsStore.getState();
+  const previous = tabs.activeProfileId;
+  const fresh = !tabs.connections[profile.id];
+  tabs.activate(profile.id);
+  const conn = useTabsStore.getState().connections[profile.id];
+  if (!conn || conn.sessionId || conn.connecting) return;
+  if ((await connectProfile(profile)) !== null || !fresh) return;
+  const now = useTabsStore.getState();
+  if (now.connections[profile.id]?.sessionId !== null) return;
+  if (now.activeProfileId === profile.id) {
+    now.activate(previous && now.connections[previous] ? previous : null);
+  }
+  useTabsStore.getState().dropConnection(profile.id);
 }
 
 /**
@@ -230,7 +233,7 @@ export async function retrySession(sessionId: SessionId): Promise<boolean> {
 
 /**
  * Close a session at the user's request (asking first when it still has
- * transfers). Its tab stays, with Connect.
+ * transfers). Its connection and tabs stay, with Reconnect.
  */
 export function disconnectSession(sessionId: SessionId): void {
   requestDisconnectSession(sessionId);

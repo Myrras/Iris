@@ -28,13 +28,13 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   }),
 }));
 vi.mock("../lib/connect", () => ({
-  connectProfile: vi.fn(),
+  openConnection: vi.fn(),
   disconnectSession: vi.fn(),
 }));
 
 import { listProfiles, reorderProfiles } from "../ipc/commands";
 import type { ConnectionProfile } from "../ipc/types";
-import { connectProfile } from "../lib/connect";
+import { openConnection } from "../lib/connect";
 import { useProfilesStore } from "../state/profilesStore";
 import { useSessionStore } from "../state/sessionStore";
 import { resetTabs } from "../state/tabsStore";
@@ -50,6 +50,7 @@ const alpha: ConnectionProfile = {
   auth: { kind: "password" },
   startDir: null,
   jump: null,
+  favorites: [],
 };
 const beta: ConnectionProfile = { ...alpha, id: "p-2", name: "Beta" };
 const gamma: ConnectionProfile = { ...alpha, id: "p-3", name: "Gamma" };
@@ -184,7 +185,7 @@ describe("reordering connections by dragging", () => {
     expect(document.documentElement.dataset.dragging).toBeUndefined();
     fireEvent.mouseUp(window);
     fireEvent.click(row("Alpha"));
-    expect(connectProfile).toHaveBeenCalledWith(alpha);
+    expect(openConnection).toHaveBeenCalledWith(alpha);
     expect(reorderProfiles).not.toHaveBeenCalled();
   });
 
@@ -193,7 +194,7 @@ describe("reordering connections by dragging", () => {
     press("Alpha", 20, 90);
     fireEvent.mouseUp(window);
     fireEvent.click(row("Alpha"));
-    expect(connectProfile).not.toHaveBeenCalled();
+    expect(openConnection).not.toHaveBeenCalled();
   });
 
   it("cancels on Escape: nothing is sent, the release does not connect", () => {
@@ -210,7 +211,7 @@ describe("reordering connections by dragging", () => {
     fireEvent.mouseUp(window);
     fireEvent.click(row("Alpha"));
     expect(reorderProfiles).not.toHaveBeenCalled();
-    expect(connectProfile).not.toHaveBeenCalled();
+    expect(openConnection).not.toHaveBeenCalled();
     expect(names()).toEqual(["Alpha", "Beta", "Gamma"]);
   });
 

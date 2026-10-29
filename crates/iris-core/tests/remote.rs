@@ -52,6 +52,7 @@ fn save_profile(core: &Core, port: u16, auth: AuthMethod) -> ProfileId {
         auth,
         start_dir: None,
         jump: None,
+        favorites: Vec::new(),
     })
     .unwrap()
     .id

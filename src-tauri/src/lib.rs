@@ -174,9 +174,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::settings::get_settings,
             commands::settings::save_settings,
+            commands::settings::set_local_favorites,
             commands::connection::list_profiles,
             commands::connection::save_profile,
             commands::connection::reorder_profiles,
+            commands::connection::set_profile_favorites,
             commands::connection::delete_profile,
             commands::connection::set_secret,
             commands::connection::clear_secret,

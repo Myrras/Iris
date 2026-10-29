@@ -21,6 +21,21 @@ export interface IrisSettings {
    * `Thumbs.db`.
    */
   syncExcludes: string[];
+  /**
+   * Favorite local folders, in the user's order. Changed only through
+   * `setLocalFavorites`: `saveSettings` keeps the stored list.
+   */
+  localFavorites: Favorite[];
+}
+
+/**
+ * A favorite folder (`iris_core::Favorite`). `path` is absolute (remote:
+ * from `/`); `label` is shown instead of the folder's name, `null` = derived
+ * from the path.
+ */
+export interface Favorite {
+  path: string;
+  label: string | null;
 }
 
 /** Structured error every IPC command can reject with (`IpcError`). */
@@ -79,15 +94,21 @@ export interface ConnectionProfile {
   startDir: string | null;
   /** Reach the host through this jump host; `null` = directly. */
   jump: JumpHost | null;
+  /**
+   * Favorite remote folders, in the user's order. Changed only through
+   * `setProfileFavorites`: `saveProfile` keeps the stored list.
+   */
+  favorites: Favorite[];
 }
 
 /**
  * What `saveProfile` accepts: a profile whose `id` (omit for a new one),
- * `port` (defaults to 22), `startDir` and `jump` are optional.
+ * `port` (defaults to 22), `startDir` and `jump` are optional. Its
+ * favorites are not the form's: the backend keeps the stored ones.
  */
 export type ConnectionProfileInput = Omit<
   ConnectionProfile,
-  "id" | "port" | "startDir" | "jump"
+  "id" | "port" | "startDir" | "jump" | "favorites"
 > & {
   id?: ProfileId;
   port?: number;

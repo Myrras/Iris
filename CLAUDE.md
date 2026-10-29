@@ -359,24 +359,41 @@ standalone template:
     walked again; needs a live session.
   - IPC: `reconnect(sessionId, password?, passphrase?, remember?)`,
     `retry_transfer(jobId)`.
-  - **Tabs** (`state/tabsStore.ts`, `components/TabBar.tsx` in Selene's
-    look, `lib/tabs.ts`, `lib/useTabShortcuts.ts`): a tab is `{id, title,
-    profileId, sessionId, localPane, remotePane, …}` with its own session —
-    connecting always opens a new one, shown in the tab that started it.
-    `paneStore` holds the **active** tab's panes; background tabs keep
-    snapshots, swapped in on switch (`paneStore.restore` drops in-flight
-    listings, then both panes re-list). ⌘T / ⌘W / ⌘1–8 / ⌘9 / ⇧⌘[ ⇧⌘];
-    middle-click closes; always ≥ 1 tab. `TabCloseModal` warns before
-    closing/disconnecting a tab with unfinished transfers. Tabs persist in
-    localStorage `iris.tabs` (profile, title, both folders, active) and are
-    restored **without connecting** — the Remote pane offers Reconnect
-    (avoids a burst of secret/host key prompts and unwanted connections at
-    start); tabs of deleted profiles become blank.
+  - **Connections & folder tabs** (`state/tabsStore.ts`,
+    `components/TabBar.tsx` in Selene's look scaled into the pane header,
+    `lib/connect.ts`, `lib/connections.ts`, `lib/useTabShortcuts.ts`). No
+    window-wide tab bar. **One session per connection**: `Connection
+    {profileId, sessionId | null, connecting, remote: TabSet}` by profile
+    id. The sidebar picks the **active connection** (`activeProfileId`, the
+    selected row) that the Remote pane shows: `openConnection` shows one
+    that has a session (any state) and connects one that has none (new, or
+    disconnected by the user); a brand-new one that does not come up
+    (cancelled, failed) is dropped and the previous one comes back. Others
+    run on in the background (transfers, edits, reconnect; their row's
+    `StatusDot` via `connectionState`). No active connection =
+    `WelcomeScreen`. **Tabs live inside each pane and are folders**: one
+    Local `TabSet` for the app, one Remote `TabSet` per connection, all on
+    its one session (a tab never connects). `FolderTab {id, pane:
+    PaneState, pendingPath}`; `paneStore` holds the tab **on screen** of
+    each pane (active Local tab, active connection's active Remote tab);
+    switching tab or connection snapshots the pane into the tab left,
+    `paneStore.restore(pane, state)` swaps the other in (drops in-flight
+    listings of that pane) and re-lists it. A new tab opens on the current
+    tab's folder; title = folder basename, full path as tooltip; `+`,
+    middle-click closes, ≥ 1 tab per pane (a lone tab has no ×). ⌘T / ⌘W /
+    ⇧⌘] / ⇧⌘[ and ⌘1–8 / ⌘9 act on the **active pane**'s tabs. A user
+    disconnect (`lib/connections`) keeps the connection and its tabs
+    (each remembers its folder in `pendingPath`; Reconnect = a new session,
+    `attachSession` reopens every tab's folder); `DisconnectModal` warns
+    when the session has unfinished transfers (closing a tab never
+    disconnects). A deleted profile's connection is dropped and its session
+    closed (`forgetDeletedProfiles`). **Nothing persists**: start = one
+    Local tab at home, no connection (an old `iris.tabs` key is removed).
   - UI: Remote pane banner while `reconnecting` (attempt n of max, local
     countdown, Retry now, Disconnect) and a disconnected notice with the
     reason and Retry (same session id; asks for a missing secret like the
-    connect flow). `StatusDot` on tabs and sidebar rows
-    (`lib/sessionStatus.ts`; reconnecting = pulsing warning). Toasts on
+    connect flow). `StatusDot` on sidebar rows (`lib/sessionStatus.ts`;
+    reconnecting = pulsing warning). Toasts on
     `reconnecting → connected/disconnected`; panes re-list after a
     reconnect. TransferPanel: Retry on failed rows, folder placeholders.
     Settings → Transfers: Reconnect attempts 0–20.
@@ -571,8 +588,8 @@ standalone template:
     to…"), `LogoMark`.
 - ✅ **Sync — one-way folder sync.** Backend and UI done.
   - Manual, one way, per sync: **Local → Remote** (`upload`) or **Remote →
-    Local** (`download`), comparing the active tab's Local pane folder with
-    its Remote pane folder (connected session). No saved pairs, no watch.
+    Local** (`download`), comparing the Local pane's folder with the
+    Remote pane's (active tabs; active connection, connected session). No saved pairs, no watch.
     **Update** (default) copies new + changed files and never deletes;
     **Mirror** also deletes target-only items (second confirm in the
     dialog).
@@ -794,7 +811,7 @@ standalone template:
   files, 56 MB" ("Waiting for the connection…" when paused) with the total
   bar indeterminate, then `progressText`: "12 of 340 files · 3.1 MB of
   56 MB · 1.5 MB/s · ~0:42" (speed and ETA from the core summary); Cancel
-  all also cancels counting batches; CloseWarningModal / TabCloseModal /
+  all also cancels counting batches; CloseWarningModal / DisconnectModal /
   `hasUnfinishedTransfers` count them. Tests: `tests/transfers.rs` (no job
   while counting then all at once, totals + events, cancel while counting,
   a folder that cannot be made, ETA), `tests/reconnect.rs` (a count cut off
@@ -844,7 +861,7 @@ standalone template:
   overrides the platform config's decorations.
 - ✅ **Resizable islands** (`components/Splitter.tsx`, `components/Shell.tsx`,
   pure rules in `lib/resize.ts`, `lib/useShellLayout.ts`). `Shell` (the body
-  under the title bar) holds the sidebar, tab strip, panes, preview and
+  under the title bar) holds the sidebar, panes, preview and
   transfers with a `Splitter` in every canvas gap (`--gap-island`, so the
   containers have no flex gap of their own). Four sizes, stored in
   `layoutStore` (`iris.layout`; an old layout is merged over the defaults):
@@ -901,10 +918,12 @@ standalone template:
   codes fall back to `key`). `resolveKeymap` lays the user's changes
   (`settingsStore.shortcuts`, only changed actions, `setShortcut` /
   `resetShortcuts`) over the defaults. Defaults: Go to path ⌘P + ⌘L, Refresh
-  ⌘R, Find ⌘F, New folder ⇧⌘N, Rename F2, Delete Delete + ⌘⌫, Get Info ⌘I,
+  ⌘R, Find ⌘F, New folder ⇧⌘N, Rename F2, Copy path ⌥⌘C, Delete Delete + ⌘⌫,
+  Get Info ⌘I,
   Upload ⇧⌘U (Local pane), Download ⇧⌘D (Remote pane), Sync ⌥⌘S, Open in
   editor ⌘E, Show in Finder ⌥⌘R, Toggle preview ⌥⌘P (+ Space), New / Close /
-  Next / Previous tab ⌘T / ⌘W / ⇧⌘] / ⇧⌘[, Open Settings ⌘, (non-macOS only:
+  Next / Previous tab ⌘T / ⌘W / ⇧⌘] / ⇧⌘[ (`app` scope, acting on the
+  active pane's folder tabs), Open Settings ⌘, (non-macOS only:
   macOS keeps the native menu). Fixed (`RESERVED`, refused by the recorder):
   Enter, Space, arrows, F5, ⌘O / ⌘↓ / ⌘↑, ⌥⌘↑ / ⌥⌘↓ (move a connection), ⌘A / C / V / X / Z, ⌘1–9, Escape,
   macOS ⌘Q / H / M. `isBrowserShortcut` (F5, ⌘/Ctrl+R, P, F, G, S) is
@@ -932,6 +951,39 @@ standalone template:
   keys are **not** a keymap action (the `pane` / `app` scopes have no "focused
   sidebar row"): `ConnectionRow` handles them via `keymap.connectionMoveOf`,
   and they are in `RESERVED` so the recorder refuses them.
+
+- ✅ **Favorites.** `favorites.rs`: `Favorite {path, label: Option}`; Local ones
+  in `IrisSettings.localFavorites`, remote ones in
+  `ConnectionProfile.favorites` (both serde-default empty, so old files load;
+  a profile's go with it on delete). Changed only by
+  `Core::set_local_favorites(list)` (emits `settings:changed`) /
+  `Core::set_profile_favorites(profileId, list)` (`profiles:changed`), which
+  validate strictly (`normalize`: local = absolute OS path, remote = from `/`
+  with a trailing `/` dropped, no folder twice, labels trimmed ≤ 255 chars,
+  blank = `null`, ≤ 200; else `invalidInput`, nothing changes) and write
+  atomically. `save_settings` / `save_profile` **keep the stored lists**
+  whatever they are sent (a new profile starts with none), so the Settings
+  dialog and the connection form never drop one; lists read from disk are
+  `sanitize`d (bad entries dropped, not the file). IPC
+  `set_local_favorites(favorites)`, `set_profile_favorites(profileId,
+  favorites)`. UI (`lib/favorites`): `profilesStore.setFavorites` /
+  `backendSettingsStore.setLocalFavorites` apply locally, send, re-read; a
+  refusal toasts and puts the backend's list back (`reorder`'s rules). A
+  star at the end of each pane's path bar (Remote: needs a connected
+  session) and "Add to / Remove from Favorites" on folder rows' menus.
+  Sidebar: `LocalSidebar` above Connections (Home, never removable, then the
+  Local favorites; it loads the core settings at mount), each connection
+  row's favorites in a nested `FavoriteList` behind a ▸/▾ disclosure
+  (folded rows in `layoutStore.collapsedFavorites`, expanded by default; no
+  favorites = no disclosure). Click = active tab (`navigate`, or `open` while
+  the pane has no folder yet), ⌘-click / Ctrl-click = `tabsStore.newTab(pane,
+  path)`; a remote one goes through `openConnection` first and navigates
+  only if that connection is active with a session afterwards. Row menu:
+  Open, Open in New Tab, Rename (inline label; blank = basename for Local,
+  full path for Remote), Remove; drag reorders (`lib/rowReorder`). Tests:
+  `favorites.rs`, `connection/store.rs`, `settings.rs`, `tests/core.rs`;
+  `Sidebar.favorites.test.tsx`, `Pane.favorites.test.tsx`,
+  `lib/favorites.test.ts`.
 
 ## Tech stack
 
@@ -964,6 +1016,7 @@ crates/iris-core/src/
   events.rs   # CoreEvent + SessionState + EventBus (tokio broadcast)
   settings.rs # IrisSettings + IrisSettingsStore (settings.json, atomic write)
   persist.rs  # shared atomic writes (JSON documents, exports): temp file + rename
+  favorites.rs  # Favorite + validation (normalize) / load tidying (sanitize)
   ids.rs      # UUID newtypes (uuid_newtype!): ProfileId, SessionId, HostKeyRequestId,
               # TransferId, BatchId, EditId, DragOutId, SyncPlanId
   secret.rs   # Secret: redacted, non-serializable, zeroized password/passphrase
@@ -1014,8 +1067,8 @@ src-tauri/src/
   error.rs    # IpcError { kind, message } ← CoreError
   opener.rs   # DesktopOpener: iris_core::Opener over tauri_plugin_opener::open_path
   events.rs   # forwards CoreEvents to the webview (app.emit, Lagged-safe)
-  commands/   # thin shims: settings.rs, connection.rs (profiles, secrets,
-              # ssh config hosts), session.rs
+  commands/   # thin shims: settings.rs (+ Local favorites), connection.rs
+              # (profiles, their favorites, secrets, ssh config hosts), session.rs
               # (connect/reconnect/disconnect/answer_host_key), fs.rs (list_dir/stat/
               # read_link/home_dir/mkdir/rename/delete/chmod/preview),
               # transfers.rs (async: the core spawns jobs on Tokio), edit.rs
@@ -1025,25 +1078,30 @@ src-tauri/src/
               # discard_sync_plan), window.rs
 src/
   App.tsx     # the app: title bar, app-level wiring, dialogs; `Shell` below it
-              # (sidebar, tab bar, Local/Remote panes, preview, transfers, and
-              # the splitters between them)
-  components/ # Sidebar + ConnectionSidebar/ConnectionRow, ConnectionForm,
+              # (sidebar, Local/Remote panes with their folder tabs, preview,
+              # transfers, and the splitters between them)
+  components/ # Sidebar + LocalSidebar + ConnectionSidebar/ConnectionRow,
+              # FavoriteList, ConnectionForm,
               # PromptHost (SecretPrompt, HostKeyDialog, ConflictDialog,
               # EditConflictDialog),
               # Pane + Breadcrumb + GoToField + FileTable, ContextMenu,
               # DeleteConfirmModal,
               # ChmodDialog, PreviewPanel, TransferPanel + ProgressBar,
               # Shell + Splitter (resizable islands),
-              # DragGhost, SyncDialog, WelcomeScreen, Modal, TabBar, TabCloseModal,
+              # DragGhost, SyncDialog, WelcomeScreen, Modal, TabBar (a pane's
+              # folder tabs), DisconnectModal,
               # Toasts, SettingsModal, CloseWarningModal, WindowControls,
               # StatusDot, LogoMark, icons (lucide wrapper; import from here)
   ipc/        # commands.ts (typed wrappers), types.ts (wire types), events.ts
-  state/      # Zustand stores: profiles, session, prompt (queue), tabs, pane,
+  state/      # Zustand stores: profiles, session, prompt (queue), tabs
+              # (connections + folder tabs per pane), pane,
               # transfer, drag, sync (dialog request + finished toast),
               # connectionForm, theme, settings (UI prefs),
               # backendSettings (core settings.json), settingsRequest,
               # layout, toast — mirror the backend; don't guess
-  lib/        # connect flow, tabs, edit (open for edit, edit toasts),
+  lib/        # connect flow, connections (disconnect, deleted profiles,
+              # re-list panes), favorites (add/remove/rename/reorder, open),
+              # edit (open for edit, edit toasts),
               # editorOverrides, sync (dialog rules), syncExcludes,
               # keymap (named actions, default bindings, matcher, formatter;
               # `useKeymap`), useTabShortcuts (app-level bindings + the

@@ -1,13 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { SessionState, SessionStateChangedEvent } from "../ipc/types";
-import {
-  disconnectReason,
-  isConnected,
-  latestSessionFor,
-  summarySessionFor,
-  useSessionStore,
-} from "./sessionStore";
+import { disconnectReason, isConnected, useSessionStore } from "./sessionStore";
 
 function change(
   sessionId: string,
@@ -50,28 +44,5 @@ describe("sessionStore", () => {
     expect(disconnectReason(useSessionStore.getState().sessions["s-1"])).toBe(
       "connection lost",
     );
-  });
-
-  it("finds the latest session of a profile", () => {
-    const { apply } = useSessionStore.getState();
-    apply(change("s-1", lost("auth failed")));
-    apply(change("s-2", connecting));
-    apply(change("s-3", connected, "p-2"));
-    const sessions = useSessionStore.getState().sessions;
-    expect(latestSessionFor(sessions, "p-1")?.sessionId).toBe("s-2");
-    expect(latestSessionFor(sessions, "p-2")?.sessionId).toBe("s-3");
-    expect(latestSessionFor(sessions, "p-3")).toBeUndefined();
-  });
-
-  it("summarizes a profile by its most pressing session", () => {
-    const { apply } = useSessionStore.getState();
-    apply(change("s-1", connected));
-    apply(change("s-2", lost("connection refused")));
-    let sessions = useSessionStore.getState().sessions;
-    expect(summarySessionFor(sessions, "p-1")?.sessionId).toBe("s-1");
-    apply(change("s-3", reconnecting));
-    sessions = useSessionStore.getState().sessions;
-    expect(summarySessionFor(sessions, "p-1")?.sessionId).toBe("s-3");
-    expect(summarySessionFor(sessions, "p-9")).toBeUndefined();
   });
 });

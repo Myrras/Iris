@@ -1,6 +1,6 @@
 /**
- * How a session's state reads on a `StatusDot` (sidebar rows, tabs): one
- * place, so the tab and the sidebar never disagree.
+ * How a session's state reads on a `StatusDot` (the sidebar's connection
+ * rows): one place for the wording and tones.
  */
 
 import type { StatusTone } from "../components/StatusDot";

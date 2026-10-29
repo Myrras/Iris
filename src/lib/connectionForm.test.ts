@@ -204,20 +204,25 @@ describe("formFromProfile", () => {
       auth: { kind: "keyFile", path: "/home/alice/.ssh/id_example" },
       startDir: "/srv",
       jump: { kind: "profile", profileId: "p-2" },
+      favorites: [],
     };
     const form = formFromProfile(profile);
     expect(form.port).toBe("2222");
     expect(form.jumpChoice).toBe("profile:p-2");
-    expect(formToInput(form, profile.id)).toEqual(profile);
+    // The favorites are not the form's (the backend keeps them).
+    expect({ ...formToInput(form, profile.id), favorites: [] }).toEqual(
+      profile,
+    );
 
     const viaConfig: ConnectionProfile = {
       ...profile,
       auth: { kind: "sshConfigHost", alias: "web" },
       jump: { kind: "alias", alias: "bastion" },
     };
-    expect(formToInput(formFromProfile(viaConfig), profile.id)).toEqual(
-      viaConfig,
-    );
+    expect(formToInput(formFromProfile(viaConfig), profile.id)).toEqual({
+      ...viaConfig,
+      favorites: undefined,
+    });
   });
 
   it("starts empty for a new connection", () => {

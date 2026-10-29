@@ -1,11 +1,12 @@
-/* Selene's tab strip: each tab is a rounded island chip on the canvas. */
+/* A pane's folder tabs: Selene's tab chips, scaled into the pane header. The
+ * strip takes the header's free width and scrolls sideways when it overflows. */
 .bar {
   display: flex;
-  align-items: center; /* chips float in the strip rather than filling it */
+  align-items: center; /* chips float in the header rather than filling it */
   gap: var(--sp-1);
-  height: var(--tabbar-h);
-  flex-shrink: 0;
-  background: transparent;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none; /* overflow scrolls (trackpad / wheel), no bar */
@@ -18,18 +19,18 @@
 .tab {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
-  height: calc(var(--tabbar-h) - var(--sp-2)); /* a chip, not full height */
-  padding: 0 var(--sp-1) 0 var(--sp-3);
-  background: color-mix(in srgb, var(--surface) 45%, transparent);
+  gap: var(--sp-1);
+  height: calc(var(--tabbar-h) - var(--sp-3)); /* a chip, not full height */
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+  background: transparent;
   border: 1px solid transparent; /* reserved so the active border never shifts layout */
   border-radius: var(--radius-md);
   color: var(--text-muted);
   cursor: default;
   white-space: nowrap;
   flex-shrink: 0;
-  min-width: 110px;
-  max-width: 200px;
+  min-width: 56px;
+  max-width: 160px;
   position: relative;
   overflow: hidden; /* clip the accent bar to the rounded corners */
   -webkit-user-select: none;
@@ -50,9 +51,9 @@
   outline-offset: -2px;
 }
 
-/* The active tab is a raised island chip. */
+/* The active tab is a raised chip on the pane's surface. */
 .active {
-  background: var(--surface);
+  background: var(--surface-2);
   color: var(--text);
   border-color: var(--border);
   box-shadow: var(--shadow-sm);
@@ -77,18 +78,6 @@
   transform: scaleX(1);
 }
 
-/* Drop target while reordering: an accent line on the leading edge. */
-.over::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: var(--accent);
-  z-index: 1;
-}
-
 @keyframes tabIn {
   from {
     opacity: 0;
@@ -101,7 +90,7 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
 }
 
 .close {
@@ -109,8 +98,8 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   background: none;
   border: none;
@@ -142,8 +131,8 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  height: calc(var(--tabbar-h) - var(--sp-2));
-  padding: 0 var(--sp-3);
+  height: calc(var(--tabbar-h) - var(--sp-3));
+  padding: 0 var(--sp-2);
   background: none;
   border: 1px solid transparent;
   border-radius: var(--radius-md);

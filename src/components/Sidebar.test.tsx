@@ -11,15 +11,18 @@ vi.mock("../ipc/commands", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ipc/commands")>()),
   deleteProfile: vi.fn(() => Promise.resolve()),
   listProfiles: vi.fn(() => Promise.resolve([])),
+  listDir: vi.fn(() => Promise.resolve([])),
+  homeDir: vi.fn(() => Promise.resolve("/home/alice")),
+  getSettings: vi.fn(() => new Promise(() => undefined)),
 }));
 vi.mock("../lib/connect", () => ({
-  connectProfile: vi.fn(),
+  openConnection: vi.fn(),
   disconnectSession: vi.fn(),
 }));
 
 import { deleteProfile } from "../ipc/commands";
-import type { ConnectionProfile } from "../ipc/types";
-import { connectProfile, disconnectSession } from "../lib/connect";
+import type { ConnectionProfile, SessionState } from "../ipc/types";
+import { disconnectSession, openConnection } from "../lib/connect";
 import { useConnectionFormStore } from "../state/connectionFormStore";
 import { initialPane, usePaneStore } from "../state/paneStore";
 import { useProfilesStore } from "../state/profilesStore";
@@ -36,6 +39,7 @@ const alpha: ConnectionProfile = {
   auth: { kind: "password" },
   startDir: null,
   jump: null,
+  favorites: [],
 };
 const beta: ConnectionProfile = { ...alpha, id: "p-2", name: "Beta" };
 
@@ -60,7 +64,12 @@ describe("Sidebar", () => {
     expect(screen.getByText("No connections yet.")).toBeInTheDocument();
     // Only the footer button invites adding one (no second link inside).
     const buttons = screen.getAllByRole("button").map((b) => b.textContent);
-    expect(buttons).toEqual(["Connections", "New connection…"]);
+    expect(buttons).toEqual([
+      "Local",
+      "Home",
+      "Connections",
+      "New connection…",
+    ]);
   });
 
   it("collapses and expands the Connections section", () => {
@@ -81,19 +90,28 @@ describe("Sidebar", () => {
     });
   });
 
-  it("lists saved connections with their state", () => {
-    withProfiles([alpha, beta]);
+  /** `profileId`'s connection holds `sessionId`, in `state`. */
+  function session(
+    profileId: string,
+    sessionId: string,
+    state: SessionState = { status: "connected" },
+  ) {
+    useTabsStore.getState().ensureConnection(profileId);
+    useTabsStore.getState().attachSession(profileId, sessionId, null);
     useSessionStore.getState().apply({
       type: "sessionStateChanged",
-      sessionId: "s-1",
-      profileId: "p-1",
-      state: { status: "connected" },
+      sessionId,
+      profileId,
+      state,
     });
-    useSessionStore.getState().apply({
-      type: "sessionStateChanged",
-      sessionId: "s-2",
-      profileId: "p-2",
-      state: { status: "disconnected", reason: "connection refused" },
+  }
+
+  it("lists saved connections with the state of their session", () => {
+    withProfiles([alpha, beta]);
+    session("p-1", "s-1");
+    session("p-2", "s-2", {
+      status: "disconnected",
+      reason: "connection refused",
     });
     render(<Sidebar />);
     const list = screen.getByRole("list", { name: "Saved connections" });
@@ -107,36 +125,34 @@ describe("Sidebar", () => {
     ).toBeInTheDocument();
   });
 
-  it("connects on click", () => {
+  it("shows a connection without a session as not connected", () => {
     withProfiles([alpha]);
-    render(<Sidebar />);
-    fireEvent.click(screen.getByText("Alpha"));
-    expect(connectProfile).toHaveBeenCalledWith(alpha);
-  });
-
-  it("marks the connection of the tab on screen and disconnects only it", () => {
-    withProfiles([alpha, beta]);
+    // A session that belongs to no connection (gone, or never shown).
     useSessionStore.getState().apply({
       type: "sessionStateChanged",
-      sessionId: "s-1",
+      sessionId: "s-9",
       profileId: "p-1",
       state: { status: "connected" },
     });
-    useSessionStore.getState().apply({
-      type: "sessionStateChanged",
-      sessionId: "s-2",
-      profileId: "p-2",
-      state: { status: "connected" },
-    });
-    const tabId = useTabsStore.getState().activeTabId;
-    useTabsStore
-      .getState()
-      .update(tabId, { sessionId: "s-1", profileId: "p-1" });
     render(<Sidebar />);
-    // Beta is connected in another tab: its dot says so, but no Disconnect.
     expect(
-      screen.queryByRole("button", { name: "Disconnect Beta" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("img", { name: "Not connected" }),
+    ).toBeInTheDocument();
+  });
+
+  it("opens the connection on click", () => {
+    withProfiles([alpha]);
+    render(<Sidebar />);
+    fireEvent.click(screen.getByText("Alpha"));
+    expect(openConnection).toHaveBeenCalledWith(alpha);
+  });
+
+  it("marks the active connection and disconnects each one by its own session", () => {
+    withProfiles([alpha, beta]);
+    session("p-1", "s-1");
+    session("p-2", "s-2");
+    useTabsStore.getState().activate("p-1");
+    render(<Sidebar />);
     expect(screen.getByText("Alpha").closest("[role=button]")).toHaveAttribute(
       "data-selected",
       "true",
@@ -144,28 +160,20 @@ describe("Sidebar", () => {
     expect(
       screen.getByText("Beta").closest("[role=button]"),
     ).not.toHaveAttribute("data-selected");
+    // A connection in the background can be disconnected too.
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect Beta" }));
+    expect(disconnectSession).toHaveBeenCalledWith("s-2");
     fireEvent.click(screen.getByRole("button", { name: "Disconnect Alpha" }));
     expect(disconnectSession).toHaveBeenCalledWith("s-1");
   });
 
-  it("shows a reconnecting session of any tab on the row's dot", () => {
+  it("pulses a warning while a connection reconnects", () => {
     withProfiles([alpha]);
-    useSessionStore.getState().apply({
-      type: "sessionStateChanged",
-      sessionId: "s-1",
-      profileId: "p-1",
-      state: { status: "connected" },
-    });
-    useSessionStore.getState().apply({
-      type: "sessionStateChanged",
-      sessionId: "s-2",
-      profileId: "p-1",
-      state: {
-        status: "reconnecting",
-        attempt: 2,
-        maxAttempts: 5,
-        nextRetryInSecs: 2,
-      },
+    session("p-1", "s-1", {
+      status: "reconnecting",
+      attempt: 2,
+      maxAttempts: 5,
+      nextRetryInSecs: 2,
     });
     render(<Sidebar />);
     const dot = screen.getByRole("img", {
@@ -175,14 +183,19 @@ describe("Sidebar", () => {
     expect(dot).toHaveAttribute("data-pulse", "true");
   });
 
-  it("connects in a new tab from the context menu", () => {
-    withProfiles([alpha]);
+  it("connects or disconnects from the context menu", () => {
+    withProfiles([alpha, beta]);
+    session("p-2", "s-2");
     render(<Sidebar />);
     fireEvent.contextMenu(screen.getByText("Alpha"));
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Connect in New Tab" }),
-    );
-    expect(connectProfile).toHaveBeenCalledWith(alpha, { newTab: true });
+    expect(
+      screen.queryByRole("menuitem", { name: "Connect in New Tab" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Connect" }));
+    expect(openConnection).toHaveBeenCalledWith(alpha);
+    fireEvent.contextMenu(screen.getByText("Beta"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Disconnect" }));
+    expect(disconnectSession).toHaveBeenCalledWith("s-2");
   });
 
   it("edits from the context menu", () => {

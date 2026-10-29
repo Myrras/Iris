@@ -1,7 +1,7 @@
 /**
  * The islands below the title bar: the sidebar on the left and the work
- * column on the right (tab strip, the Local and Remote panes with the
- * preview island at their right, the transfer island underneath). Between
+ * column on the right (the Local and Remote panes with the preview island
+ * at their right, the transfer island underneath). Between
  * the islands sit `Splitter`s in the canvas gaps: sidebar width, the
  * Local/Remote split, the preview width and the transfer list height. The
  * sizes live in `layoutStore`; `useShellLayout` clamps them to the window and
@@ -23,7 +23,6 @@ import { Pane } from "./Pane";
 import { PreviewPanel } from "./PreviewPanel";
 import { Sidebar } from "./Sidebar";
 import { Splitter } from "./Splitter";
-import { TabBar } from "./TabBar";
 import { TransferPanel } from "./TransferPanel";
 import { LocalIcon, ServerIcon } from "./icons";
 import styles from "./Shell.module.css";
@@ -54,9 +53,6 @@ export function Shell() {
         onCommit={setSidebarWidth}
       />
       <main className={styles.work}>
-        <div className={styles.tabs}>
-          <TabBar />
-        </div>
         <div className={styles.panes}>
           <div className={styles.paneLocal}>
             <Pane id="local" title="Local" Icon={LocalIcon} />

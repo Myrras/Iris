@@ -1,13 +1,13 @@
 /**
- * Asks before closing a tab, or disconnecting its session, while that
- * session still has unfinished transfers: a disconnect cancels them (the
- * session id is gone, so they could never resume). In the style of
- * `CloseWarningModal`. Opened by `tabsStore.pending` (`lib/tabs`).
+ * Asks before disconnecting a connection while its session still has
+ * unfinished transfers: a disconnect cancels them (the session id is gone,
+ * so they could never resume). In the style of `CloseWarningModal`. Opened
+ * by `tabsStore.pending` (`lib/connections`).
  */
 
 import { useMemo, useRef } from "react";
 
-import { confirmPending } from "../lib/tabs";
+import { confirmPending } from "../lib/connections";
 import { transferCount, transferTotals } from "../lib/transferFormat";
 import { useProfilesStore } from "../state/profilesStore";
 import { useTabsStore } from "../state/tabsStore";
@@ -20,15 +20,15 @@ import { Modal } from "./Modal";
 import { StatusDot } from "./StatusDot";
 import styles from "./CloseWarningModal.module.css";
 
-export function TabCloseModal() {
+export function DisconnectModal() {
   const pending = useTabsStore((s) => s.pending);
-  const tab = useTabsStore((s) =>
-    s.tabs.find((t) => t.id === s.pending?.tabId),
+  const connection = useTabsStore((s) =>
+    s.pending ? s.connections[s.pending.profileId] : undefined,
   );
   const profiles = useProfilesStore((s) => s.profiles);
   const jobs = useTransferStore((s) => s.jobs);
   const batches = useTransferStore((s) => s.batches);
-  const sessionId = tab?.sessionId ?? null;
+  const sessionId = connection?.sessionId ?? null;
   const counting = countingBatches(batches).filter(
     (b) => b.sessionId === sessionId,
   ).length;
@@ -38,14 +38,13 @@ export function TabCloseModal() {
     [jobs, sessionId],
   );
   // Keep the wording while the dialog animates out after `pending` clears.
-  const last = useRef({ name: "", close: true });
-  if (pending && tab) {
-    last.current = {
-      name: profiles.find((p) => p.id === tab.profileId)?.name ?? tab.title,
-      close: pending.action === "close",
-    };
+  const last = useRef("");
+  if (pending && connection) {
+    last.current =
+      profiles.find((p) => p.id === connection.profileId)?.name ??
+      "this connection";
   }
-  const { name, close } = last.current;
+  const name = last.current;
   const cancel = () => useTabsStore.getState().setPending(null);
 
   const unfinished =
@@ -68,8 +67,8 @@ export function TabCloseModal() {
 
   return (
     <Modal
-      open={pending !== null && tab !== undefined}
-      title={close ? "Close tab?" : "Disconnect?"}
+      open={pending !== null && connection !== undefined}
+      title="Disconnect?"
       tone="warning"
       onClose={cancel}
       footer={
@@ -82,15 +81,13 @@ export function TabCloseModal() {
             className="danger"
             onClick={() => void confirmPending()}
           >
-            {close ? "Close tab" : "Disconnect"}
+            Disconnect
           </button>
         </>
       }
     >
       <p className={styles.intro}>
-        {`${transferCount(unfinished)} of ${name} will be cancelled if you ${
-          close ? "close this tab" : "disconnect"
-        } now. Partly copied files stay where they are.`}
+        {`${transferCount(unfinished)} of ${name} will be cancelled if you disconnect now. Partly copied files stay where they are.`}
       </p>
       {lines.length > 0 && (
         <ul className={styles.list} aria-label="Unfinished transfers">

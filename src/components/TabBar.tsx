@@ -1,82 +1,57 @@
 /**
- * The workspace tab strip above the two pane islands (Selene's TabBar): one
- * chip per tab with its session's status dot, title and close button;
- * middle-click closes, drag reorders, `+` opens a blank tab. The strip
- * scrolls sideways when the tabs overflow it.
- *
- * Closing goes through `requestCloseTab`, which asks first (`TabCloseModal`)
- * when the tab's session still has transfers.
+ * A pane's folder tabs (Selene's tab strip, scaled into the pane header):
+ * one chip per tab named after its folder, with the full path as tooltip.
+ * `+` opens a tab on the folder shown, middle-click or × closes one; a pane
+ * always keeps one tab, so a lone tab has no close button. The Remote pane
+ * shows the active connection's tabs (none without one). The strip scrolls
+ * sideways when the tabs overflow it.
  */
 
-import { useRef, useState } from "react";
-
 import { withHint } from "../lib/keymap";
-import { sessionStatus, type SessionStatusView } from "../lib/sessionStatus";
-import { requestCloseTab } from "../lib/tabs";
+import { baseName } from "../lib/path";
 import { useKeymap } from "../lib/useKeymap";
-import { useProfilesStore } from "../state/profilesStore";
-import { useSessionStore, type SessionInfo } from "../state/sessionStore";
-import { useTabsStore, type Tab } from "../state/tabsStore";
-import { StatusDot } from "./StatusDot";
+import { usePaneStore, type PaneId } from "../state/paneStore";
+import { tabSetOf, useTabsStore } from "../state/tabsStore";
 import { AddIcon, CloseIcon } from "./icons";
 import styles from "./TabBar.module.css";
 
-/** A tab's dot: its connect in progress, else its session's state. */
-function tabStatus(
-  tab: Tab,
-  session: SessionInfo | undefined,
-): SessionStatusView {
-  if (tab.connecting) return sessionStatus({ status: "connecting" });
-  if (!tab.sessionId) return sessionStatus(undefined);
-  // The tab got the session once `connect` resolved: it is up even before
-  // its state event arrived.
-  return sessionStatus(session?.state ?? { status: "connected" });
-}
+/** A tab's caption while its folder is not known yet (it opens at home). */
+const HOME_TITLE = "Home";
 
-export function TabBar() {
-  const tabs = useTabsStore((s) => s.tabs);
-  const activeTabId = useTabsStore((s) => s.activeTabId);
-  const sessions = useSessionStore((s) => s.sessions);
-  const profiles = useProfilesStore((s) => s.profiles);
+export function TabBar({ pane }: { pane: PaneId }) {
+  const tabs = useTabsStore((s) => tabSetOf(s, pane));
+  // The tab on screen lives in paneStore; its snapshot is stale.
+  const shownPath = usePaneStore((s) => s.panes[pane].path);
   const keymap = useKeymap();
-
-  // Drag-to-reorder: the dragged tab's id lives in a ref (no re-render
-  // needed); `overId` drives the insertion line.
-  const dragId = useRef<string | null>(null);
-  const [overId, setOverId] = useState<string | null>(null);
-  const endDrag = () => {
-    dragId.current = null;
-    setOverId(null);
-  };
+  if (!tabs) return null;
+  const closable = tabs.tabs.length > 1;
+  const store = useTabsStore.getState;
 
   return (
-    <div className={styles.bar} role="tablist" aria-label="Tabs">
-      {tabs.map((tab) => {
-        const active = tab.id === activeTabId;
-        // A renamed profile renames its tabs.
-        const title =
-          profiles.find((p) => p.id === tab.profileId)?.name ?? tab.title;
-        const status = tabStatus(
-          tab,
-          tab.sessionId ? sessions[tab.sessionId] : undefined,
-        );
+    <div
+      className={styles.bar}
+      role="tablist"
+      aria-label={`${pane === "local" ? "Local" : "Remote"} tabs`}
+    >
+      {tabs.tabs.map((tab) => {
+        const active = tab.id === tabs.activeTabId;
+        const path =
+          (active ? shownPath : tab.pane.path) ?? tab.pendingPath ?? null;
+        const title = path ? baseName(path) : HOME_TITLE;
         return (
           <div
             key={tab.id}
             role="tab"
             aria-selected={active}
             tabIndex={active ? 0 : -1}
-            className={`${styles.tab}${active ? ` ${styles.active}` : ""}${
-              overId === tab.id ? ` ${styles.over}` : ""
-            }`}
-            draggable
-            title={title}
-            onClick={() => useTabsStore.getState().switchTo(tab.id)}
+            className={`${styles.tab}${active ? ` ${styles.active}` : ""}`}
+            title={path ?? title}
+            onClick={() => store().switchTab(pane, tab.id)}
             onKeyDown={(e) => {
               if (e.target !== e.currentTarget) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
-                useTabsStore.getState().switchTo(tab.id);
+                store().switchTab(pane, tab.id);
               }
             }}
             onMouseDown={(e) => {
@@ -85,52 +60,28 @@ export function TabBar() {
             }}
             onAuxClick={(e) => {
               // Middle-click closes, as in a browser.
-              if (e.button === 1) requestCloseTab(tab.id);
+              if (e.button === 1) store().closeTab(pane, tab.id);
             }}
-            onDragStart={(e) => {
-              dragId.current = tab.id;
-              e.dataTransfer.effectAllowed = "move";
-            }}
-            onDragEnter={(e) => {
-              if (dragId.current === null) return;
-              e.preventDefault();
-              if (tab.id !== dragId.current) setOverId(tab.id);
-            }}
-            onDragOver={(e) => {
-              if (dragId.current === null) return;
-              e.preventDefault();
-              e.dataTransfer.dropEffect = "move";
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              const from = dragId.current;
-              endDrag();
-              if (from && from !== tab.id) {
-                useTabsStore.getState().moveTab(from, tab.id);
-              }
-            }}
-            onDragEnd={endDrag}
           >
-            <StatusDot
-              tone={status.tone}
-              label={status.label}
-              pulse={status.pulse}
-            />
             <span className={styles.title}>{title}</span>
-            <button
-              type="button"
-              className={styles.close}
-              aria-label={`Close ${title}`}
-              title={
-                active ? withHint("Close tab", keymap, "closeTab") : "Close tab"
-              }
-              onClick={(e) => {
-                e.stopPropagation();
-                requestCloseTab(tab.id);
-              }}
-            >
-              <CloseIcon size={12} />
-            </button>
+            {closable && (
+              <button
+                type="button"
+                className={styles.close}
+                aria-label={`Close ${title}`}
+                title={
+                  active
+                    ? withHint("Close tab", keymap, "closeTab")
+                    : "Close tab"
+                }
+                onClick={(e) => {
+                  e.stopPropagation();
+                  store().closeTab(pane, tab.id);
+                }}
+              >
+                <CloseIcon size={12} />
+              </button>
+            )}
           </div>
         );
       })}
@@ -139,9 +90,9 @@ export function TabBar() {
         className={styles.add}
         title={withHint("New tab", keymap, "newTab")}
         aria-label="New tab"
-        onClick={() => useTabsStore.getState().newTab()}
+        onClick={() => store().newTab(pane)}
       >
-        <AddIcon />
+        <AddIcon size={13} />
       </button>
     </div>
   );

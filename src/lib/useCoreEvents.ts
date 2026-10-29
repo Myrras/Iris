@@ -5,12 +5,12 @@
  * `sessionStore`, transfer events update `transferStore`, and settings
  * changes re-pull `backendSettingsStore`, and remote edit reports its saves
  * (a toast per upload or failure; a conflict joins the prompt queue), and a
- * finished sync toasts and re-lists its tab's panes. Also
- * does the initial profile and
- * transfer load, and turns restored tabs of deleted profiles into blank ones.
+ * finished sync toasts and re-lists the panes showing it. Also does the
+ * initial profile and transfer load, and drops the connection (tabs and
+ * session) of a deleted profile.
  *
  * The automatic reconnect is announced here: a session going from
- * `reconnecting` to `connected` toasts and re-lists its tab's panes; one
+ * `reconnecting` to `connected` toasts and re-lists the panes showing it; one
  * going from `reconnecting` to `disconnected` (the core gave up, or needs a
  * prompt) toasts why. A manual Retry reports its own outcome (`connect.ts`).
  */
@@ -39,12 +39,11 @@ import { useProfilesStore } from "../state/profilesStore";
 import { usePromptStore } from "../state/promptStore";
 import { useSessionStore } from "../state/sessionStore";
 import { syncFinished } from "../state/syncStore";
-import { useTabsStore } from "../state/tabsStore";
 import { toastError, toastSuccess } from "../state/toastStore";
 import { useTransferStore } from "../state/transferStore";
 import { dragOutProgress } from "./dragOut";
 import { editFailed, editUploaded } from "./edit";
-import { refreshSessionPanes } from "./tabs";
+import { forgetDeletedProfiles, refreshSessionPanes } from "./connections";
 
 function onSessionState(event: SessionStateChangedEvent) {
   const previous = useSessionStore.getState().apply(event);
@@ -107,11 +106,7 @@ export function useCoreEvents(): void {
       onSyncFinished(syncFinished),
     ];
     const forgetMissing = (profiles: { id: string }[], loaded: boolean) => {
-      if (loaded) {
-        useTabsStore
-          .getState()
-          .forgetMissingProfiles(new Set(profiles.map((p) => p.id)));
-      }
+      if (loaded) forgetDeletedProfiles(new Set(profiles.map((p) => p.id)));
     };
     const unsubProfiles = useProfilesStore.subscribe((s) =>
       forgetMissing(s.profiles, s.loaded),

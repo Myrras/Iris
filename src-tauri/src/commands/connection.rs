@@ -5,7 +5,7 @@
 
 use tauri::State;
 
-use iris_core::{ConnectionProfile, ProfileId, Secret, SecretKind, SshConfigHost};
+use iris_core::{ConnectionProfile, Favorite, ProfileId, Secret, SecretKind, SshConfigHost};
 
 use crate::error::IpcError;
 use crate::state::AppState;
@@ -31,6 +31,19 @@ pub fn save_profile(
 #[tauri::command]
 pub fn reorder_profiles(state: State<'_, AppState>, ids: Vec<ProfileId>) -> Result<(), IpcError> {
     Ok(state.core.reorder_profiles(ids)?)
+}
+
+/// Replace a profile's favorite remote folders; returns what was stored,
+/// `notFound` for an unknown profile or `invalidInput` (a path not from `/`,
+/// a folder twice, a label over 255 characters, more than 200).
+/// `save_profile` never changes them.
+#[tauri::command]
+pub fn set_profile_favorites(
+    state: State<'_, AppState>,
+    profile_id: ProfileId,
+    favorites: Vec<Favorite>,
+) -> Result<Vec<Favorite>, IpcError> {
+    Ok(state.core.set_profile_favorites(profile_id, favorites)?)
 }
 
 /// Delete a profile and its remembered secrets; `notFound` when it does not

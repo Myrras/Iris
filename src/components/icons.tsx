@@ -59,6 +59,7 @@ import {
   ShieldQuestion,
   Settings,
   Square,
+  Star,
   Sun,
   Trash2,
   TriangleAlert,
@@ -100,6 +101,10 @@ export const SymlinkIcon = icon(Link2, { size: 12 });
 export const KeyIcon = icon(KeyRound);
 export const TransfersIcon = icon(ArrowDownUp);
 export const HomeIcon = icon(House);
+/** A favorite folder (sidebar), and the path bar's star when it is one. */
+export const FavoriteIcon = icon(Star, { fill: "currentColor" });
+/** The path bar's star for a folder that is not a favorite. */
+export const FavoriteOffIcon = icon(Star);
 
 // Actions / affordances.
 export const AddIcon = icon(Plus, { size: 15 });

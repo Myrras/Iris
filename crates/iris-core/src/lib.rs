@@ -47,6 +47,7 @@ pub mod drag_out;
 pub mod edit;
 pub mod error;
 pub mod events;
+pub mod favorites;
 pub mod fs;
 pub mod ids;
 mod open_local;
@@ -73,6 +74,7 @@ pub use drag_out::{DragOutLimits, DragOutReady};
 pub use edit::{EditInfo, EditResolution, EditStatus, Opener, RemoteStamp};
 pub use error::{CoreError, CoreResult};
 pub use events::{CoreEvent, EventBus, SessionState};
+pub use favorites::Favorite;
 pub use fs::{
     BatchFailure, BatchReport, Entry, EntryKind, FileSystem, FsTarget, LinkTargetKind, LocalFs,
     SystemTrash, Trash, LOCAL_LISTINGS, REMOTE_LISTINGS, REMOTE_WALK_CHANNELS,
@@ -250,6 +252,17 @@ impl Core {
         Ok(saved)
     }
 
+    /// Replace the Local favorite folders (absolute paths, none twice,
+    /// labels ≤ 255 characters, at most 200; `InvalidInput` otherwise and
+    /// nothing changes). Persisted in the settings, then announces
+    /// [`CoreEvent::SettingsChanged`]. Returns what was stored.
+    /// [`Core::save_settings`] never changes them.
+    pub fn set_local_favorites(&self, list: Vec<Favorite>) -> CoreResult<Vec<Favorite>> {
+        let saved = self.inner.settings.set_local_favorites(list)?;
+        self.inner.events.publish(CoreEvent::SettingsChanged);
+        Ok(saved)
+    }
+
     // -- Connection profiles ------------------------------------------------
 
     /// Back the saved connections with `path` (normally
@@ -280,6 +293,21 @@ impl Core {
         self.inner.profiles.reorder(&ids)?;
         self.inner.events.publish(CoreEvent::ProfilesChanged);
         Ok(())
+    }
+
+    /// Replace the favorite remote folders of a saved connection (`NotFound`
+    /// if unknown; paths from `/`, none twice, labels ≤ 255 characters, at
+    /// most 200, else `InvalidInput`; nothing changes on error). Persisted,
+    /// then announces [`CoreEvent::ProfilesChanged`]. Returns what was
+    /// stored. [`Core::save_profile`] never changes them.
+    pub fn set_profile_favorites(
+        &self,
+        profile_id: ProfileId,
+        list: Vec<Favorite>,
+    ) -> CoreResult<Vec<Favorite>> {
+        let saved = self.inner.profiles.set_favorites(profile_id, list)?;
+        self.inner.events.publish(CoreEvent::ProfilesChanged);
+        Ok(saved)
     }
 
     /// Delete a saved connection (`NotFound` if unknown) and its remembered
@@ -1247,6 +1275,7 @@ mod tests {
             auth: AuthMethod::Password,
             start_dir: None,
             jump: None,
+            favorites: Vec::new(),
         }
     }
 
@@ -1260,6 +1289,28 @@ mod tests {
         core.delete_profile(saved.id).unwrap();
         assert_eq!(rx.try_recv().unwrap(), CoreEvent::ProfilesChanged);
         assert!(core.list_profiles().is_empty());
+    }
+
+    #[test]
+    fn setting_favorites_announces_the_change_and_refusals_do_not() {
+        let core = Core::new();
+        let saved = core.save_profile(profile()).unwrap();
+        let mut rx = core.subscribe_events();
+        let fav = |path: &str| Favorite {
+            path: path.into(),
+            label: None,
+        };
+        core.set_profile_favorites(saved.id, vec![fav("/srv")])
+            .unwrap();
+        assert_eq!(rx.try_recv().unwrap(), CoreEvent::ProfilesChanged);
+        let local = std::env::temp_dir().to_string_lossy().into_owned();
+        core.set_local_favorites(vec![fav(&local)]).unwrap();
+        assert_eq!(rx.try_recv().unwrap(), CoreEvent::SettingsChanged);
+        assert!(core
+            .set_profile_favorites(saved.id, vec![fav("srv")])
+            .is_err());
+        assert!(core.set_local_favorites(vec![fav("srv")]).is_err());
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

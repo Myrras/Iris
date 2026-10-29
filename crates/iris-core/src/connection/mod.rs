@@ -14,6 +14,7 @@ mod store;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, CoreResult};
+use crate::favorites::{self, Favorite, FavoriteSide};
 use crate::ids::ProfileId;
 
 pub use store::ProfileStore;
@@ -25,7 +26,7 @@ pub const DEFAULT_PORT: u16 = 22;
 ///
 /// On the wire and on disk:
 /// `{ "id", "name", "host", "port", "user", "auth": { "kind": … }, "startDir",
-/// "jump" }`.
+/// "jump", "favorites" }`.
 /// `id` may be omitted when saving a new profile (a fresh one is generated)
 /// and `port` defaults to 22.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +49,11 @@ pub struct ConnectionProfile {
     /// directly (or as `~/.ssh/config` says, for an `sshConfigHost`).
     #[serde(default)]
     pub jump: Option<JumpHost>,
+    /// Favorite remote folders, in the user's order. Changed only through
+    /// [`crate::Core::set_profile_favorites`]: saving the profile keeps the
+    /// stored list whatever this field says.
+    #[serde(default)]
+    pub favorites: Vec<Favorite>,
 }
 
 fn default_port() -> u16 {
@@ -172,6 +178,7 @@ impl ConnectionProfile {
             auth,
             start_dir,
             jump,
+            favorites: favorites::sanitize(self.favorites, FavoriteSide::Remote),
         })
     }
 }
@@ -190,6 +197,7 @@ mod tests {
             auth: AuthMethod::Password,
             start_dir: None,
             jump: None,
+            favorites: Vec::new(),
         }
     }
 
@@ -296,6 +304,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(profile.jump, None);
+        assert!(profile.favorites.is_empty());
+    }
+
+    #[test]
+    fn favorites_are_on_the_wire_and_tidied_by_normalized() {
+        let profile = ConnectionProfile {
+            favorites: vec![
+                Favorite {
+                    path: "/var/www/".into(),
+                    label: Some(" Site ".into()),
+                },
+                Favorite {
+                    path: "relative".into(),
+                    label: None,
+                },
+            ],
+            ..sample()
+        };
+        let json = serde_json::to_value(&profile).unwrap();
+        assert_eq!(json["favorites"][0]["path"], "/var/www/");
+        assert_eq!(
+            profile.normalized().unwrap().favorites,
+            vec![Favorite {
+                path: "/var/www".into(),
+                label: Some("Site".into()),
+            }]
+        );
     }
 
     #[test]

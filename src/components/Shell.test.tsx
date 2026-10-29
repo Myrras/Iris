@@ -9,7 +9,6 @@ vi.mock("./PreviewPanel", () => ({
   PreviewPanel: () => <div data-testid="preview" />,
 }));
 vi.mock("./Sidebar", () => ({ Sidebar: () => <aside /> }));
-vi.mock("./TabBar", () => ({ TabBar: () => <div /> }));
 vi.mock("./TransferPanel", () => ({
   TransferPanel: () => <section aria-label="Transfers" />,
 }));
