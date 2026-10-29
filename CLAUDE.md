@@ -1154,7 +1154,7 @@ just dev            # run the app (Vite + Tauri, hot reload)
 just build          # production bundle
 just dev-signed     # debug .app, stable signing identity, launches it (macOS)
 just build-signed   # release .app, stable signing identity (macOS, shared recipe)
-just install-signed # build-signed + copy to /Applications/Iris.app
+just install-signed # signed build + atomic install to /Applications/Iris.app (no Finder window)
 just check          # cargo check --workspace
 just ci             # shared: rustfmt, clippy -D warnings, cargo test, prettier, eslint, vitest, build
 just test-core      # iris-core tests only
@@ -1164,9 +1164,12 @@ just version 0.2.0  # bump + sync version across all manifests (emergencies only
 just version-check  # verify versions are in sync
 ```
 
-Shared recipes (`rust`, `frontend`, `ci`, `build-signed`, `sweep`) come from
-`~/.ci-workflows/common.just` (symlink to a clone of
-`RobbieMinderhoud/ci-workflows`); don't redefine those names.
+Shared recipes (`dev`, `dev-signed`, `build`, `build-signed`, `install-signed`,
+`check`, `test-core`, `format`, `version`, `version-check`, `rust`, `frontend`,
+`ci`, `sweep`) come from `~/.ci-workflows/common.just` (symlink to a clone of
+`RobbieMinderhoud/ci-workflows`); don't redefine those names. App name and core
+crate are derived (`productName`, the one `*-core` package). Only `default`,
+`icons` and `test-integration` live in the justfile.
 `test-integration` must not depend on them: in CI the import resolves to nothing.
 
 CI is shared: `.github/workflows/` holds thin callers pinned to
