@@ -8,12 +8,18 @@ export default tseslint.config(
   {
     ignores: [
       "dist",
+      "coverage",
       "node_modules",
       "src-tauri",
       "crates",
       "target",
       "**/*.config.js",
       "**/*.config.ts",
+      // Sibling agent worktrees (with their own node_modules) can live
+      // under here — never part of this repo's own lint scope.
+      "**/.claude/worktrees/**",
+      ".claude",
+      ".podium",
     ],
   },
   js.configs.recommended,
