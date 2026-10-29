@@ -86,7 +86,7 @@ Iris is a cross-platform **desktop remote file manager over SSH** (in the spirit
 of Forklift), built in **Rust + Tauri 2 + React + TypeScript + Vite**.
 macOS-first; Windows kept in mind.
 
-> Private on GitHub: https://github.com/RobbieMinderhoud/Iris.
+> Public on GitHub: https://github.com/RobbieMinderhoud/Iris.
 
 ## Boilerplate (shared skeleton)
 
