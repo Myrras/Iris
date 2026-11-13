@@ -1,5 +1,6 @@
 /* A file pane island: rounded, bordered, elevated, like Podium's work island. */
 .pane {
+  composes: glass from global;
   position: relative; /* anchors .dropOverlay */
   flex: 1;
   min-width: 0;
@@ -9,7 +10,9 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-md);
+  box-shadow:
+    inset 0 1px 0 var(--glass-hi),
+    var(--shadow-md);
   overflow: hidden;
   animation: islandIn var(--dur-3) var(--ease-out);
   transition:
@@ -21,6 +24,7 @@
 .pane[data-active="true"] {
   border-color: var(--accent);
   box-shadow:
+    inset 0 1px 0 var(--glass-hi),
     0 0 0 1px var(--accent),
     var(--shadow-md);
 }
@@ -219,6 +223,7 @@
 .pane[data-drop-target="true"] {
   border-color: var(--accent);
   box-shadow:
+    inset 0 1px 0 var(--glass-hi),
     0 0 0 1px var(--accent),
     var(--shadow-md);
 }

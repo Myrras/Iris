@@ -3,13 +3,16 @@
 
 /* A floating island: rounded, bordered, elevated; clips its sections. */
 .sidebar {
+  composes: glass from global;
   height: 100%;
   width: var(--sidebar-w);
   min-width: var(--sidebar-w);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-md);
+  box-shadow:
+    inset 0 1px 0 var(--glass-hi),
+    var(--shadow-md);
   display: flex;
   flex-direction: column;
   overflow: hidden;

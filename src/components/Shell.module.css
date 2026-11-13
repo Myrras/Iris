@@ -11,6 +11,10 @@
   gap: 0;
 }
 
+:global(:root[data-theme^="glass"]) .body {
+  background: transparent;
+}
+
 /* The work column: the pane row and the transfer island. It has no
    island chrome of its own — the canvas shows in the gaps between islands. */
 .work {

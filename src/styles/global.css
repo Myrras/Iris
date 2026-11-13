@@ -35,6 +35,25 @@ body {
   flex-direction: column;
 }
 
+/* Glass: the canvas gradient is the window backdrop; the title bar and shell
+   are transparent over it so the gradient is laid out once. */
+:root[data-theme^="glass"] body {
+  background: var(--canvas);
+}
+
+/* Frosted glass; modules opt in with `composes: glass from global`.
+   Literal values mirror --glass-blur / --glass-sat: WebKit (WKWebView)
+   computes a backdrop-filter that uses var() to none. */
+:root[data-theme="glass-dark"] .glass {
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  backdrop-filter: blur(40px) saturate(180%);
+}
+
+:root[data-theme="glass-light"] .glass {
+  -webkit-backdrop-filter: blur(30px) saturate(160%);
+  backdrop-filter: blur(30px) saturate(160%);
+}
+
 /* Custom title bar drag handle (Windows, where decorations are off). WebView2
    uses the CSS app-region for window dragging incl. touch/pen; interactive
    children opt back out with `app-region: no-drag`. No-op on macOS (the native
@@ -173,6 +192,12 @@ label {
   border-radius: 6px;
   border: 2px solid var(--bg);
   transition: background var(--dur-2) var(--ease-out);
+}
+
+/* Glass: --bg is translucent, so the inset look comes from a clear border. */
+:root[data-theme^="glass"] ::-webkit-scrollbar-thumb {
+  border-color: transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {

@@ -23,6 +23,9 @@
 }
 
 .headerRow {
+  /* Glass: rows scroll under this translucent header, so it blurs them (one
+     element, never the virtualised rows). */
+  composes: glass from global;
   position: sticky;
   top: 0;
   z-index: 2;

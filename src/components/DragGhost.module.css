@@ -1,4 +1,5 @@
 .ghost {
+  composes: glass from global;
   position: fixed;
   top: 0;
   left: 0;
@@ -9,8 +10,10 @@
   padding: var(--sp-1) var(--sp-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-md);
+  background: var(--pop-surface);
+  box-shadow:
+    inset 0 1px 0 var(--glass-hi),
+    var(--shadow-md);
   color: var(--text-muted);
   font-size: var(--fs-sm);
   white-space: nowrap;
