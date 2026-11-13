@@ -7,6 +7,7 @@
 }
 
 .menu {
+  composes: glass from global;
   position: fixed;
   z-index: 61;
   min-width: 180px;
@@ -18,11 +19,6 @@
     inset 0 1px 0 var(--glass-hi),
     var(--shadow-md);
   transform-origin: top left;
-}
-
-:global(:root[data-theme^="glass"]) .menu {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 
 .menu[data-state="open"] {

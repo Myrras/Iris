@@ -1,5 +1,6 @@
 /* The preview island: same chrome as the panes. */
 .panel {
+  composes: glass from global;
   /* One width, whatever it shows (the stored width, set by Shell), and the
      row's height: content scrolls or fits inside. */
   flex: 0 0 var(--preview-w);
@@ -19,14 +20,9 @@
   animation: islandIn var(--dur-3) var(--ease-out);
 }
 
-:global(:root[data-theme^="glass"]) .panel,
-:global(:root[data-theme^="glass"]) .handle {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-}
-
 /* Closed: an overlay tab on the window's right edge; takes no layout space. */
 .handle {
+  composes: glass from global;
   position: fixed;
   top: 50%;
   right: 0;

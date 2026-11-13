@@ -121,8 +121,9 @@
 
   /* Glass (frosted, translucent islands). Neutral here so the solid themes
      render unchanged; the glass themes override them. `backdrop-filter` is
-     only set under `[data-theme^="glass"]`: it makes the element a containing
-     block for position:fixed children. */
+     only set under the glass themes (`.glass` in global.css, which repeats
+     --glass-blur / --glass-sat as literals): it makes the element a
+     containing block for position:fixed children. */
   --glass-blur: 0px;
   --glass-sat: 100%;
   --glass-hi: transparent; /* inset top highlight on glass edges */

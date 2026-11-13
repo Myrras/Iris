@@ -23,6 +23,7 @@
 }
 
 .card {
+  composes: glass from global;
   background: var(--pop-surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
@@ -35,11 +36,6 @@
   flex-direction: column;
   outline: none;
   transform-origin: center;
-}
-
-:global(:root[data-theme^="glass"]) .card {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 
 .card[data-state="open"] {

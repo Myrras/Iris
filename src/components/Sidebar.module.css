@@ -3,6 +3,7 @@
 
 /* A floating island: rounded, bordered, elevated; clips its sections. */
 .sidebar {
+  composes: glass from global;
   height: 100%;
   width: var(--sidebar-w);
   min-width: var(--sidebar-w);
@@ -17,11 +18,6 @@
   overflow: hidden;
   flex-shrink: 0;
   animation: islandIn var(--dur-3) var(--ease-out);
-}
-
-:global(:root[data-theme^="glass"]) .sidebar {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 
 @keyframes islandIn {

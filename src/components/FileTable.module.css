@@ -23,6 +23,9 @@
 }
 
 .headerRow {
+  /* Glass: rows scroll under this translucent header, so it blurs them (one
+     element, never the virtualised rows). */
+  composes: glass from global;
   position: sticky;
   top: 0;
   z-index: 2;
@@ -31,13 +34,6 @@
   grid-template-columns: var(--cols);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-}
-
-/* Glass: --surface is translucent and rows scroll under the sticky header.
-   One element, not the virtualised rows. */
-:global(:root[data-theme^="glass"]) .headerRow {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 
 .headerCell {

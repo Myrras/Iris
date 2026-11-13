@@ -1,5 +1,6 @@
 /* A file pane island: rounded, bordered, elevated, like Podium's work island. */
 .pane {
+  composes: glass from global;
   position: relative; /* anchors .dropOverlay */
   flex: 1;
   min-width: 0;
@@ -26,11 +27,6 @@
     inset 0 1px 0 var(--glass-hi),
     0 0 0 1px var(--accent),
     var(--shadow-md);
-}
-
-:global(:root[data-theme^="glass"]) .pane {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 
 .pane[data-active="true"] .icon,

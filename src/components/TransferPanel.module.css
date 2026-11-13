@@ -1,5 +1,6 @@
 /* The bottom transfer island: same island chrome as the panes. */
 .panel {
+  composes: glass from global;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -11,11 +12,6 @@
     var(--shadow-md);
   overflow: hidden;
   animation: islandIn var(--dur-3) var(--ease-out);
-}
-
-:global(:root[data-theme^="glass"]) .panel {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 
 /* Header row: collapse toggle (sidebar section-header style), the live

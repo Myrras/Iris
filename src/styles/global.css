@@ -41,6 +41,19 @@ body {
   background: var(--canvas);
 }
 
+/* Frosted glass; modules opt in with `composes: glass from global`.
+   Literal values mirror --glass-blur / --glass-sat: WebKit (WKWebView)
+   computes a backdrop-filter that uses var() to none. */
+:root[data-theme="glass-dark"] .glass {
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+  backdrop-filter: blur(40px) saturate(180%);
+}
+
+:root[data-theme="glass-light"] .glass {
+  -webkit-backdrop-filter: blur(30px) saturate(160%);
+  backdrop-filter: blur(30px) saturate(160%);
+}
+
 /* Custom title bar drag handle (Windows, where decorations are off). WebView2
    uses the CSS app-region for window dragging incl. touch/pen; interactive
    children opt back out with `app-region: no-drag`. No-op on macOS (the native

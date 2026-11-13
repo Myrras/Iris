@@ -1,4 +1,5 @@
 .ghost {
+  composes: glass from global;
   position: fixed;
   top: 0;
   left: 0;
@@ -19,11 +20,6 @@
   pointer-events: none;
   /* Position is a per-frame inline transform: no transition on it. */
   animation: ghostIn var(--dur-2) var(--ease-out);
-}
-
-:global(:root[data-theme^="glass"]) .ghost {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 
 .ghost[data-armed="true"] {

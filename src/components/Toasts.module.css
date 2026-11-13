@@ -10,6 +10,7 @@
 }
 
 .toast {
+  composes: glass from global;
   display: flex;
   align-items: flex-start;
   gap: var(--sp-2);
@@ -21,11 +22,6 @@
     inset 0 1px 0 var(--glass-hi),
     var(--shadow-md);
   padding: var(--sp-2) var(--sp-3);
-}
-
-:global(:root[data-theme^="glass"]) .toast {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 
 .toast[data-state="open"] {

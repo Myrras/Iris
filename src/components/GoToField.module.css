@@ -36,19 +36,15 @@
   animation: dropIn var(--dur-2) var(--ease-out);
 }
 
-:global(:root[data-theme^="glass"]) .error,
-:global(:root[data-theme^="glass"]) .list {
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
-}
-
 .error {
+  composes: glass from global;
   padding: var(--sp-1) var(--sp-2);
   color: var(--danger);
   background: var(--danger-bg);
 }
 
 .list {
+  composes: glass from global;
   margin: 0;
   padding: var(--sp-1);
   max-height: 200px;
