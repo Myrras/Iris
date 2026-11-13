@@ -11,6 +11,8 @@ when it merges.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-13
+
 ### Added
 
 - Glass dark and Glass light themes (Settings → General → Appearance):
