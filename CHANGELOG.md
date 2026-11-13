@@ -11,6 +11,12 @@ when it merges.
 
 ## [Unreleased]
 
+### Added
+
+- Glass dark and Glass light themes (Settings → General → Appearance):
+  frosted, translucent islands, menus, toasts and dialogs over a colour
+  gradient backdrop.
+
 ## [1.1.1] - 2026-10-29
 
 ### Security

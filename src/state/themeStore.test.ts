@@ -26,6 +26,16 @@ describe("themeStore", () => {
     expect(document.documentElement.getAttribute("data-theme")).toBe("retro");
   });
 
+  it.each(["glass-dark", "glass-light"])(
+    "restores the %s theme",
+    async (mode) => {
+      localStorage.setItem("iris.theme", mode);
+      const store = await freshStore();
+      expect(store.getState().mode).toBe(mode);
+      expect(document.documentElement.getAttribute("data-theme")).toBe(mode);
+    },
+  );
+
   it("ignores an unknown stored value", async () => {
     localStorage.setItem("iris.theme", "neon");
     const store = await freshStore();

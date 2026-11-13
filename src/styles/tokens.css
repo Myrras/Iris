@@ -1,7 +1,8 @@
 /**
  * Design tokens for Iris (copied from Podium so both apps look the same).
  * Dark-theme-first: the defaults on :root are the dark palette;
- * `:root[data-theme="light"]` and `:root[data-theme="retro"]` override them.
+ * `:root[data-theme="light"]`, `"retro"`, `"glass-dark"` and `"glass-light"`
+ * override them.
  * Components only ever reference these variables, never hard-coded colors,
  * durations or easings.
  */
@@ -118,6 +119,15 @@
   --on-danger: #ffffff; /* text/icons on a --danger fill */
   --swatch-border: rgba(0, 0, 0, 0.12);
 
+  /* Glass (frosted, translucent islands). Neutral here so the solid themes
+     render unchanged; the glass themes override them. `backdrop-filter` is
+     only set under `[data-theme^="glass"]`: it makes the element a containing
+     block for position:fixed children. */
+  --glass-blur: 0px;
+  --glass-sat: 100%;
+  --glass-hi: transparent; /* inset top highlight on glass edges */
+  --pop-surface: var(--surface); /* popover, menu, toast and modal fill */
+
   /* Theme-picker previews (background / accent / text of each theme). The
      picker shows every theme at once, so these stay fixed across themes —
      keep them in step with the palettes above and below. */
@@ -130,6 +140,12 @@
   --swatch-retro-bg: #f2e5bc;
   --swatch-retro-accent: #458588;
   --swatch-retro-text: #3c3836;
+  --swatch-glass-dark-bg: linear-gradient(135deg, #2c5cff, #9b4dff);
+  --swatch-glass-dark-accent: #2a6ae0;
+  --swatch-glass-dark-text: #f5f7fb;
+  --swatch-glass-light-bg: linear-gradient(135deg, #ffc9a8, #a9c8ff);
+  --swatch-glass-light-accent: #0a66d6;
+  --swatch-glass-light-text: #1d1d1f;
 }
 
 :root[data-theme="light"] {
@@ -196,4 +212,112 @@
   --shadow-sm: 0 1px 2px rgba(60, 56, 54, 0.12);
   --shadow-md: 0 4px 16px rgba(60, 56, 54, 0.18);
   --shadow-lg: 0 12px 40px rgba(60, 56, 54, 0.24);
+}
+
+/* Glass dark — frosted white panes over a deep blue/violet/teal canvas.
+   The canvas blobs run at half the mock's strength so body text stays
+   >= 4.5:1 even over a blob's centre. */
+:root[data-theme="glass-dark"] {
+  color-scheme: dark;
+
+  --canvas:
+    radial-gradient(
+      55% 65% at 12% 18%,
+      rgba(44, 92, 255, 0.5) 0%,
+      rgba(44, 92, 255, 0) 70%
+    ),
+    radial-gradient(
+      45% 55% at 88% 22%,
+      rgba(155, 77, 255, 0.5) 0%,
+      rgba(155, 77, 255, 0) 70%
+    ),
+    radial-gradient(
+      55% 55% at 62% 100%,
+      rgba(15, 184, 165, 0.5) 0%,
+      rgba(15, 184, 165, 0) 70%
+    ),
+    #060912;
+  --bg: rgba(255, 255, 255, 0.06); /* wells: inputs, fields */
+  --surface: rgba(255, 255, 255, 0.08);
+  --surface-2: rgba(255, 255, 255, 0.1);
+  --surface-hover: rgba(255, 255, 255, 0.14);
+  --border: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.22);
+
+  --text: #f5f7fb;
+  --text-muted: rgba(240, 244, 255, 0.76);
+  --text-faint: rgba(240, 244, 255, 0.6);
+
+  --accent: #2a6ae0;
+  --accent-hover: #2460d0; /* darker: keeps white labels >= 4.5:1 */
+  --accent-contrast: #ffffff;
+  --selection: rgba(42, 106, 224, 0.5);
+  --selection-inactive: rgba(255, 255, 255, 0.1);
+
+  --danger: #ff7b72;
+  --danger-bg: rgba(255, 123, 114, 0.16);
+  --warning: #ff9f0a;
+  --warning-bg: rgba(255, 159, 10, 0.16);
+  --success: #30d158;
+  --info: #2a6ae0;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 10px 40px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 30px 80px rgba(0, 0, 0, 0.45);
+
+  --overlay: rgba(4, 6, 14, 0.4);
+
+  --glass-blur: 40px;
+  --glass-sat: 180%;
+  --glass-hi: rgba(255, 255, 255, 0.22);
+  --pop-surface: rgba(28, 32, 50, 0.72);
+}
+
+/* Glass light — milky white panes over a peach/blue/mint canvas. */
+:root[data-theme="glass-light"] {
+  color-scheme: light;
+
+  --canvas:
+    radial-gradient(50% 60% at 10% 12%, #ffc9a8 0%, rgba(255, 201, 168, 0) 70%),
+    radial-gradient(50% 60% at 92% 18%, #a9c8ff 0%, rgba(169, 200, 255, 0) 70%),
+    radial-gradient(
+      60% 55% at 55% 100%,
+      #bfeedd 0%,
+      rgba(191, 238, 221, 0) 70%
+    ),
+    #eef1f6;
+  --bg: rgba(255, 255, 255, 0.45);
+  --surface: rgba(255, 255, 255, 0.55);
+  --surface-2: rgba(20, 30, 60, 0.07);
+  --surface-hover: rgba(20, 30, 60, 0.1);
+  --border: rgba(20, 30, 60, 0.09);
+  --border-strong: rgba(20, 30, 60, 0.16);
+
+  --text: #1d1d1f;
+  --text-muted: rgba(29, 29, 31, 0.74);
+  --text-faint: rgba(29, 29, 31, 0.62);
+
+  --accent: #0a66d6;
+  --accent-hover: #0a5cc0;
+  --accent-contrast: #ffffff;
+  --selection: rgba(10, 102, 214, 0.16);
+  --selection-inactive: rgba(20, 30, 60, 0.07);
+
+  --danger: #c4271d;
+  --danger-bg: rgba(196, 39, 29, 0.1);
+  --warning: #c27c00;
+  --warning-bg: rgba(194, 124, 0, 0.12);
+  --success: #28a745;
+  --info: #0a66d6;
+
+  --shadow-sm: 0 1px 3px rgba(20, 30, 60, 0.08);
+  --shadow-md: 0 10px 30px rgba(40, 50, 90, 0.12);
+  --shadow-lg: 0 30px 80px rgba(40, 50, 90, 0.25);
+
+  --overlay: rgba(40, 50, 90, 0.18);
+
+  --glass-blur: 30px;
+  --glass-sat: 160%;
+  --glass-hi: rgba(255, 255, 255, 0.95);
+  --pop-surface: rgba(255, 255, 255, 0.8);
 }

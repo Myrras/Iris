@@ -9,7 +9,9 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-md);
+  box-shadow:
+    inset 0 1px 0 var(--glass-hi),
+    var(--shadow-md);
   overflow: hidden;
   animation: islandIn var(--dur-3) var(--ease-out);
   transition:
@@ -21,8 +23,14 @@
 .pane[data-active="true"] {
   border-color: var(--accent);
   box-shadow:
+    inset 0 1px 0 var(--glass-hi),
     0 0 0 1px var(--accent),
     var(--shadow-md);
+}
+
+:global(:root[data-theme^="glass"]) .pane {
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 
 .pane[data-active="true"] .icon,
@@ -219,6 +227,7 @@
 .pane[data-drop-target="true"] {
   border-color: var(--accent);
   box-shadow:
+    inset 0 1px 0 var(--glass-hi),
     0 0 0 1px var(--accent),
     var(--shadow-md);
 }

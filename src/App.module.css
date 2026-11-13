@@ -18,6 +18,10 @@
   position: relative;
 }
 
+:global(:root[data-theme^="glass"]) .titlebar {
+  background: transparent;
+}
+
 /* Windows: the strip IS the (custom) title bar, so the controls run flush to the
    top-right corner — drop the right padding the macOS brand strip uses. */
 .titlebarWindows {
