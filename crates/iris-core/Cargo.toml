@@ -24,7 +24,7 @@ russh-sftp = "3.0.1"
 zeroize = "1"
 # `~/.ssh/config` parsing (Host aliases, HostName/User/Port/IdentityFile/
 # ProxyJump). Only `ssh_config.rs` touches it.
-ssh2-config = "0.8.2"
+ssh2-config = "0.9.0"
 # OS keychain for remembered passwords / passphrases (`secrets.rs`).
 # macOS Keychain and Windows Credential Manager here; Linux below.
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
