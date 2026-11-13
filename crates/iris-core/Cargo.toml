@@ -29,7 +29,7 @@ ssh2-config = "0.8.2"
 # macOS Keychain and Windows Credential Manager here; Linux below.
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 trash = "5.2.9"
-base64 = "0.22"
+base64 = "0.23"
 # Local-time ISO 8601 timestamps in the transfer CSV export.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # `CancellationToken` for cancelling transfer jobs and batches.
