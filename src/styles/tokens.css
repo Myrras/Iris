@@ -141,7 +141,7 @@
   --swatch-retro-accent: #458588;
   --swatch-retro-text: #3c3836;
   --swatch-glass-dark-bg: linear-gradient(135deg, #2c5cff, #9b4dff);
-  --swatch-glass-dark-accent: #2a6ae0;
+  --swatch-glass-dark-accent: #4493f8;
   --swatch-glass-dark-text: #f5f7fb;
   --swatch-glass-light-bg: linear-gradient(135deg, #ffc9a8, #a9c8ff);
   --swatch-glass-light-accent: #0a66d6;
@@ -248,10 +248,11 @@
   --text-muted: rgba(240, 244, 255, 0.76);
   --text-faint: rgba(240, 244, 255, 0.6);
 
-  --accent: #2a6ae0;
-  --accent-hover: #2460d0; /* darker: keeps white labels >= 4.5:1 */
+  /* The dark theme's accent: readable as text on the dark glass. --selection
+     is the :root mix of it. */
+  --accent: #4493f8;
+  --accent-hover: #58a6ff;
   --accent-contrast: #ffffff;
-  --selection: rgba(42, 106, 224, 0.5);
   --selection-inactive: rgba(255, 255, 255, 0.1);
 
   --danger: #ff7b72;
@@ -259,7 +260,7 @@
   --warning: #ff9f0a;
   --warning-bg: rgba(255, 159, 10, 0.16);
   --success: #30d158;
-  --info: #2a6ae0;
+  --info: #4493f8;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 10px 40px rgba(0, 0, 0, 0.35);
