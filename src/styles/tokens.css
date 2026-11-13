@@ -214,9 +214,10 @@
   --shadow-lg: 0 12px 40px rgba(60, 56, 54, 0.24);
 }
 
-/* Glass dark — frosted white panes over a deep blue/violet/teal canvas.
-   The canvas blobs run at half the mock's strength so body text stays
-   >= 4.5:1 even over a blob's centre. */
+/* Glass dark — smoked panes over a deep blue/violet/teal canvas. Shared
+   recipe with the sibling apps: canvas patches at half the mock's strength
+   and a dark pane fill keep body, muted and accent text >= 4.5:1 even over a
+   patch's peak. */
 :root[data-theme="glass-dark"] {
   color-scheme: dark;
 
@@ -238,15 +239,15 @@
     ),
     #060912;
   --bg: rgba(255, 255, 255, 0.06); /* wells: inputs, fields */
-  --surface: rgba(255, 255, 255, 0.08);
+  --surface: rgba(18, 22, 38, 0.75);
   --surface-2: rgba(255, 255, 255, 0.1);
   --surface-hover: rgba(255, 255, 255, 0.14);
   --border: rgba(255, 255, 255, 0.14);
   --border-strong: rgba(255, 255, 255, 0.22);
 
   --text: #f5f7fb;
-  --text-muted: rgba(240, 244, 255, 0.76);
-  --text-faint: rgba(240, 244, 255, 0.6);
+  --text-muted: rgba(240, 244, 255, 0.84);
+  --text-faint: rgba(240, 244, 255, 0.68);
 
   /* The dark theme's accent: readable as text on the dark glass. --selection
      is the :root mix of it. */
@@ -271,7 +272,7 @@
   --glass-blur: 40px;
   --glass-sat: 180%;
   --glass-hi: rgba(255, 255, 255, 0.22);
-  --pop-surface: rgba(28, 32, 50, 0.72);
+  --pop-surface: rgba(22, 26, 44, 0.85);
 }
 
 /* Glass light — milky white panes over a peach/blue/mint canvas. */
